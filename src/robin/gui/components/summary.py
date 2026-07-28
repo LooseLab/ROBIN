@@ -249,6 +249,24 @@ def _classification_section(sample_dir: Path, launcher: Any = None):
                 "confidence_level": "Loading...",
                 "features": 0,
             },
+            "marlin": {
+                "classification": "Loading...",
+                "confidence": 0.0,
+                "confidence_level": "Loading...",
+                "features": 0,
+            },
+            "lamprey": {
+                "classification": "Loading...",
+                "confidence": 0.0,
+                "confidence_level": "Loading...",
+                "features": 0,
+            },
+            "tucan": {
+                "classification": "Loading...",
+                "confidence": 0.0,
+                "confidence_level": "Loading...",
+                "features": 0,
+            },
         },
     )
     
@@ -320,6 +338,48 @@ def _classification_section(sample_dir: Path, launcher: Any = None):
                     "forest",
                     "CNS Machine learning classification",
                     "random_forest",
+                )
+
+            # MARLIN
+            if "marlin" in enabled_classification_steps:
+                marlin_data = classification_data.get("marlin", {})
+                _create_classification_dashboard_card_with_data(
+                    "MARLIN",
+                    marlin_data.get("classification", "Not available"),
+                    marlin_data.get("confidence", 0.0),
+                    marlin_data.get("confidence_level", "Not available"),
+                    marlin_data.get("features", 0),
+                    "bloodtype",
+                    "Acute leukemia methylation classification",
+                    "marlin",
+                )
+
+            # Lamprey (research / evaluation only)
+            if "lamprey" in enabled_classification_steps:
+                lamprey_data = classification_data.get("lamprey", {})
+                _create_classification_dashboard_card_with_data(
+                    "Lamprey (research)",
+                    lamprey_data.get("classification", "Not available"),
+                    lamprey_data.get("confidence", 0.0),
+                    lamprey_data.get("confidence_level", "Not available"),
+                    lamprey_data.get("features", 0),
+                    "biotech",
+                    "Hematological methylation classification (research only)",
+                    "lamprey",
+                )
+
+            # Tucan (pediatric solid tumors / lymphomas)
+            if "tucan" in enabled_classification_steps:
+                tucan_data = classification_data.get("tucan", {})
+                _create_classification_dashboard_card_with_data(
+                    "Tucan",
+                    tucan_data.get("classification", "Not available"),
+                    tucan_data.get("confidence", 0.0),
+                    tucan_data.get("confidence_level", "Not available"),
+                    tucan_data.get("features", 0),
+                    "pets",
+                    "Pediatric solid tumor / lymphoma classification",
+                    "tucan",
                 )
 
 
@@ -437,14 +497,16 @@ def add_summary_section(sample_dir: Path, sample_id: str, launcher: Any = None) 
             _analysis_section.refresh()
 
     # Initial async load shortly after page render
-    ui.timer(0.2, _refresh_summary_cache_async, once=True)
+    from robin.gui.theme import client_timer, stop_timer
+
+    client_timer(0.2, _refresh_summary_cache_async, once=True)
     # Periodic refresh timer (every 30 seconds)
-    refresh_timer = ui.timer(
+    refresh_timer = client_timer(
         30.0, _refresh_summary_cache_async, active=True, immediate=False
     )
     try:
         def _on_disconnect_cleanup() -> None:
-            refresh_timer.deactivate()
+            stop_timer(refresh_timer)
             _clear_summary_cache(sample_dir)
 
         ui.context.client.on_disconnect(_on_disconnect_cleanup)
@@ -1524,6 +1586,24 @@ def _extract_classification_data(sample_dir: Path) -> Dict[str, Any]:
             "confidence_level": "Not available",
             "features": 0,
         },
+        "marlin": {
+            "classification": "Not available",
+            "confidence": 0.0,
+            "confidence_level": "Not available",
+            "features": 0,
+        },
+        "lamprey": {
+            "classification": "Not available",
+            "confidence": 0.0,
+            "confidence_level": "Not available",
+            "features": 0,
+        },
+        "tucan": {
+            "classification": "Not available",
+            "confidence": 0.0,
+            "confidence_level": "Not available",
+            "features": 0,
+        },
     }
 
     try:
@@ -1666,8 +1746,151 @@ def _extract_classification_data(sample_dir: Path) -> Dict[str, Any]:
                 logging.debug(f"   Random Forest: <access denied>: {e}")
                 pass
 
+        # Extract MARLIN data
+        marlin_file = sample_dir / "marlin_scores.csv"
+        if marlin_file.exists():
+            try:
+                with open(marlin_file, "r") as f:
+                    reader = csv.DictReader(f)
+                    for row in reader:
+                        features = int(
+                            float(
+                                row.get("covered_cpgs")
+                                or row.get("number_probes")
+                                or 0
+                            )
+                        )
+                        max_score = 0.0
+                        best_class = "Unknown"
+                        for col, value in row.items():
+                            if col not in {
+                                "timestamp",
+                                "number_probes",
+                                "covered_cpgs",
+                            }:
+                                try:
+                                    score = float(value)
+                                    if score > max_score:
+                                        max_score = score
+                                        best_class = col
+                                except Exception as e:
+                                    logging.debug(f"   MARLIN: <access denied>: {e}")
+                                    pass
+
+                        confidence_percent = (
+                            max_score * 100 if max_score <= 1 else max_score
+                        )
+                        classification_data["marlin"] = {
+                            "classification": best_class,
+                            "confidence": confidence_percent,
+                            "confidence_level": _get_confidence_level(
+                                confidence_percent, "marlin"
+                            ),
+                            "features": features,
+                        }
+            except Exception as e:
+                logging.debug(f"   MARLIN: <access denied>: {e}")
+                pass
+
+        # Extract Lamprey data (research / evaluation only)
+        lamprey_file = sample_dir / "lamprey_scores.csv"
+        if lamprey_file.exists():
+            try:
+                with open(lamprey_file, "r") as f:
+                    reader = csv.DictReader(f)
+                    for row in reader:
+                        features = int(
+                            float(
+                                row.get("covered_cpgs")
+                                or row.get("number_probes")
+                                or 0
+                            )
+                        )
+                        max_score = 0.0
+                        best_class = "Unknown"
+                        skip = {
+                            "timestamp",
+                            "number_probes",
+                            "covered_cpgs",
+                            "temperature",
+                            "diagnostic",
+                            "probes",
+                        }
+                        for col, value in row.items():
+                            if col in skip:
+                                continue
+                            try:
+                                score = float(value)
+                                if score > max_score:
+                                    max_score = score
+                                    best_class = col
+                            except Exception as e:
+                                logging.debug(f"   Lamprey: {e}")
+                        confidence_percent = (
+                            max_score * 100 if max_score <= 1 else max_score
+                        )
+                        classification_data["lamprey"] = {
+                            "classification": best_class,
+                            "confidence": confidence_percent,
+                            "confidence_level": _get_confidence_level(
+                                confidence_percent, "lamprey"
+                            ),
+                            "features": features,
+                        }
+            except Exception as e:
+                logging.debug(f"   Lamprey: <access denied>: {e}")
+                pass
+
+        # Extract Tucan data (pediatric solid tumors / lymphomas)
+        tucan_file = sample_dir / "tucan_scores.csv"
+        if tucan_file.exists():
+            try:
+                with open(tucan_file, "r") as f:
+                    reader = csv.DictReader(f)
+                    for row in reader:
+                        features = int(
+                            float(
+                                row.get("covered_cpgs")
+                                or row.get("number_probes")
+                                or row.get("probes")
+                                or 0
+                            )
+                        )
+                        max_score = 0.0
+                        best_class = "Unknown"
+                        skip = {
+                            "timestamp",
+                            "number_probes",
+                            "covered_cpgs",
+                            "probes",
+                        }
+                        for col, value in row.items():
+                            if col in skip:
+                                continue
+                            try:
+                                score = float(value)
+                                if score > max_score:
+                                    max_score = score
+                                    best_class = col
+                            except Exception as e:
+                                logging.debug(f"   Tucan: {e}")
+                        confidence_percent = (
+                            max_score * 100 if max_score <= 1 else max_score
+                        )
+                        classification_data["tucan"] = {
+                            "classification": best_class,
+                            "confidence": confidence_percent,
+                            "confidence_level": _get_confidence_level(
+                                confidence_percent, "tucan"
+                            ),
+                            "features": features,
+                        }
+            except Exception as e:
+                logging.debug(f"   Tucan: <access denied>: {e}")
+                pass
+
     except Exception as e:
-        logging.debug(f"   Random Forest: <access denied>: {e}")
+        logging.debug(f"   Classification extract: {e}")
         pass
 
     return classification_data

@@ -164,6 +164,7 @@ class RobinReport:
         from .sections.classification import ClassificationSection
         from .sections.cnv import CNVSection
         from .sections.fusion import FusionSection
+        from .sections.itd import ItdSection
         from .sections.coverage import CoverageSection
         from .sections.mgmt import MGMTSection
         from .sections.mnpflex import MNPFlexSection
@@ -210,6 +211,15 @@ class RobinReport:
             viewer_role=self.viewer_role,
         ):
             sections.append(FusionSection(self))
+
+        if is_section_visible(
+            "itd",
+            workflow_steps=self.workflow_steps,
+            display_config=self.display_config,
+            surface="report",
+            viewer_role=self.viewer_role,
+        ):
+            sections.append(ItdSection(self))
         
         if is_section_visible(
             "target",

@@ -23,6 +23,8 @@ from robin.gui.theme import (
     styled_table,
     register_theme_sync_callback,
     get_user_dark_mode,
+    client_timer,
+    stop_timer,
 )
 from robin.analysis.cnv_classification import (
     CNVEvent,
@@ -2662,8 +2664,8 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
         launcher._cnv_state.setdefault(key, {})["cnv_plot_theme_dark"] = dark
 
     # Start the refresh timer (every 30 seconds)
-    refresh_timer = ui.timer(30.0, _refresh_cnv, active=True, immediate=False)
-    ui.timer(0.5, _refresh_cnv, once=True)
+    refresh_timer = client_timer(30.0, _refresh_cnv, active=True, immediate=False)
+    client_timer(0.5, _refresh_cnv, once=True)
     unregister_cnv_theme_sync = register_theme_sync_callback(
         _sync_cnv_echarts_theme_if_needed,
         element=cnv_abs,
@@ -2672,7 +2674,7 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
     )
     try:
         ui.context.client.on_disconnect(
-            lambda: (refresh_timer.deactivate(), unregister_cnv_theme_sync())
+            lambda: (stop_timer(refresh_timer), unregister_cnv_theme_sync())
         )
     except Exception:
         pass

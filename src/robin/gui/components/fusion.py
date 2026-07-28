@@ -3528,7 +3528,13 @@ def add_fusion_section(launcher: Any, sample_dir: Path) -> None:
 
         # Start the refresh timer (every 30 seconds)
         logging.info("[Fusion] Setting up refresh timer (30s interval + immediate async load)")
-        refresh_timer = ui.timer(30.0, refresh_fusion, active=True, immediate=False)
+        from robin.gui.theme import (
+            register_theme_sync_callback,
+            client_timer,
+            stop_timer,
+        )
+
+        refresh_timer = client_timer(30.0, refresh_fusion, active=True, immediate=False)
 
         def _sync_fusion_plot_theme_if_needed() -> None:
             try:
@@ -3552,8 +3558,6 @@ def add_fusion_section(launcher: Any, sample_dir: Path) -> None:
                     pass
                 st["fusion_plot_theme_dark"] = dark
 
-        from robin.gui.theme import register_theme_sync_callback
-
         unregister_fusion_theme_sync = register_theme_sync_callback(
             _sync_fusion_plot_theme_if_needed,
             element=state.get("target", {}).get("fusion_mpl"),
@@ -3563,7 +3567,7 @@ def add_fusion_section(launcher: Any, sample_dir: Path) -> None:
         try:
             ui.context.client.on_disconnect(
                 lambda: (
-                    refresh_timer.deactivate(),
+                    stop_timer(refresh_timer),
                     unregister_fusion_theme_sync(),
                 )
             )

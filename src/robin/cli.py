@@ -61,8 +61,12 @@ try:
     from robin.analysis.sturgeon_analysis import sturgeon_handler
     from robin.analysis.nanodx_analysis import nanodx_handler, pannanodx_handler
     from robin.analysis.random_forest_analysis import random_forest_handler
+    from robin.analysis.marlin_analysis import marlin_handler
+    from robin.analysis.lamprey_analysis import lamprey_handler
+    from robin.analysis.tucan_analysis import tucan_handler
     from robin.analysis.target_analysis import target_handler
     from robin.analysis.fusion_analysis import fusion_handler
+    from robin.analysis.itd_analysis import itd_handler
     from robin.analysis.utilities.matkit import run_matkit
     from robin.analysis.mgmt_analysis import extract_mgmt_site_rows_from_bed
 except Exception as e:
@@ -75,8 +79,12 @@ except Exception as e:
     nanodx_handler = None  # type: ignore[assignment]
     pannanodx_handler = None  # type: ignore[assignment]
     random_forest_handler = None  # type: ignore[assignment]
+    marlin_handler = None  # type: ignore[assignment]
+    lamprey_handler = None  # type: ignore[assignment]
+    tucan_handler = None  # type: ignore[assignment]
     target_handler = None  # type: ignore[assignment]
     fusion_handler = None  # type: ignore[assignment]
+    itd_handler = None  # type: ignore[assignment]
     run_matkit = None  # type: ignore[assignment]
     extract_mgmt_site_rows_from_bed = None  # type: ignore[assignment]
 from robin.logging_config import (
@@ -255,10 +263,14 @@ VALID_JOB_TYPES = {
     "cnv",
     "target",
     "fusion",
+    "itd",
     "sturgeon",
     "nanodx",
     "pannanodx",
     "random_forest",
+    "marlin",
+    "lamprey",
+    "tucan",
 }
 DEFAULT_LOG_LEVEL = "ERROR"
 DEFAULT_ANALYSIS_WORKERS = 1
@@ -272,14 +284,26 @@ QUEUE_MAPPING = {
     "cnv": "cnv",
     "target": "target",
     "fusion": "fusion",
+    "itd": "fusion",
     "sturgeon": "classification",
     "nanodx": "classification",
     "pannanodx": "classification",
     "random_forest": "slow",
+    "marlin": "slow",
+    "lamprey": "slow",
+    "tucan": "slow",
 }
 
 # Jobs that require bed_conversion as a dependency
-JOBS_REQUIRING_BED_CONVERSION = {"sturgeon", "nanodx", "pannanodx", "random_forest"}
+JOBS_REQUIRING_BED_CONVERSION = {
+    "sturgeon",
+    "nanodx",
+    "pannanodx",
+    "random_forest",
+    "marlin",
+    "lamprey",
+    "tucan",
+}
 
 from robin.reporting.sections.disclaimer_text import EXTENDED_DISCLAIMER_TEXT
 
@@ -323,10 +347,14 @@ HANDLER_CONFIGS = [
     ("cnv", "cnv", cnv_handler, "analysis", True),
     ("target", "target", target_handler, "analysis", True),
     ("fusion", "fusion", fusion_handler, "analysis", True),
+    ("fusion", "itd", itd_handler, "analysis", True),
     ("classification", "sturgeon", sturgeon_handler, None, True),
     ("classification", "nanodx", nanodx_handler, None, True),
     ("classification", "pannanodx", pannanodx_handler, None, True),
     ("slow", "random_forest", random_forest_handler, None, True),
+    ("slow", "marlin", marlin_handler, None, True),
+    ("slow", "lamprey", lamprey_handler, None, True),
+    ("slow", "tucan", tucan_handler, None, True),
 ]
 
 
@@ -1485,13 +1513,21 @@ def list_job_types() -> None:
         "mgmt": ["mgmt - MGMT methylation analysis"],
         "cnv": ["cnv - Copy number variation analysis"],
         "target": ["target - Target analysis"],
-        "fusion": ["fusion - Fusion detection analysis"],
+        "fusion": [
+            "fusion - Fusion detection analysis",
+            "itd - ITD / insertion hotspot calling (FLT3, NPM1, …)",
+        ],
         "classification": [
             "sturgeon - Sturgeon classification analysis",
             "nanodx - NanoDX analysis",
             "pannanodx - PanNanoDX analysis",
         ],
-        "slow": ["random_forest - Random Forest analysis"],
+        "slow": [
+            "random_forest - Random Forest analysis",
+            "marlin - MARLIN leukemia methylation classification",
+            "lamprey - Lamprey hematological classification (research/evaluation only)",
+            "tucan - Tucan pediatric solid tumor / lymphoma classification",
+        ],
     }
 
     click.echo("Available job types in robin:\n")
@@ -1507,7 +1543,7 @@ def list_job_types() -> None:
         "  • Simplified format (recommended): 'mgmt,sturgeon' (bed_conversion auto-added)"
     )
     click.echo(
-        "  • Full pipeline (simplified): 'mgmt,cnv,target,fusion,sturgeon,nanodx,pannanodx,random_forest' (bed_conversion auto-added)"
+        "  • Full pipeline (simplified): 'mgmt,cnv,target,fusion,itd,sturgeon,nanodx,pannanodx,random_forest,marlin,lamprey,tucan' (bed_conversion auto-added)"
     )
     click.echo(
         "  • Legacy format with queue prefixes: 'preprocessing:bed_conversion,mgmt:mgmt,classification:sturgeon'"
@@ -1516,7 +1552,11 @@ def list_job_types() -> None:
         "\nNote: 'preprocessing' is automatically added as the first step if not specified."
     )
     click.echo(
-        "Note: 'bed_conversion' is automatically added when needed for sturgeon, nanodx, pannanodx, or random_forest jobs."
+        "Note: 'bed_conversion' is automatically added when needed for sturgeon, nanodx, pannanodx, random_forest, marlin, lamprey, or tucan jobs."
+    )
+    click.echo(
+        "Note: 'lamprey' is research/evaluation use only (not for clinical decision-making); "
+        "install Lamprey separately and set ROBIN_LAMPREY_RESEARCH_ACK=1."
     )
     click.echo(
         "Note: Each analysis type (mgmt, cnv, target, fusion) has its own queue for parallel processing."
@@ -2576,7 +2616,7 @@ def _register_handlers(
         click.echo(f"Using target panel: {target_panel}")
     
     # Track handlers that should accept target_panel
-    handlers_requiring_panel = {"target", "fusion", "cnv"}
+    handlers_requiring_panel = {"target", "fusion", "cnv", "itd"}
     registered_panel_handlers = set()
     
     for (
@@ -2630,8 +2670,8 @@ def _register_handlers(
                 final_handler = create_bed_conversion_handler_with_work_dir_and_ref(
                     handler_func, work_dir, reference
                 )
-            elif job_type == "fusion":
-                # Special handling for fusion analysis with target panel
+            elif job_type in ("fusion", "itd"):
+                # Special handling for fusion / ITD analysis with target panel
                 def create_fusion_handler_with_work_dir(
                     handler, work_dir_path, panel_param
                 ):
@@ -2662,7 +2702,7 @@ def _register_handlers(
                 return lambda job: handler(job, reference=str(ref_path), target_panel=job.context.metadata.get("target_panel", panel_param))
 
             final_handler = create_handler_with_ref(handler_func, reference, center, target_panel)
-        elif job_type in ["fusion", "cnv"]:
+        elif job_type in ["fusion", "cnv", "itd"]:
             # Analysis with target panel only (no work_dir needed)
             def create_analysis_handler_with_panel(handler, panel_param):
                 return lambda job: handler(job, target_panel=job.context.metadata.get("target_panel", panel_param))
@@ -2748,13 +2788,20 @@ def _register_command_handlers(
                 )
 
 
-def _create_classifier_with_work_dir(work_dir: Path, workflow_steps: List[str], target_panel: str):
+def _create_classifier_with_work_dir(
+    work_dir: Path,
+    workflow_steps: List[str],
+    target_panel: str,
+    itd_config: Optional[dict] = None,
+):
     """Create a classifier function that includes work directory in job context."""
 
     def classifier_with_work_dir(filepath: str) -> List[Job]:
         jobs = default_file_classifier(filepath, workflow_steps, target_panel)
         for job in jobs:
             job.context.add_metadata("work_dir", str(work_dir))
+            if itd_config:
+                job.context.add_metadata("itd", dict(itd_config))
         return jobs
 
     return classifier_with_work_dir
@@ -3152,6 +3199,22 @@ def workflow(
                 f"Choose from: {', '.join(available_panels)}"
             )
 
+        itd_cfg = merged.get("itd")
+        if isinstance(itd_cfg, dict):
+            try:
+                from robin.analysis.itd_analysis import configure_itd_defaults
+
+                configure_itd_defaults(
+                    itd_cfg,
+                    work_dir=merged.get("work_dir"),
+                )
+                _echo_styled(
+                    f"ITD config: {itd_cfg}",
+                    level="info",
+                )
+            except Exception:
+                pass
+
         # Check for required model files first
         _check_models_or_exit()
         
@@ -3438,7 +3501,12 @@ def workflow(
         # Create classifier function
         classifier_func = None
         if work_dir:
-            classifier_func = _create_classifier_with_work_dir(work_dir, workflow_steps, target_panel)
+            classifier_func = _create_classifier_with_work_dir(
+                work_dir,
+                workflow_steps,
+                target_panel,
+                itd_config=itd_cfg if isinstance(itd_cfg, dict) else None,
+            )
 
         # Display configuration
         _display_workflow_config(

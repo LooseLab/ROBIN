@@ -521,20 +521,19 @@ def locus_figure(
                 except Exception as e:
                     logging.debug(f"[MGMT] Failed to add annotations to axis: {e}")
                     continue
-            
-            # Use constrained_layout instead of tight_layout to avoid warnings
+
+            # Methylartist builds axes via a standalone GridSpec (no figure=), so
+            # enabling constrained_layout here triggers:
+            # "There are no gridspecs with layoutgrids..."
+            # Annotations (axvline/text) do not need a layout engine pass.
             try:
-                fig.set_constrained_layout(True)
+                if hasattr(fig, "set_layout_engine"):
+                    fig.set_layout_engine(None)
+                elif hasattr(fig, "set_constrained_layout"):
+                    fig.set_constrained_layout(False)
             except Exception:
-                # Fallback to tight_layout if constrained_layout fails
-                try:
-                    import warnings
-                    with warnings.catch_warnings():
-                        warnings.simplefilter("ignore")
-                        fig.tight_layout()
-                except Exception:
-                    pass
-            
+                pass
+
             logging.debug(f"[MGMT] Successfully added annotations for {len(mgmt_sites)} sites")
         else:
             logging.debug(f"[MGMT] Interval {interval} is not MGMT region, skipping annotations")
@@ -563,9 +562,27 @@ def figure_is_renderable(fig: Figure) -> bool:
             if not hasattr(ax, "_axis_map"):
                 return False
         import io
+        import warnings
+
+        # Older pickled MGMT figures may still have constrained_layout enabled
+        # against a non-figure GridSpec; clear it before the probe save.
+        try:
+            if hasattr(fig, "get_constrained_layout") and fig.get_constrained_layout():
+                if hasattr(fig, "set_layout_engine"):
+                    fig.set_layout_engine(None)
+                else:
+                    fig.set_constrained_layout(False)
+        except Exception:
+            pass
 
         buf = io.BytesIO()
-        fig.savefig(buf, format="svg")
+        with warnings.catch_warnings():
+            warnings.filterwarnings(
+                "ignore",
+                message=r".*no gridspecs with layoutgrids.*",
+                category=UserWarning,
+            )
+            fig.savefig(buf, format="svg")
         return True
     except Exception:
         return False

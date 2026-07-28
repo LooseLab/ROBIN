@@ -11,12 +11,14 @@ from robin.gui.plotting_preferences import (
     resolve_cnv_report_scale,
     resolve_cnv_summary_normalized,
 )
+from robin.reference_contigs import DEFAULT_REFERENCE_CONTIG_SCOPE
 from robin.security import SecurityStore
 
 
 def test_plotting_preferences_defaults() -> None:
     config = PlottingPreferencesConfig()
     assert config.cnv_report_scale == CNV_REPORT_SCALE_PLOIDY
+    assert config.reference_contig_scope == DEFAULT_REFERENCE_CONTIG_SCOPE
 
 
 def test_plotting_preferences_legacy_log2_alias() -> None:

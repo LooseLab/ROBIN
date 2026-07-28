@@ -23,6 +23,9 @@ from robin.gui.theme import (
     styled_table,
     register_theme_sync_callback,
     get_user_dark_mode,
+    client_timer,
+    stop_timer,
+    ui_element_exists,
 )
 
 from robin.reference_contigs import is_visible_contig
@@ -2670,31 +2673,38 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
             except (TypeError, ValueError):
                 stored_outlier_limit = 10
 
-            # Chart container
-            target_coverage_time_chart_state = {"container": None, "chart": None}
+            # Chart container (created during page build so refresh timers have a
+            # stable target without inventing UI from an empty slot stack).
+            target_coverage_time_chart_state = {
+                "container": ui.column().classes("w-full"),
+                "chart": None,
+            }
             outlier_limit_state = {"value": max(1, stored_outlier_limit)}
 
             def _plot_target_coverage_over_time():
                 """Load target_coverage_time.csv and plot mean coverage with outlier detection"""
+                container = target_coverage_time_chart_state["container"]
+                if container is None or not ui_element_exists(container):
+                    return
                 try:
                     time_coverage_file = sample_dir / "target_coverage_time.csv"
                     if not time_coverage_file.exists():
-                        if target_coverage_time_chart_state["container"]:
-                            with target_coverage_time_chart_state["container"]:
-                                ui.label("No target_coverage_time.csv file found.").classes("text-gray-600")
+                        with container:
+                            container.clear()
+                            ui.label("No target_coverage_time.csv file found.").classes("text-gray-600")
                         return
 
                     # Load data
                     df = pd.read_csv(time_coverage_file)
                     if df.empty:
-                        if target_coverage_time_chart_state["container"]:
-                            with target_coverage_time_chart_state["container"]:
-                                ui.label("No data available in target_coverage_time.csv").classes("text-gray-600")
+                        with container:
+                            container.clear()
+                            ui.label("No data available in target_coverage_time.csv").classes("text-gray-600")
                         return
                     if not {'chrom', 'startpos', 'endpos', 'name'}.issubset(df.columns):
-                        if target_coverage_time_chart_state["container"]:
-                            with target_coverage_time_chart_state["container"]:
-                                ui.label("target_coverage_time.csv missing chrom/startpos/endpos/name columns").classes("text-gray-600")
+                        with container:
+                            container.clear()
+                            ui.label("target_coverage_time.csv missing chrom/startpos/endpos/name columns").classes("text-gray-600")
                         return
 
                     # Convert timestamp to datetime (milliseconds to datetime)
@@ -3023,13 +3033,10 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                             }
                         )
 
-                    # Create/update chart
-                    if target_coverage_time_chart_state["container"] is None:
-                        target_coverage_time_chart_state["container"] = ui.column().classes("w-full")
-
-                    with target_coverage_time_chart_state["container"]:
+                    # Update chart in the page-built container
+                    with container:
                         # Clear existing content
-                        target_coverage_time_chart_state["container"].clear()
+                        container.clear()
 
                         # Summary statistics
                         with ui.row().classes("w-full mb-4 gap-3"):
@@ -3130,12 +3137,13 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                     logging.error(f"Error plotting target coverage over time: {e}")
                     import traceback
                     logging.error(traceback.format_exc())
-                    if target_coverage_time_chart_state["container"]:
-                        with target_coverage_time_chart_state["container"]:
+                    if ui_element_exists(container):
+                        with container:
+                            container.clear()
                             ui.label(f"Error: {str(e)}").classes("text-red-600")
 
             # Defer plot work so the sample page shell and websocket can finish first
-            ui.timer(0.05, _plot_target_coverage_over_time, once=True)
+            client_timer(0.05, _plot_target_coverage_over_time, once=True)
 
             def _set_outlier_limit(e) -> None:
                 try:
@@ -6913,6 +6921,8 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                     thread.start()
 
                     # Check for completion status periodically
+                    lga_timer_box: Dict[str, Any] = {"timer": None}
+
                     def check_lga_status():
                         if lga_status["status"] == "completed":
                             try:
@@ -6925,7 +6935,8 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                                 lga_analysis_button.props("color=secondary")
                             except Exception as e:
                                 print(f" Error updating UI: {e}")
-                            return False  # Stop checking
+                            stop_timer(lga_timer_box.get("timer"))
+                            return
                         elif lga_status["status"] == "error":
                             try:
                                 lga_status_label.set_text(
@@ -6935,11 +6946,13 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                                 lga_analysis_button.enable()
                             except Exception as e:
                                 print(f" Error updating UI: {e}")
-                            return False  # Stop checking
-                        return True  # Keep checking
+                            stop_timer(lga_timer_box.get("timer"))
+                            return
 
                     # Start checking status every 0.5 seconds
-                    ui.timer(0.5, check_lga_status, active=True)
+                    lga_timer_box["timer"] = client_timer(
+                        0.5, check_lga_status, active=True
+                    )
 
                     ui.notify(
                         "Lightweight variant analysis started in background (direct execution)",
@@ -7495,10 +7508,10 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
             pass
 
     # Trigger an immediate refresh on page load, then continue with periodic refreshes
-    refresh_timer = ui.timer(
+    refresh_timer = client_timer(
         30.0, _refresh_coverage_async, active=True, immediate=False
     )  # Periodic refresh every 30 seconds
-    ui.timer(0.5, _refresh_coverage_async, once=True)
+    client_timer(0.5, _refresh_coverage_async, once=True)
     # Theme sync is centralized via a single global timer in theme.py.
     unregister_cov_theme_sync = register_theme_sync_callback(
         _sync_coverage_echarts_theme,
@@ -7508,7 +7521,7 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
     )
     try:
         ui.context.client.on_disconnect(
-            lambda: (refresh_timer.deactivate(), unregister_cov_theme_sync())
+            lambda: (stop_timer(refresh_timer), unregister_cov_theme_sync())
         )
     except Exception:
         pass

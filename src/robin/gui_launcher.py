@@ -92,6 +92,20 @@ COMPLETION_JOB_PATTERNS: Dict[str, List[str]] = {
         "random_forest_results.csv",
         "random_forest_summary.csv",
     ],
+    "marlin": [
+        "marlin_scores.csv",
+        "MarlinBed.bed",
+    ],
+    "lamprey": [
+        "lamprey_scores.csv",
+    ],
+    "tucan": [
+        "tucan_scores.csv",
+    ],
+    "itd": [
+        "itd_events.csv",
+        "itd_summary.csv",
+    ],
 }
 
 from robin.minknow.sample_id import (
@@ -2127,11 +2141,11 @@ class GUILauncher:
                 # Combine analysis queues
                 analysis_running = sum(
                     data.get(q, {}).get("running", 0)
-                    for q in ["mgmt", "cnv", "target", "fusion"]
+                    for q in ["mgmt", "cnv", "target", "fusion", "itd"]
                 )
                 analysis_total = sum(
                     data.get(q, {}).get("total", 0)
-                    for q in ["mgmt", "cnv", "target", "fusion"]
+                    for q in ["mgmt", "cnv", "target", "fusion", "itd"]
                 )
                 self.analysis_status.set_text(f"{analysis_running}/{analysis_total}")
 
@@ -3032,12 +3046,13 @@ class GUILauncher:
                             news_feed = None
                         if news_feed is None:
                             news_feed = NewsFeed()
-                            news_feed.start_update_timer()
                             try:
                                 app.storage.client["news_feed"] = news_feed
                             except Exception:
                                 pass
+                        # Build UI first so the immediate timer fetch can paint into a live container.
                         news_feed.create_news_element()
+                        news_feed.start_update_timer()
 
     def _create_samples_overview(self):
         """Create the samples overview page showing all tracked samples (design.md Editorial Bioinformatics)."""
@@ -6070,22 +6085,43 @@ class GUILauncher:
                                                 "bed_coverage",
                                                 workflow_steps=workflow_steps,
                                                 display_config=display_config,
-                                        viewer_role=viewer_role,
+                                                viewer_role=viewer_role,
                                             ):
                                                 with _sample_page_section_timer(
-                                                    "live_data",
-                                                    sample_id,
-                                                    "bed_coverage",
+                                                    "live_data", sample_id, "bed_coverage"
                                                 ):
-                                                    add_bed_coverage_section(
-                                                        self, sample_dir
-                                                    )
+                                                    add_bed_coverage_section(self, sample_dir)
                                         except Exception as e:
-                                            logging.exception(f"[GUI] BED Coverage section failed: {e}")
+                                            logging.exception(f"[GUI] BED coverage section failed: {e}")
                                             try:
                                                 ui.notify(f"BED Coverage section failed: {e}", type="warning")
                                             except Exception:
                                                 pass
+
+                                    # ITD / insertion hotspot section
+                                    if is_section_visible(
+                                        "itd",
+                                        workflow_steps=workflow_steps,
+                                        display_config=display_config,
+                                        viewer_role=viewer_role,
+                                    ):
+                                        try:
+                                            try:
+                                                from .gui.components.itd import add_itd_section  # type: ignore
+                                            except ImportError:
+                                                from robin.gui.components.itd import add_itd_section
+
+                                            with _sample_page_section_timer(
+                                                "live_data", sample_id, "itd"
+                                            ):
+                                                add_itd_section(self, sample_dir)
+                                        except Exception as e:
+                                            logging.exception(f"[GUI] ITD section failed: {e}")
+                                            try:
+                                                ui.notify(f"ITD section failed: {e}", type="warning")
+                                            except Exception:
+                                                pass
+
                                     total_elapsed = time.perf_counter() - t_analysis_start
                                     logging.debug(
                                         "[SamplePage] page=live_data sample=%s "
@@ -6336,12 +6372,14 @@ class GUILauncher:
                                     pass
 
                             try:
-                                refresh_timer = ui.timer(
+                                from robin.gui.theme import client_timer, stop_timer
+
+                                refresh_timer = client_timer(
                                     30.0, _refresh_sample_detail_async
                                 )
                                 try:
                                     ui.context.client.on_disconnect(
-                                        lambda: refresh_timer.deactivate()
+                                        lambda: stop_timer(refresh_timer)
                                     )
                                 except Exception:
                                     pass
@@ -6435,6 +6473,17 @@ class GUILauncher:
                 surface=details_surface,
                 viewer_role=viewer_role,
             )
+            show_details_itd = is_section_visible(
+                "itd",
+                workflow_steps=workflow_steps,
+                display_config=display_config,
+                surface=details_surface,
+                viewer_role=viewer_role,
+            )
+            if show_details_itd and sample_dir is not None:
+                show_details_itd = (sample_dir / "itd_events.csv").is_file() or (
+                    sample_dir / "itd_summary.csv"
+                ).is_file()
             show_fusion_target = is_section_visible(
                 "fusion_target",
                 workflow_steps=workflow_steps,
@@ -6481,6 +6530,8 @@ class GUILauncher:
                                 details_blurbs.append("IGV browser")
                             if show_details_snp:
                                 details_blurbs.append("SNP tables")
+                            if show_details_itd:
+                                details_blurbs.append("ITDs / insertions")
                             if show_details_fusion_pairs:
                                 details_blurbs.append("fusion pairs")
                             if show_details_target_genes:
@@ -6599,6 +6650,18 @@ class GUILauncher:
                             "sample_details", sample_id, "snp"
                         ):
                             add_snp_section(self, sample_dir)
+
+                    # ITD / insertion events (with IGV links)
+                    if sample_dir and sample_dir.exists() and show_details_itd:
+                        try:
+                            from robin.gui.components.itd import add_itd_section
+                        except ImportError:
+                            from .gui.components.itd import add_itd_section  # type: ignore
+
+                        with _sample_page_section_timer(
+                            "sample_details", sample_id, "itd"
+                        ):
+                            add_itd_section(self, sample_dir)
 
                     # Fusion Pairs Table section
                     if sample_dir and sample_dir.exists() and show_details_fusion_pairs:
@@ -8722,7 +8785,15 @@ title="View in IGV"
                 "unmapped_reads",
                 "bam_batches",
             ]
-            classification_models = ["sturgeon", "nanodx", "pannanodx", "random_forest"]
+            classification_models = [
+                "sturgeon",
+                "nanodx",
+                "pannanodx",
+                "random_forest",
+                "marlin",
+                "lamprey",
+                "tucan",
+            ]
             analysis_fields = {
                 "coverage": ["quality", "global_coverage", "target_coverage", "enrichment"],
                 "cnv": [

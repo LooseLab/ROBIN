@@ -47,10 +47,10 @@ def test_classification_visible_set() -> None:
         sections={"sturgeon": True, "nanodx": False, "pannanodx": False}
     )
     visible = get_visible_classification_steps(
-        ["sturgeon", "nanodx", "pannanodx", "random_forest"],
+        ["sturgeon", "nanodx", "pannanodx", "random_forest", "marlin", "lamprey"],
         config,
     )
-    assert visible == {"sturgeon", "random_forest"}
+    assert visible == {"sturgeon", "random_forest", "marlin", "lamprey"}
 
 
 def test_config_from_workflow_steps() -> None:

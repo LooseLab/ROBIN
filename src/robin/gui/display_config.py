@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, FrozenSet, List, Optional, Set
 
 CLASSIFICATION_STEP_IDS = frozenset(
-    {"sturgeon", "nanodx", "pannanodx", "random_forest"}
+    {"sturgeon", "nanodx", "pannanodx", "random_forest", "marlin", "lamprey", "tucan"}
 )
 
 SAMPLE_DISPLAY_KEY = "sample_display"
@@ -49,6 +49,24 @@ DISPLAY_SECTIONS: Dict[str, DisplaySection] = {
         "classification",
         workflow_step="random_forest",
     ),
+    "marlin": DisplaySection(
+        "marlin",
+        "MARLIN",
+        "classification",
+        workflow_step="marlin",
+    ),
+    "lamprey": DisplaySection(
+        "lamprey",
+        "Lamprey (research)",
+        "classification",
+        workflow_step="lamprey",
+    ),
+    "tucan": DisplaySection(
+        "tucan",
+        "Tucan",
+        "classification",
+        workflow_step="tucan",
+    ),
     "target": DisplaySection(
         "target",
         "Coverage / targets (+ IGV & genes on More details)",
@@ -63,6 +81,13 @@ DISPLAY_SECTIONS: Dict[str, DisplaySection] = {
         "Fusion analysis (+ fusion pairs on More details)",
         "analysis",
         workflow_step="fusion",
+        surfaces=frozenset({"sample_page", "sample_details", "report"}),
+    ),
+    "itd": DisplaySection(
+        "itd",
+        "ITDs / insertions (+ IGV on More details)",
+        "analysis",
+        workflow_step="itd",
         surfaces=frozenset({"sample_page", "sample_details", "report"}),
     ),
     "fusion_target": DisplaySection(

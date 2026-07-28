@@ -13,9 +13,12 @@ Semantics:
   outnumber benign/likely-benign submissions.
 - `is_oncogenic` is True for ONC values indicating oncogenic or likely
   oncogenic, with ONCCONF resolved the same way as CLNSIGCONF.
+- `is_vus` is True for Uncertain_significance (VUS) on CLNSIG or ONC.
+  VUS is never treated as pathogenic/oncogenic.
 - `is_somatic_significant` is True for SCI Tier I (strong) or Tier II
   (potential) somatic clinical impact.
-- `is_clinvar_significant` is the union of the three tracks above.
+- `is_clinvar_significant` is the union of pathogenic/oncogenic/somatic
+  significant tracks plus VUS (used for GUI highlighting/filtering).
 """
 
 from __future__ import annotations
@@ -71,6 +74,11 @@ CONFLICTING_ONCOGENIC_TERMS: tuple[str, ...] = (
     "conflicting interpretations of oncogenicity",
 )
 
+VUS_TERMS: tuple[str, ...] = (
+    "uncertain_significance",
+    "uncertain significance",
+)
+
 SCI_SIGNIFICANT_TERMS: tuple[str, ...] = (
     "tier_i_-_strong",
     "tier_ii_-_potential",
@@ -84,6 +92,7 @@ class ClinVarSignificance:
     is_clinvar_significant: bool
     is_pathogenic: bool
     is_oncogenic: bool
+    is_vus: bool
     is_somatic_significant: bool
     has_conflicting_germline: bool
     has_conflicting_oncogenic: bool
@@ -98,6 +107,7 @@ class ClinVarSignificance:
             "is_clinvar_significant": bool(self.is_clinvar_significant),
             "is_pathogenic": bool(self.is_pathogenic),
             "is_oncogenic": bool(self.is_oncogenic),
+            "is_vus": bool(self.is_vus),
             "is_somatic_significant": bool(self.is_somatic_significant),
             "has_conflicting_germline": bool(self.has_conflicting_germline),
             "has_conflicting_oncogenic": bool(self.has_conflicting_oncogenic),
@@ -225,6 +235,13 @@ def _classify_somatic_sci(raw_sci: str) -> bool:
     return _contains_any(raw_sci.lower(), SCI_SIGNIFICANT_TERMS)
 
 
+def _is_vus_value(raw_value: str) -> bool:
+    """Return True when a ClinVar track value is Uncertain_significance (VUS)."""
+    if not raw_value:
+        return False
+    return _contains_any(raw_value.lower(), VUS_TERMS)
+
+
 def _info_mapping_to_string(info: Any) -> str:
     """Serialize a pysam-style INFO mapping into a VCF INFO string."""
     if not info:
@@ -267,7 +284,9 @@ def classify_clinvar_significance(
     Accepts the raw `INFO` text (semicolon-separated, as emitted by VCF 4.x).
     """
     if not info_str:
-        return ClinVarSignificance(False, False, False, False, False, False, "", "", "", "", "")
+        return ClinVarSignificance(
+            False, False, False, False, False, False, False, "", "", "", "", ""
+        )
 
     clnsig = _extract_info_field(info_str, "CLNSIG")
     clnsigconf = _extract_info_field(info_str, "CLNSIGCONF")
@@ -291,14 +310,20 @@ def classify_clinvar_significance(
     )
     is_somatic_significant = _classify_somatic_sci(sci)
 
+    # VUS is highlightable but never collapses into pathogenic/oncogenic.
+    is_vus = (not is_pathogenic and _is_vus_value(clnsig)) or (
+        not is_oncogenic and _is_vus_value(onc)
+    )
+
     is_clinvar_significant = (
-        is_pathogenic or is_oncogenic or is_somatic_significant
+        is_pathogenic or is_oncogenic or is_somatic_significant or is_vus
     )
 
     return ClinVarSignificance(
         is_clinvar_significant=is_clinvar_significant,
         is_pathogenic=is_pathogenic,
         is_oncogenic=is_oncogenic,
+        is_vus=is_vus,
         is_somatic_significant=is_somatic_significant,
         has_conflicting_germline=has_conflicting_germline,
         has_conflicting_oncogenic=has_conflicting_oncogenic,

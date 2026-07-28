@@ -31,6 +31,33 @@ from robin.reporting.mnpflex_hierarchy import (
 
 logger = logging.getLogger(__name__)
 
+# Score CSV columns that are run statistics / metadata, not predicted classes.
+# Kept as a set of lowercase names so case variants are also excluded.
+CLASSIFIER_SCORE_META_COLUMNS = frozenset(
+    {
+        "timestamp",
+        "number_probes",
+        "covered_cpgs",
+        "temperature",
+        "diagnostic",
+        "probes",
+    }
+)
+
+
+def drop_classifier_score_meta_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """Remove non-class columns from a classifier scores DataFrame."""
+    if df is None or getattr(df, "empty", True):
+        return df
+    drop_cols = [
+        col
+        for col in df.columns
+        if str(col).strip().lower() in CLASSIFIER_SCORE_META_COLUMNS
+    ]
+    if not drop_cols:
+        return df
+    return df.drop(columns=drop_cols)
+
 
 class ClassificationSection(ReportSection):
     """Section containing the methylation classification results."""
@@ -78,8 +105,8 @@ class ClassificationSection(ReportSection):
             BytesIO object containing the plot image
         """
         try:
-            # Drop non-classification columns
-            df = df.drop(columns=["number_probes"]) if "number_probes" in df.columns else df
+            # Drop non-classification columns (covered_cpgs, diagnostic, etc.)
+            df = drop_classifier_score_meta_columns(df)
 
             # Check if dataframe is empty or has no data
             if df.empty or len(df) == 0:
@@ -337,6 +364,9 @@ class ClassificationSection(ReportSection):
             "NanoDX": "nanodx_scores.csv",
             "PanNanoDX": "pannanodx_scores.csv",
             "Random Forest": "random_forest_scores.csv",
+            "MARLIN": "marlin_scores.csv",
+            "Lamprey (research)": "lamprey_scores.csv",
+            "Tucan": "tucan_scores.csv",
         }
 
         # Add summary table of all classifications
@@ -367,16 +397,7 @@ class ClassificationSection(ReportSection):
                         )
 
                     # Continue with existing classification processing
-                    df = (
-                        df.drop(columns=["timestamp"])
-                        if "timestamp" in df.columns
-                        else df
-                    )
-                    df = (
-                        df.drop(columns=["number_probes"])
-                        if "number_probes" in df.columns
-                        else df
-                    )
+                    df = drop_classifier_score_meta_columns(df)
 
                     # Get the last row and find top prediction
                     last_row = df.iloc[-1]
@@ -392,7 +413,18 @@ class ClassificationSection(ReportSection):
                     )
 
                     # Determine confidence level based on classifier using centralized config
-                    confidence_status, status_color = get_confidence_status(name.lower(), confidence_value)
+                    classifier_key = {
+                        "Sturgeon": "sturgeon",
+                        "NanoDX": "nanodx",
+                        "PanNanoDX": "pannanodx",
+                        "Random Forest": "random_forest",
+                        "MARLIN": "marlin",
+                        "Lamprey (research)": "lamprey",
+                        "Tucan": "tucan",
+                    }.get(name, name.lower().replace(" ", "_"))
+                    confidence_status, status_color = get_confidence_status(
+                        classifier_key, confidence_value
+                    )
 
                     # Add to summary table with HTML-like color formatting
                     summary_data.append(
@@ -522,16 +554,7 @@ class ClassificationSection(ReportSection):
 
                 if file_path and os.path.exists(file_path):
                     df = pd.read_csv(file_path)
-                    df = (
-                        df.drop(columns=["timestamp"])
-                        if "timestamp" in df.columns
-                        else df
-                    )
-                    df = (
-                        df.drop(columns=["number_probes"])
-                        if "number_probes" in df.columns
-                        else df
-                    )
+                    df = drop_classifier_score_meta_columns(df)
 
                     last_row = df.iloc[-1]
                     top_predictions = last_row.sort_values(ascending=False).head(10)

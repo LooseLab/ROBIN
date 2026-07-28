@@ -16,9 +16,6 @@ except ImportError:  # pragma: no cover
 
 logger = logging.getLogger(__name__)
 
-_TABLE_PREVIEW_THRESHOLD = 50_000
-_TABLE_PREVIEW_LIMIT = 5_000
-
 # Default SNP/INDEL table and detail views for ClinVar-annotated variants.
 VARIANT_TABLE_FIELDS = [
     "CHROM",
@@ -70,6 +67,7 @@ VARIANT_DETAIL_FIELDS = [
     "SCIDN",
     "CLNDN",
     "is_pathogenic",
+    "is_vus",
     "FILTER",
     "QUAL",
     "GT",
@@ -77,6 +75,7 @@ VARIANT_DETAIL_FIELDS = [
 VARIANT_COLUMN_LABELS = {
     "is_clinvar_significant": "ClinVar significant",
     "is_pathogenic": "Germline pathogenic",
+    "is_vus": "VUS",
     "ONCDN": "Oncogenic disease",
     "SCIDN": "Somatic disease",
     "CLNDN": "Germline disease",
@@ -465,11 +464,14 @@ def add_snp_section(launcher: Any, sample_dir: Path) -> None:
         compact["action"] = " "
         return compact
 
-    snp_preview_mode = len(rows_all) > _TABLE_PREVIEW_THRESHOLD
-    snp_rows_source = rows_all[:_TABLE_PREVIEW_LIMIT] if snp_preview_mode else rows_all
+    # Keep the full in-memory dataset; QTable only receives the current page via
+    # server-side pagination. Truncating here previously hid ClinVar-significant
+    # rows that fell outside the first N variants.
+    snp_rows_source = rows_all
+    snp_total_rows = len(snp_rows_source)
 
     page_state: Dict[str, Any] = {
-        "filtered_indices": list(range(len(snp_rows_source))),
+        "filtered_indices": list(range(snp_total_rows)),
     }
 
     with ui.element("div").classes("classification-insight-shell w-full min-w-0"):
@@ -503,20 +505,20 @@ def add_snp_section(launcher: Any, sample_dir: Path) -> None:
                 )
 
         with ui.row().classes("w-full gap-3 mb-3 flex-wrap items-baseline"):
-            shown_total = len(snp_rows_source)
-            ui.label(f"Total variants: {total_variants}").classes(
+            ui.label(f"Total variants: {total_variants:,}").classes(
                 "classification-insight-meta"
             )
-            if snp_preview_mode:
+            if snp_total_rows > 5_000:
                 ui.label(
-                    f"Preview mode: showing first {shown_total:,} rows (dataset too large). Use filters/search to narrow."
-                ).classes("classification-insight-level classification-insight-level--low w-full")
+                    "Large dataset: paging and filters run over all variants "
+                    "(only the current page is sent to the browser)."
+                ).classes("classification-insight-meta w-full")
             if significant_count > 0:
-                ui.label(f"ClinVar significant variants: {significant_count}").classes(
+                ui.label(f"ClinVar significant variants: {significant_count:,}").classes(
                     "classification-insight-level classification-insight-level--low w-auto"
                 )
             elif pathogenic_count > 0:
-                ui.label(f"Pathogenic variants: {pathogenic_count}").classes(
+                ui.label(f"Pathogenic variants: {pathogenic_count:,}").classes(
                     "classification-insight-level classification-insight-level--low w-auto"
                 )
 
@@ -541,7 +543,7 @@ def add_snp_section(launcher: Any, sample_dir: Path) -> None:
             else:
                 snp_min_dp = None
             snp_search = ui.input("Search (gene/variant)").props(
-                "dense outlined clearable"
+                "dense outlined clearable debounce=400"
             ).classes("w-64")
             snp_reset_button = ui.button("Reset").props("dense no-caps")
 
@@ -565,7 +567,7 @@ def add_snp_section(launcher: Any, sample_dir: Path) -> None:
             class_size="table-xs",
         )
         snp_filtered_count_label = ui.label(
-            f"{_snp_total_filtered} variants match filters ({len(snp_rows_source)} loaded)"
+            f"{_snp_total_filtered:,} variants match filters (of {snp_total_rows:,} total)"
         ).classes("classification-insight-meta")
 
         def _fill_snp_from_pagination(pag: Dict[str, Any]) -> None:
@@ -582,14 +584,14 @@ def add_snp_section(launcher: Any, sample_dir: Path) -> None:
             filtered_indices = page_state["filtered_indices"]
             rows_out: List[Dict[str, Any]] = []
             for idx in filtered_indices[start:end]:
+                if idx < 0 or idx >= snp_total_rows:
+                    continue
                 rows_out.append(_compact_row(snp_rows_source[idx]))
                 rows_out[-1]["__row_idx"] = idx
             snp_table.rows = rows_out
             snp_table.pagination = pag
             snp_filtered_count_label.text = (
-                f"{total_filtered} variants match filters ({len(snp_rows_source)} loaded)"
-                if total_filtered
-                else f"0 variants match filters ({len(snp_rows_source)} loaded)"
+                f"{total_filtered:,} variants match filters (of {snp_total_rows:,} total)"
             )
             snp_table.update()
 
@@ -604,7 +606,6 @@ def add_snp_section(launcher: Any, sample_dir: Path) -> None:
 
             filtered_indices: List[int] = []
             for idx, full_row in enumerate(snp_rows_source):
-
                 if pass_only and str(full_row.get("FILTER", "")).strip().upper() != "PASS":
                     continue
                 if significant_only and not _is_truthy(
@@ -676,7 +677,7 @@ def add_snp_section(launcher: Any, sample_dir: Path) -> None:
                         )
 
                 def show_variant_details(row_idx: int) -> None:
-                    if row_idx < 0 or row_idx >= len(snp_rows_source):
+                    if row_idx < 0 or row_idx >= snp_total_rows:
                         ui.notify("Variant details not found.", type="warning")
                         return
                     row_data = snp_rows_source[row_idx]
@@ -748,7 +749,7 @@ def add_snp_section(launcher: Any, sample_dir: Path) -> None:
                         if row_idx is None:
                             return
                         row_idx = int(row_idx)
-                        if row_idx < 0 or row_idx >= len(snp_rows_source):
+                        if row_idx < 0 or row_idx >= snp_total_rows:
                             return
 
                         row = snp_rows_source[row_idx]
@@ -781,7 +782,6 @@ def add_snp_section(launcher: Any, sample_dir: Path) -> None:
             def _cleanup_snp_page() -> None:
                 page_state["filtered_indices"] = []
                 snp_table.rows = []
-                snp_rows_source.clear()
             ui.context.client.on_disconnect(_cleanup_snp_page)
         except Exception:
             pass
@@ -893,10 +893,7 @@ def add_snp_section(launcher: Any, sample_dir: Path) -> None:
             return compact
 
         total_indel_rows_all = int(len(indel_df))
-        indel_preview_mode = total_indel_rows_all > _TABLE_PREVIEW_THRESHOLD
-        total_indel_rows = (
-            _TABLE_PREVIEW_LIMIT if indel_preview_mode else total_indel_rows_all
-        )
+        total_indel_rows = total_indel_rows_all
         pathogenic_indel_count = 0
         significant_indel_count = 0
         if "is_clinvar_significant" in indel_df.columns:
@@ -927,22 +924,23 @@ def add_snp_section(launcher: Any, sample_dir: Path) -> None:
             significant_indel_count = pathogenic_indel_count
 
         with ui.row().classes("w-full gap-3 mb-3 flex-wrap items-baseline"):
-            ui.label(f"Total variants: {total_indel_rows_all}").classes(
+            ui.label(f"Total variants: {total_indel_rows_all:,}").classes(
                 "classification-insight-meta"
             )
-            if indel_preview_mode:
+            if total_indel_rows_all > 5_000:
                 ui.label(
-                    f"Preview mode: showing first {total_indel_rows:,} rows (dataset too large). Use filters/search to narrow."
-                ).classes("classification-insight-level classification-insight-level--low w-full")
+                    "Large dataset: paging and filters run over all variants "
+                    "(only the current page is sent to the browser)."
+                ).classes("classification-insight-meta w-full")
             if significant_indel_count:
                 ui.label(
-                    f"ClinVar significant variants: {significant_indel_count}"
+                    f"ClinVar significant variants: {significant_indel_count:,}"
                 ).classes(
                     "classification-insight-level classification-insight-level--low w-auto"
                 )
             elif pathogenic_indel_count:
                 ui.label(
-                    f"Pathogenic variants: {pathogenic_indel_count}"
+                    f"Pathogenic variants: {pathogenic_indel_count:,}"
                 ).classes(
                     "classification-insight-level classification-insight-level--low w-auto"
                 )
@@ -968,7 +966,7 @@ def add_snp_section(launcher: Any, sample_dir: Path) -> None:
             else:
                 indel_min_dp = None
             indel_search = ui.input("Search (gene/variant)").props(
-                "dense outlined clearable"
+                "dense outlined clearable debounce=400"
             ).classes("w-64")
             indel_reset_button = ui.button("Reset").props("dense no-caps")
 
@@ -995,7 +993,7 @@ def add_snp_section(launcher: Any, sample_dir: Path) -> None:
             class_size="table-xs",
         )
         indel_filtered_count_label = ui.label(
-            f"{_indel_tf0} variants match filters ({total_indel_rows} loaded)"
+            f"{_indel_tf0:,} variants match filters (of {total_indel_rows:,} total)"
         ).classes("classification-insight-meta")
 
         def _fill_indel_from_pagination(pag: Dict[str, Any]) -> None:
@@ -1015,9 +1013,7 @@ def add_snp_section(launcher: Any, sample_dir: Path) -> None:
             ]
             indel_table.pagination = pag
             indel_filtered_count_label.text = (
-                f"{total_filtered} variants match filters ({total_indel_rows} loaded)"
-                if total_filtered
-                else f"0 variants match filters ({total_indel_rows} loaded)"
+                f"{total_filtered:,} variants match filters (of {total_indel_rows:,} total)"
             )
             indel_table.update()
 

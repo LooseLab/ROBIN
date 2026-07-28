@@ -80,9 +80,30 @@ def test_sci_tier_iii_not_significant():
     assert not result.is_clinvar_significant
 
 
-def test_uncertain_onc_not_significant():
+def test_uncertain_onc_is_significant_vus():
     info = "ONC=Uncertain_significance"
-    assert not is_clinvar_significant_from_info(info)
+    result = classify_clinvar_significance(info)
+    assert result.is_clinvar_significant
+    assert result.is_vus
+    assert not result.is_pathogenic
+    assert not result.is_oncogenic
+
+
+def test_germline_vus_is_significant_but_not_pathogenic():
+    info = "CLNSIG=Uncertain_significance;CLNDN=Some_disease"
+    result = classify_clinvar_significance(info)
+    assert result.is_clinvar_significant
+    assert result.is_vus
+    assert not result.is_pathogenic
+    assert not result.is_oncogenic
+
+
+def test_pathogenic_not_also_vus():
+    info = "CLNSIG=Pathogenic/Uncertain_significance"
+    result = classify_clinvar_significance(info)
+    assert result.is_clinvar_significant
+    assert result.is_pathogenic
+    assert not result.is_vus
 
 
 def test_empty_info_not_significant():

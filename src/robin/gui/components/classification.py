@@ -308,18 +308,21 @@ try:
         CLASSIFICATION_STEPS,
     )
 except ImportError:
-    get_visible_classification_steps = lambda *a, **k: {"sturgeon", "nanodx", "random_forest", "pannanodx"}  # type: ignore[assignment]
+    get_visible_classification_steps = lambda *a, **k: {"sturgeon", "nanodx", "random_forest", "pannanodx", "marlin", "lamprey", "tucan"}  # type: ignore[assignment]
     launcher_visibility_context = lambda launcher: (None, None, "user")  # type: ignore[assignment]
     CLASSIFICATION_STEPS = {
         "sturgeon": "Sturgeon",
         "nanodx": "NanoDX",
         "random_forest": "Random Forest",
         "pannanodx": "PanNanoDX",
+        "marlin": "MARLIN",
+        "lamprey": "Lamprey (research)",
+        "tucan": "Tucan",
     }
 
 
 def add_classification_section(sample_dir: Path, launcher: Any = None) -> None:
-    """Build the Classification section (Sturgeon, NanoDX, PanNanoDX, RF)."""
+    """Build the Classification section (Sturgeon, NanoDX, PanNanoDX, RF, MARLIN, Lamprey, Tucan)."""
     # Get workflow steps from launcher if available
     workflow_steps, display_config, viewer_role = launcher_visibility_context(launcher)
     enabled_classification_steps = get_visible_classification_steps(
@@ -334,6 +337,9 @@ def add_classification_section(sample_dir: Path, launcher: Any = None) -> None:
         "NanoDX": "nanodx",
         "PanNanoDX": "pannanodx",
         "Random Forest": "random_forest",
+        "MARLIN": "marlin",
+        "Lamprey (research)": "lamprey",
+        "Tucan": "tucan",
     }
     
     with ui.element("div").classes("classification-insight-shell w-full min-w-0").props(
@@ -347,6 +353,9 @@ def add_classification_section(sample_dir: Path, launcher: Any = None) -> None:
             "NanoDX": {"file": "NanoDX_scores.csv", "mode": "fraction"},
             "PanNanoDX": {"file": "PanNanoDX_scores.csv", "mode": "fraction"},
             "Random Forest": {"file": "random_forest_scores.csv", "mode": "percent"},
+            "MARLIN": {"file": "marlin_scores.csv", "mode": "fraction"},
+            "Lamprey (research)": {"file": "lamprey_scores.csv", "mode": "fraction"},
+            "Tucan": {"file": "tucan_scores.csv", "mode": "fraction"},
         }
         charts: Dict[str, Dict[str, Any]] = {}
         for tool_name, cfg in tool_to_file.items():
@@ -366,6 +375,9 @@ def add_classification_section(sample_dir: Path, launcher: Any = None) -> None:
                     "NanoDX": "biotech",
                     "PanNanoDX": "science",
                     "Random Forest": "forest",
+                    "MARLIN": "bloodtype",
+                    "Lamprey (research)": "biotech",
+                    "Tucan": "pets",
                 }[tool_name]
                 if tool_name == "Sturgeon":
                     with ui.element("div").classes(
@@ -413,7 +425,7 @@ def add_classification_section(sample_dir: Path, launcher: Any = None) -> None:
                             "conf": ndx_conf,
                             "probes": ndx_feats,
                         }
-                elif tool_name == "Random Forest":
+                elif tool_name in ("Random Forest", "MARLIN", "Lamprey (research)", "Tucan"):
                     with ui.element("div").classes(
                         "classification-insight-card w-full min-w-0 mb-2"
                     ):
@@ -422,8 +434,14 @@ def add_classification_section(sample_dir: Path, launcher: Any = None) -> None:
                         ):
                             ui.icon(tool_icon).classes("classification-insight-icon")
                             with ui.column().classes("gap-1 flex-1 min-w-0"):
+                                label_prefix = {
+                                    "Random Forest": "Forest",
+                                    "MARLIN": "MARLIN",
+                                    "Lamprey (research)": "Lamprey",
+                                    "Tucan": "Tucan",
+                                }.get(tool_name, tool_name)
                                 rf_class = ui.label(
-                                    "Forest classification: Unknown"
+                                    f"{label_prefix} classification: Unknown"
                                 ).classes("classification-insight-result text-sm")
                                 rf_conf = ui.label("Confidence: --%").classes(
                                     "classification-insight-meta"
@@ -633,7 +651,11 @@ def add_classification_section(sample_dir: Path, launcher: Any = None) -> None:
             except Exception:
                 pass
 
-    from robin.gui.theme import register_theme_sync_callback
+    from robin.gui.theme import (
+        register_theme_sync_callback,
+        client_timer,
+        stop_timer,
+    )
 
     unregister_classification_theme_sync = register_theme_sync_callback(
         _sync_classification_theme,
@@ -651,7 +673,14 @@ def add_classification_section(sample_dir: Path, launcher: Any = None) -> None:
                     return None
                 numeric_keys = []
                 for k in reader.fieldnames or []:
-                    if k.lower() in {"timestamp", "number_probes"}:
+                    if k.lower() in {
+                        "timestamp",
+                        "number_probes",
+                        "covered_cpgs",
+                        "temperature",
+                        "diagnostic",
+                        "probes",
+                    }:
                         continue
                     try:
                         float(rows[-1].get(k, ""))
@@ -705,7 +734,7 @@ def add_classification_section(sample_dir: Path, launcher: Any = None) -> None:
                 number_probes: Optional[int] = None
                 try:
                     lr = rows[-1]
-                    for nk in ("number_probes", "Number_probes"):
+                    for nk in ("number_probes", "Number_probes", "covered_cpgs", "probes"):
                         raw = lr.get(nk)
                         if raw is not None and str(raw).strip() != "":
                             number_probes = int(float(raw))
@@ -1143,12 +1172,12 @@ def add_classification_section(sample_dir: Path, launcher: Any = None) -> None:
             pass
 
     # Start the refresh timer (every 30 seconds)
-    refresh_timer = ui.timer(30.0, _refresh_classification, active=True, immediate=False)
+    refresh_timer = client_timer(30.0, _refresh_classification, active=True, immediate=False)
     # Initial refresh after the page is rendered
-    ui.timer(0.5, _refresh_classification, once=True)
+    client_timer(0.5, _refresh_classification, once=True)
     try:
         ui.context.client.on_disconnect(
-            lambda: (refresh_timer.deactivate(), unregister_classification_theme_sync())
+            lambda: (stop_timer(refresh_timer), unregister_classification_theme_sync())
         )
     except Exception:
         pass

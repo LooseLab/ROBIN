@@ -29,11 +29,15 @@ WORKFLOW_STEP_TO_SECTION = {
     "target": "target",
     "mgmt": "mgmt",
     "fusion": "fusion",
+    "itd": "itd",
     "cnv": "cnv",
     "sturgeon": "sturgeon",
     "nanodx": "nanodx",
     "random_forest": "random_forest",
     "pannanodx": "pannanodx",
+    "marlin": "marlin",
+    "lamprey": "lamprey",
+    "tucan": "tucan",
 }
 
 # Map workflow steps to their display names in classification section
@@ -42,6 +46,9 @@ CLASSIFICATION_STEPS = {
     "nanodx": "NanoDX",
     "random_forest": "Random Forest",
     "pannanodx": "PanNanoDX",
+    "marlin": "MARLIN",
+    "lamprey": "Lamprey (research)",
+    "tucan": "Tucan",
 }
 
 

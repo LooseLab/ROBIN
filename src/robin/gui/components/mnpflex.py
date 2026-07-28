@@ -31,7 +31,7 @@ from robin.analysis.mnpflex_eligibility import (
     sample_ready_for_mnpflex_auto_run_from_dir,
 )
 from robin.analysis.mnpflex_runner import preflight_mnpflex_runtime, run_mnpflex_analysis
-from robin.gui.theme import styled_table
+from robin.gui.theme import styled_table, client_timer, stop_timer
 
 
 def add_mnpflex_section(launcher: Any, sample_dir: Path, sample_id: str) -> None:
@@ -1033,13 +1033,13 @@ def add_mnpflex_section(launcher: Any, sample_dir: Path, sample_id: str) -> None
 
         fetch_button.on_click(_handle_fetch_click)
         build_button.on_click(_handle_build_click)
-        bed_build_timer = ui.timer(0.25, _process_bed_build_queue, active=True)
-        refresh_timer = ui.timer(30.0, _poll_status, active=True, immediate=False)
-        ui.timer(0.5, _poll_status, once=True)
+        bed_build_timer = client_timer(0.25, _process_bed_build_queue, active=True)
+        refresh_timer = client_timer(30.0, _poll_status, active=True, immediate=False)
+        client_timer(0.5, _poll_status, once=True)
 
         def _on_disconnect_cleanup() -> None:
-            refresh_timer.deactivate()
-            bed_build_timer.deactivate()
+            stop_timer(refresh_timer)
+            stop_timer(bed_build_timer)
 
         try:
             ui.context.client.on_disconnect(_on_disconnect_cleanup)

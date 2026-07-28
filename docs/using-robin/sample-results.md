@@ -29,7 +29,7 @@ Long values (e.g. a full basecall model name) may wrap across the full width so 
 
 ## Classification details {#classification-details}
 
-**Classification details** shows how different **classifiers** (for example Sturgeon, NanoDX, PanNanoDX, Random Forest) rank possible tumour classes or methylation-based groups.
+**Classification details** shows how different **classifiers** (for example Sturgeon, NanoDX, PanNanoDX, Random Forest, MARLIN, Lamprey) rank possible tumour classes or methylation-based groups.
 
 **How to read it:**
 
@@ -63,7 +63,7 @@ Below the **Classification details** and **Analysis details** cards, the sample 
 
 ### Classification
 
-The heading **Classification** groups **Sturgeon**, **NanoDX**, **PanNanoDX**, and **Random Forest** in separate **expandable rows** (click to open).
+The heading **Classification** groups **Sturgeon**, **NanoDX**, **PanNanoDX**, **Random Forest**, **MARLIN**, and **Lamprey (research)** in separate **expandable rows** (click to open). Lamprey is research/evaluation use only.
 
 ![Classification section: summary row, expanded Sturgeon with top-classes bar chart and confidence over time](../images/Classification.png)
 
@@ -169,7 +169,7 @@ This is a **separate URL** from the main sample dashboard: `/live_data/<library-
 ### Page header
 
 - **Sample details** heading with **library ID**; **Test ID** appears when ROBIN can read it from the sample’s **identifier manifest** on disk.  
-- Intro line listing **IGV**, **sample identifiers**, **SNP** tables, **fusion pairs**, and **target genes**.  
+- Intro line listing **IGV**, **sample identifiers**, **SNP** tables, **ITDs / insertions** (when run), **fusion pairs**, and **target genes**.
 - **View sample identifiers** — opens a modal with manifest-derived identifier fields (where configured).  
 - **Back to sample** — returns to the main sample page (`/live_data/<library-id>`).
 
@@ -185,7 +185,7 @@ This is a **separate URL** from the main sample dashboard: `/live_data/<library-
 
 - Embedded **IGV.js** genome browser (**Genome: hg38**): ruler, ideogram, reference sequence, gene annotations, coverage histogram, and read alignments.  
 - **target.bam** must exist in the sample output folder for ROBIN to build the interactive viewer; otherwise you see **IGV requires target.bam** and a reminder to run **target analysis** first. When tracks load, ROBIN uses **target-scoped** indexed BAMs—typically **`target.bam`**, or (when present) files such as **`sorted_targets_exceeding.bam`** / **`sorted_targets_exceeding_rerun.bam`** under **`clair3/`**, or **`igv_ready.bam`** under **`igv/`**. **Only alignments from those target-region BAMs are shown**—this is **not** a whole-genome alignment view.  
-- **SNP table**, **indel table** (when present), and **fusion pairs** table each offer **View in IGV** and/or **row clicks** that **move the browser** to the variant, indel, or fusion breakpoints so you can **inspect pileups** in the loaded BAM. The **Target genes** table does the same for each gene interval.  
+- **SNP table**, **indel table** (when present), **ITD / insertion events** (when present), and **fusion pairs** table each offer **View in IGV** and/or **row clicks** that **move the browser** to the variant, indel, ITD locus, or fusion breakpoints so you can **inspect pileups** in the loaded BAM. The **Target genes** table does the same for each gene interval.
 
 ![IGV browser: hg38 tracks and alignments at a locus opened from the SNP table (View in IGV)](../images/IGVview.png)
 
@@ -194,7 +194,7 @@ This is a **separate URL** from the main sample dashboard: `/live_data/<library-
 ### SNP analysis
 
 - Appears when SNP processing has written **`clair3/snpsift_output_display.json`**.  
-- **Summary** text may include total variants and counts of **ClinVar significant** variants (germline pathogenic, oncogenic, or somatic tier I/II).  
+- **Summary** text may include total variants and counts of **ClinVar significant** variants (germline pathogenic / likely pathogenic, VUS, oncogenic, or somatic tier I/II).  
 - **Filters:** **PASS only** (keep rows with `FILTER` = PASS), **ClinVar significant only**, optional **Min QUAL**, and **Reset** to clear filters. A **search** box filters the visible rows. The footer may show how many variants match (e.g. “Showing *n* of *N*”).  
 - **ClinVar version:** each table shows which **ClinVar release** was used to annotate the sample and which release is **currently installed** in ROBIN. If a newer ClinVar is installed after annotation, a warning is shown and **Re-annotate with current ClinVar** re-runs **snpEff/SnpSift** on the existing Clair3 outputs (no variant re-calling).  
 - The **table** lists columns such as chromosome, position, **REF** / **ALT**, gene, **HGVS.p**, annotation, annotation impact, **CLNSIG** (germline), **ONC** (oncogenic), **SCI** (somatic clinical impact tier), associated disease names (**ONCDN**, **SCIDN**), whether the row is **ClinVar significant**, **FILTER**, **QUAL**, genotype (**GT**), **Details** (expand full fields including germline-only **is_pathogenic** when present), and **View in IGV**.  

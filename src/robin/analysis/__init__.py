@@ -41,6 +41,13 @@ except Exception:
     pass
 
 try:
+    from .itd_analysis import itd_handler  # noqa: F401
+
+    __all__.append("itd_handler")
+except Exception:
+    pass
+
+try:
     from .target_analysis import target_handler  # noqa: F401
 
     __all__.append("target_handler")
