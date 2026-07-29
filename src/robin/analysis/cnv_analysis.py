@@ -81,6 +81,7 @@ import pickle
 import gc
 import subprocess
 import sys
+from functools import lru_cache
 from typing import Dict, Optional, List, Tuple
 from dataclasses import dataclass
 
@@ -104,6 +105,10 @@ CHUNK_SIZE = 1000  # For processing large arrays in chunks
 # Set to False to use direct execution (new approach, default)
 # To revert to subprocess mode, change this to: USE_CNV_SUBPROCESS = True
 USE_CNV_SUBPROCESS = False
+
+# Drop CNV candidate breakpoints that fall in centromeric satellite regions or
+# within this margin of either chromosome tip (telomere proximity).
+BREAKPOINT_TELOMERE_MARGIN_BP = 1_000_000
 
 
 # Global cache for reference CNV dict to avoid reloading for every sample
@@ -891,6 +896,100 @@ def estimate_sex_from_cnv(cnv_data: Dict, logger) -> str:
         return "Unknown"
 
 
+@lru_cache(maxsize=1)
+def _load_centromere_intervals() -> Dict[str, Tuple[Tuple[int, int], ...]]:
+    """Load packaged ``cenSatRegions.bed`` as chrom -> immutable (start, end) tuples."""
+    regions: Dict[str, List[Tuple[int, int]]] = {}
+    try:
+        import importlib.resources as importlib_resources
+
+        res_path = importlib_resources.files("robin.resources") / "cenSatRegions.bed"
+        with res_path.open("r", encoding="utf-8") as handle:
+            for line in handle:
+                parts = line.strip().split("\t")
+                if len(parts) < 3:
+                    continue
+                chrom = parts[0]
+                start = int(parts[1])
+                end = int(parts[2])
+                if end <= start:
+                    continue
+                regions.setdefault(chrom, []).append((start, end))
+    except Exception:
+        return {}
+    return {chrom: tuple(intervals) for chrom, intervals in regions.items()}
+
+
+def _intervals_overlap(a_start: int, a_end: int, b_start: int, b_end: int) -> bool:
+    return a_start < b_end and b_start < a_end
+
+
+def filter_breakpoints_by_centromere_and_telomere(
+    breakpoints: List[Dict],
+    chrom_lengths: Dict[str, int],
+    *,
+    telomere_margin_bp: int = BREAKPOINT_TELOMERE_MARGIN_BP,
+    centromeres: Optional[Dict[str, Tuple[Tuple[int, int], ...]]] = None,
+    logger=None,
+) -> List[Dict]:
+    """Remove breakpoints overlapping centromeres or chromosome-end margins.
+
+    A breakpoint ``[start, end)`` is dropped when it overlaps:
+    - any interval from ``cenSatRegions.bed`` on the same chromosome, or
+    - ``[0, telomere_margin_bp)`` or
+      ``[chrom_length - telomere_margin_bp, chrom_length)`` when length is known.
+    """
+    if not breakpoints:
+        return []
+
+    centro = centromeres if centromeres is not None else _load_centromere_intervals()
+    margin = max(0, int(telomere_margin_bp))
+    kept: List[Dict] = []
+    dropped = 0
+
+    for bp in breakpoints:
+        chrom = bp.get("chromosome") or bp.get("chrom")
+        try:
+            start = int(bp["start"])
+            end = int(bp["end"])
+        except (KeyError, TypeError, ValueError):
+            dropped += 1
+            continue
+        if end <= start or chrom is None:
+            dropped += 1
+            continue
+
+        chrom_length = int(chrom_lengths.get(chrom, 0) or 0)
+        near_telomere = False
+        if margin > 0:
+            if _intervals_overlap(start, end, 0, margin):
+                near_telomere = True
+            elif chrom_length > 0:
+                tip_start = max(0, chrom_length - margin)
+                if _intervals_overlap(start, end, tip_start, chrom_length):
+                    near_telomere = True
+
+        in_centromere = False
+        for cen_start, cen_end in centro.get(chrom, ()):
+            if _intervals_overlap(start, end, int(cen_start), int(cen_end)):
+                in_centromere = True
+                break
+
+        if near_telomere or in_centromere:
+            dropped += 1
+            continue
+        kept.append(bp)
+
+    if logger is not None and dropped:
+        logger.info(
+            "Filtered %s/%s CNV breakpoints in centromeres or within %s bp of chromosome ends",
+            dropped,
+            dropped + len(kept),
+            margin,
+        )
+    return kept
+
+
 def detect_breakpoints_from_cnv(
     cnv_data: Dict,
     bin_width: int,
@@ -908,7 +1007,7 @@ def detect_breakpoints_from_cnv(
             workflow TOML ``[cnv] penalty_value`` (default 10).
 
     Returns:
-        List of detected breakpoints
+        List of detected breakpoints after centromere / telomere-proximity filtering
     """
     breakpoints = []
 
@@ -944,8 +1043,22 @@ def detect_breakpoints_from_cnv(
                 except Exception as e:
                     logger.debug(f"Error processing chromosome {key}: {e}")
 
-        logger.debug(f"Detected {len(breakpoints)} breakpoints")
-        return breakpoints
+        chrom_lengths = {
+            key: int(len(data) * bin_width)
+            for key, data in cnv_data.items()
+            if key != "chrM"
+        }
+        filtered = filter_breakpoints_by_centromere_and_telomere(
+            breakpoints,
+            chrom_lengths,
+            logger=logger,
+        )
+        logger.debug(
+            "Detected %s breakpoints (%s after centromere/telomere filter)",
+            len(breakpoints),
+            len(filtered),
+        )
+        return filtered
 
     except Exception as e:
         logger.error(f"Error in breakpoint detection: {e}")

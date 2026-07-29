@@ -7,6 +7,8 @@ from pathlib import Path
 from typing import Any, Mapping, Optional
 
 DEFAULT_DORADO_ADDRESS = "ipc:///tmp/.guppy/5555"
+# Live ``*_live`` TOML updates require CNV bin_width strictly below this (bp).
+DEFAULT_LIVE_TOML_MAX_BIN_WIDTH_BP = 1_000_000
 
 
 @dataclass(frozen=True)
@@ -26,6 +28,8 @@ class ReadfishConfig:
     readfish_executable: str = "readfish"
     live_updates_enabled: bool = True
     live_region_name: str = "robin_panel"
+    # Withhold live TOML target updates until CNV bin_width is finer than this.
+    live_toml_max_bin_width_bp: int = DEFAULT_LIVE_TOML_MAX_BIN_WIDTH_BP
     # Wait for MinKNOW acquisition before launching readfish.
     start_wait_timeout_seconds: float = 600.0
     start_wait_poll_seconds: float = 10.0
@@ -45,6 +49,10 @@ class ReadfishConfig:
         readfish_executable = _optional_str(data.get("readfish_executable")) or "readfish"
         live_region_name = _optional_str(data.get("live_region_name")) or "robin_panel"
         mappy_rs_threads = max(4, int(data.get("mappy_rs_threads", 4)))
+        live_toml_max_bin_width_bp = _positive_int(
+            data.get("live_toml_max_bin_width_bp"),
+            default=DEFAULT_LIVE_TOML_MAX_BIN_WIDTH_BP,
+        )
 
         return cls(
             dorado_address=dorado_address,
@@ -59,6 +67,7 @@ class ReadfishConfig:
             readfish_executable=readfish_executable,
             live_updates_enabled=bool(data.get("live_updates_enabled", True)),
             live_region_name=live_region_name,
+            live_toml_max_bin_width_bp=live_toml_max_bin_width_bp,
             start_wait_timeout_seconds=float(
                 data.get("start_wait_timeout_seconds", 600.0)
             ),
@@ -126,3 +135,13 @@ def _optional_str(value: Any) -> Optional[str]:
         return None
     text = str(value).strip()
     return text or None
+
+
+def _positive_int(value: Any, *, default: int) -> int:
+    if value is None:
+        return int(default)
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return int(default)
+    return parsed if parsed > 0 else int(default)

@@ -58,7 +58,7 @@ ROBIN supports two adaptive sampling backends, selected in `[minknow.preset]`:
 
 For **readfish**, add a `[readfish]` table (see `examples/minknow.readfish.example.toml`). Install with `pip install 'robin[readfish]'`. readfish needs Dorado server access and panel/reference paths on the sequencer or GPU host.
 
-When readfish is started via `robin minknow start`, ROBIN registers the sample for **live target updates**. Each time a new `master_NNN.bed` is generated (CNV/fusion/master-bed pipeline), ROBIN writes `{readfish_toml}_live` with the updated `targets` path; readfish reloads this automatically during the run. Disable with `live_updates_enabled = false` under `[readfish]`.
+When readfish is started via `robin minknow start`, ROBIN registers the sample for **live target updates**. Each time a new `master_NNN.bed` is generated (CNV/fusion/master-bed pipeline), ROBIN writes `{readfish_toml}_live` with the updated `targets` path; readfish reloads this automatically during the run. Disable with `live_updates_enabled = false` under `[readfish]`. Live updates during analysis are also gated on CNV resolution: by default they apply only when sample `bin_width` is strictly below 1 Mb (`live_toml_max_bin_width_bp` under `[readfish]`).
 
 If you use adaptive sampling (either backend):
 
