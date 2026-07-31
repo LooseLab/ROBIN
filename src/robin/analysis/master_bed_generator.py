@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+src/robin/analysis/master_bed_generator.pysrc/robin/analysis/master_bed_generator.py#!/usr/bin/env python3
 """
 Master BED File Generator for ROBIN
 
@@ -865,6 +865,13 @@ def _log_bed_coverage_data(
         logger.warning(f"Could not log BED coverage data: {e}")
 
 
+def _round_sigfigs(value: float, digits: int = 3) -> float:
+    """Round ``value`` to ``digits`` significant figures for display/plotting."""
+    if value == 0 or not np.isfinite(value):
+        return 0.0 if value == 0 else float(value)
+    return float(f"{value:.{digits}g}")
+
+
 def build_bed_coverage_series(log_entries: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """Build ECharts series from ``bed_coverage_log.json`` entries.
 
@@ -932,7 +939,8 @@ def build_bed_coverage_series(log_entries: List[Dict[str, Any]]) -> List[Dict[st
                 x_value = int(float(row["analysis_counter"]))
             else:
                 x_value = int(float(row["timestamp"]) * 1000)
-            data.append([x_value, float(total_prop * 100)])
+            # Percent coverage, rounded to 3 significant figures for tooltip/legend.
+            data.append([x_value, _round_sigfigs(float(total_prop) * 100, 3)])
 
         if not data:
             continue

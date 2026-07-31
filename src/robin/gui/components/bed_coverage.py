@@ -423,6 +423,11 @@ def add_bed_coverage_section(launcher: Any, sample_dir: Path) -> None:
                         },
                         "tooltip": {
                             "trigger": "axis",
+                            # 3 significant figures; works for cached full-precision points too.
+                            ":valueFormatter": (
+                                "(value) => (value == null || value === '') "
+                                "? '-' : Number(value).toPrecision(3) + '%'"
+                            ),
                         },
                         "legend": {
                             "data": [],

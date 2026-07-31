@@ -1321,6 +1321,7 @@ def save_cnv_files(
     generate_master_bed: bool = False,
     penalty_value: Optional[int] = None,
     min_contiguous_bins: Optional[int] = None,
+    target_panel: Optional[str] = None,
 ):
     """
     Save CNV data files in the specified format from the documentation.
@@ -1341,6 +1342,7 @@ def save_cnv_files(
         generate_master_bed: Whether to trigger master BED generation
         penalty_value: ruptures penalty used for breakpoint detection (optional)
         min_contiguous_bins: Minimum contiguous bins for gain/loss regions (optional)
+        target_panel: Workflow target panel for master BED (falls back to fusion metadata)
     """
     try:
         # Save CNV data files as specified in documentation
@@ -1436,15 +1438,26 @@ def save_cnv_files(
                 # work_dir is the parent of sample_dir
                 work_dir = os.path.dirname(sample_dir)
                 
-                # Try to get target_panel from fusion metadata if available
-                target_panel = _try_get_target_panel_from_fusion_metadata(sample_id, work_dir)
+                # Prefer the workflow panel passed from cnv_handler; fall back to
+                # fusion metadata only when the caller did not supply one.
+                resolved_panel = target_panel
+                if not resolved_panel:
+                    resolved_panel = _try_get_target_panel_from_fusion_metadata(
+                        sample_id, work_dir
+                    )
+                if not resolved_panel:
+                    logger.warning(
+                        "Generating master BED for %s without a target panel "
+                        "(neither workflow target_panel nor fusion metadata available)",
+                        sample_id,
+                    )
                 
                 # Generate asynchronously (non-blocking)
                 generate_master_bed_async(
                     sample_id=sample_id,
                     work_dir=work_dir,
                     analysis_counter=analysis_counter,
-                    target_panel=target_panel,
+                    target_panel=resolved_panel,
                     logger_instance=logger,
                     reference=reference,
                 )
@@ -1459,7 +1472,15 @@ def save_cnv_files(
 
 
 
-def process_single_bam(bam_path, metadata, work_dir, logger, threads=2, reference: Optional[str] = None):
+def process_single_bam(
+    bam_path,
+    metadata,
+    work_dir,
+    logger,
+    threads=2,
+    reference: Optional[str] = None,
+    target_panel: Optional[str] = None,
+):
     """
     Process a single BAM file for CNV analysis using the complete pipeline.
 
@@ -1469,6 +1490,8 @@ def process_single_bam(bam_path, metadata, work_dir, logger, threads=2, referenc
         work_dir: Working directory
         logger: Logger instance
         threads: Number of threads to use for CNV analysis (default: 2, configurable)
+        reference: Optional reference genome path
+        target_panel: Workflow target panel name for master BED generation
 
     Returns:
         Dictionary with CNV analysis results
@@ -1740,6 +1763,7 @@ def process_single_bam(bam_path, metadata, work_dir, logger, threads=2, referenc
             generate_master_bed=False,  # Single BAM - master BED should be generated at batch end
             penalty_value=penalty_value,
             min_contiguous_bins=min_contiguous_bins,
+            target_panel=target_panel,
         )
 
         analysis_result["cnv_data_path"] = os.path.join(
@@ -1777,6 +1801,7 @@ def process_multiple_bams(
     threads=2,
     reference: Optional[str] = None,
     job_id: Optional[int] = None,
+    target_panel: Optional[str] = None,
 ):
     """
     Process multiple BAM files for CNV analysis using aggregated CNV data.
@@ -1792,6 +1817,9 @@ def process_multiple_bams(
         work_dir: Working directory
         logger: Logger instance
         threads: Number of threads to use for CNV analysis (default: 2)
+        reference: Optional reference genome path
+        job_id: Optional workflow job id
+        target_panel: Workflow target panel name for master BED generation
 
     Returns:
         Dictionary with aggregated CNV analysis results
@@ -2120,6 +2148,7 @@ def process_multiple_bams(
             generate_master_bed=True,  # Batch processing - generate master BED once at the end
             penalty_value=penalty_value,
             min_contiguous_bins=min_contiguous_bins,
+            target_panel=target_panel,
         )
         logger.info(f"[cnv] save_cnv_files (incl. master BED) completed in {time.time() - t0:.2f}s")
 
@@ -2240,6 +2269,7 @@ def cnv_handler(job, work_dir=None, target_panel=None, threads=2):
             threads=threads,
             reference=reference,
             job_id=job.job_id,
+            target_panel=target_panel,
         )
         
         # Store batch results in job context (maintain compatibility with existing structure)
