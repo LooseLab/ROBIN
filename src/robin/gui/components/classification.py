@@ -791,6 +791,8 @@ def add_classification_section(sample_dir: Path, launcher: Any = None) -> None:
         preloaded: Optional[Dict[str, Any]] = None,
     ):
         try:
+            if tool_name not in charts:
+                return
             file_path = sample_dir / file_name if sample_dir else None
             if not file_path or not file_path.exists():
                 return
@@ -1038,6 +1040,8 @@ def add_classification_section(sample_dir: Path, launcher: Any = None) -> None:
             any_changes = False
 
             for tool_name, cfg in tool_to_file.items():
+                if tool_name not in charts:
+                    continue
                 file_path = sample_dir / cfg["file"] if sample_dir else None
                 if file_path and file_path.exists():
                     mtime = file_path.stat().st_mtime
@@ -1053,8 +1057,7 @@ def add_classification_section(sample_dir: Path, launcher: Any = None) -> None:
                     files_changed[tool_name] = False
 
             is_fresh_visit = any(
-                charts[tool_name].get("last_mtime") is None
-                for tool_name in tool_to_file.keys()
+                chart.get("last_mtime") is None for chart in charts.values()
             )
 
             if not any_changes and not is_fresh_visit:
@@ -1098,6 +1101,8 @@ def add_classification_section(sample_dir: Path, launcher: Any = None) -> None:
             any_changes = False
 
             for tool_name, cfg in tool_to_file.items():
+                if tool_name not in charts:
+                    continue
                 file_path = sample_dir / cfg["file"] if sample_dir else None
                 if file_path and file_path.exists():
                     mtime = file_path.stat().st_mtime
@@ -1113,8 +1118,7 @@ def add_classification_section(sample_dir: Path, launcher: Any = None) -> None:
                     files_changed[tool_name] = False
 
             is_fresh_visit = any(
-                charts[tool_name].get("last_mtime") is None
-                for tool_name in tool_to_file.keys()
+                chart.get("last_mtime") is None for chart in charts.values()
             )
 
             if not any_changes and not is_fresh_visit:
