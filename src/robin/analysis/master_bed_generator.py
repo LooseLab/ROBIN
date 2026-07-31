@@ -8,7 +8,8 @@ The master BED file combines:
 - CNV breakpoints (breakpoints_{counter}.bed) - merged as-is
 - Fusion breakpoints (fusion_breakpoints_{counter}.bed) - merged as-is
 
-All regions are intersected with the target gene panel and merged to remove overlaps.
+The stranded adaptive-sampling panel BED is added to these regions and everything is
+merged (per strand) to remove overlaps.
 """
 
 import os
@@ -1013,16 +1014,52 @@ def _generate_visualization_data(sample_dir: str, log_entries: List[Dict[str, An
         logger.warning(f"Could not generate visualization data: {e}")
 
 
-def _get_target_bed_path(target_panel: Optional[str] = None) -> Optional[str]:
+def _get_target_bed_path(
+    target_panel: Optional[str] = None,
+    reference: Optional[str] = None,
+) -> Optional[str]:
     """
-    Get the path to the target gene BED file.
-    
+    Get the path to the panel BED merged into the master BED.
+
+    Prefers the stranded panel BED used for adaptive sampling
+    (``{panel}_panel_source.bed``, taken from beside the reference FASTA when
+    present), so live readfish targets stay a superset of the panel the run was
+    started with. Falls back to the packaged ``{panel}_panel_name_uniq.bed``
+    (unstranded gene bodies, no padding) only when no source BED is available.
+
     Args:
         target_panel: Target panel name (rCNS2, AML, custom, etc.)
-        
+        reference: Alignment reference FASTA, used to locate the run's panel BED
+
     Returns:
-        Path to target BED file, or None if not found
+        Path to panel BED file, or None if not found
     """
+    if not target_panel:
+        return None
+
+    try:
+        from robin.utils.sequencing_files import (
+            panel_stranded_bed_filename,
+            resolve_panel_stranded_bed_path,
+        )
+
+        stranded_path = resolve_panel_stranded_bed_path(
+            target_panel,
+            reference_path=reference,
+        )
+        if stranded_path is not None and os.path.exists(stranded_path):
+            return str(stranded_path)
+        logger.warning(
+            "No adaptive sampling panel BED (%s) for panel %s; "
+            "falling back to the unstranded gene-body panel BED",
+            panel_stranded_bed_filename(target_panel),
+            target_panel,
+        )
+    except Exception as e:
+        logger.warning(
+            f"Could not resolve adaptive sampling panel BED for {target_panel}: {e}"
+        )
+
     try:
         from robin import resources
         resources_dir = os.path.dirname(resources.__file__)
@@ -1089,10 +1126,17 @@ def _file_sha256(path: str) -> str:
     return digest.hexdigest()
 
 
+def _resolve_reference(reference: Optional[str] = None) -> Optional[str]:
+    """Resolve the alignment reference FASTA from the argument or workflow config."""
+    ref = reference or _get_reference_path()
+    return os.path.expanduser(str(ref)) if ref else None
+
+
 def _master_bed_source_signature(
     sample_id: str,
     work_dir: str,
     target_panel: Optional[str],
+    reference: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Return a content signature for every file that affects the master BED."""
     bed_dir = os.path.join(work_dir, sample_id, "bed_files")
@@ -1107,7 +1151,7 @@ def _master_bed_source_signature(
         if path and os.path.exists(path):
             sources.append({"type": source_type, "sha256": _file_sha256(path)})
 
-    target_bed_path = _get_target_bed_path(target_panel) if target_panel else None
+    target_bed_path = _get_target_bed_path(target_panel, _resolve_reference(reference))
     if target_bed_path and os.path.exists(target_bed_path):
         sources.append({"type": "target_panel", "sha256": _file_sha256(target_bed_path)})
 
@@ -1158,14 +1202,9 @@ def _build_master_bed_data(
     if not os.path.exists(bed_dir):
         return None
 
-    ref = reference
-    if not ref:
-        ref = _get_reference_path()
-        if ref:
-            ref = os.path.expanduser(ref)
-            log.debug(f"Using reference genome from config/environment: {ref}")
-    elif reference:
-        ref = os.path.expanduser(reference)
+    ref = _resolve_reference(reference)
+    if ref and not reference:
+        log.debug(f"Using reference genome from config/environment: {ref}")
     fai_path = _find_fai_file(ref)
     if fai_path:
         log.debug(f"Using FAI file for coverage calculations: {fai_path}")
@@ -1273,9 +1312,9 @@ def _build_master_bed_data(
     log.debug(f"Merged to {len(merged_df)} regions")
 
     if target_panel:
-        target_bed_path = _get_target_bed_path(target_panel)
+        target_bed_path = _get_target_bed_path(target_panel, ref)
         if target_bed_path:
-            log.debug(f"Loading target panel regions: {target_panel}")
+            log.debug(f"Loading target panel regions: {target_panel} ({target_bed_path})")
             target_df = _load_bed_file(target_bed_path, require_bed6=True)
             if not target_df.empty:
                 target_df_processed = _duplicate_unstranded_regions(target_df)
@@ -1360,7 +1399,9 @@ def generate_master_bed(
 
     try:
         for attempt in range(2):
-            source_signature = _master_bed_source_signature(sample_id, work_dir, target_panel)
+            source_signature = _master_bed_source_signature(
+                sample_id, work_dir, target_panel, reference
+            )
             with FileLock(lock_file, timeout=lock_timeout):
                 latest_master = _get_latest_bed_file(bed_dir, "master_*.bed")
                 if latest_master and _master_bed_is_current(latest_master, source_signature):
@@ -1382,7 +1423,9 @@ def generate_master_bed(
             bed6_cols = ["chrom", "start", "end", "name", "score", "strand"]
 
             with FileLock(lock_file, timeout=lock_timeout):
-                current_signature = _master_bed_source_signature(sample_id, work_dir, target_panel)
+                current_signature = _master_bed_source_signature(
+                    sample_id, work_dir, target_panel, reference
+                )
                 if current_signature != source_signature:
                     log.debug(f"Master BED sources changed during generation for {sample_id}")
                     continue
@@ -1488,7 +1531,9 @@ def generate_master_bed_async(
     # Avoid spawning a thread when the source content has not changed.
     sample_dir = os.path.join(work_dir, sample_id)
     bed_dir = os.path.join(sample_dir, "bed_files")
-    source_signature = _master_bed_source_signature(sample_id, work_dir, target_panel)
+    source_signature = _master_bed_source_signature(
+        sample_id, work_dir, target_panel, reference
+    )
     latest_master = _get_latest_bed_file(bed_dir, "master_*.bed")
 
     if latest_master and _master_bed_is_current(latest_master, source_signature):
@@ -1703,7 +1748,7 @@ Examples:
   python master_bed_generator.py --cnv-regions new_file_001.bed \\
                                   --cnv-breakpoints breakpoints_001.bed \\
                                   --fusion-breakpoints fusion_breakpoints_001.bed \\
-                                  --target-panel rCNS2_panel_name_uniq.bed \\
+                                  --target-panel rCNS2_panel_source.bed \\
                                   --output master.bed
 
   # Include master BED breakpoints (new target regions from supplementary alignments):
@@ -1765,7 +1810,7 @@ Examples:
         "--target-panel",
         type=str,
         help=(
-            "Path to target gene panel BED file (optional, for intersection). "
+            "Path to the adaptive sampling panel BED file (optional, normally {panel}_panel_source.bed). "
             "Processing: Target regions are loaded and unstranded regions are duplicated for both + and - strands. "
             "All breakpoint regions are kept (not filtered). "
             "All target gene regions are then added to the final output. "
