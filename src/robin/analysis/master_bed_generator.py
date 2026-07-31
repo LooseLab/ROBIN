@@ -1,4 +1,4 @@
-src/robin/analysis/master_bed_generator.pysrc/robin/analysis/master_bed_generator.py#!/usr/bin/env python3
+#!/usr/bin/env python3
 """
 Master BED File Generator for ROBIN
 
