@@ -1609,9 +1609,8 @@ def _validate_bed_file(bed_path: Path) -> Tuple[bool, List[str]]:
                 except ValueError:
                     errors.append(f"Line {line_num}: Start and end positions must be integers")
                 
-                # Check for gene name in 4th column (required for ROBIN panels)
-                if len(parts) < 4 or not parts[3].strip():
-                    errors.append(f"Line {line_num}: Missing gene name in 4th column")
+                # Column 4 may be a gene name, a placeholder ('.'), or absent (3-col BED).
+                # Placeholders are annotated from all_genes2.bed during add-panel.
                 
                 # Optional: validate 6-column BED format if present
                 if len(parts) >= 6:
@@ -1644,11 +1643,100 @@ def _validate_bed_file(bed_path: Path) -> Tuple[bool, List[str]]:
     return len(errors) == 0, errors
 
 
+def _is_placeholder_gene_name(name: object) -> bool:
+    """True when a BED name column should be treated as missing."""
+    if name is None:
+        return True
+    text = str(name).strip()
+    return text == "" or text == "." or text.lower() == "nan" or text.lower() == "none"
+
+
+def _resolve_all_genes_bed() -> Optional[Path]:
+    """Locate the packaged genome-wide gene BED used for panel annotation."""
+    candidates: List[Path] = []
+    try:
+        from robin import resources
+
+        resources_dir = Path(resources.__file__).resolve().parent
+        candidates.append(resources_dir / "all_genes2.bed")
+        candidates.append(resources_dir / "all_genes3.bed")
+        candidates.append(resources_dir / "all_genes.bed")
+    except Exception:
+        pass
+    here = Path(__file__).resolve().parent
+    candidates.append(here.parent / "robin" / "resources" / "all_genes2.bed")
+    for path in candidates:
+        if path.is_file():
+            return path
+    return None
+
+
+def _load_all_genes_dataframe(genes_bed: Path):
+    """Load ``all_genes*.bed`` as chrom/start/end/gene (gene names stripped)."""
+    import pandas as pd
+
+    genes = pd.read_csv(
+        genes_bed,
+        sep="\t",
+        header=None,
+        names=["chrom", "start", "end", "gene"],
+        usecols=[0, 1, 2, 3],
+        comment="#",
+        dtype={"chrom": str, "start": int, "end": int, "gene": str},
+    )
+    genes["gene"] = genes["gene"].astype(str).str.strip()
+    genes = genes[genes["gene"].map(lambda g: not _is_placeholder_gene_name(g))]
+    return genes.reset_index(drop=True)
+
+
+def _annotate_placeholder_intervals_with_genes(panel_df, genes_df) -> List[Dict[str, object]]:
+    """Intersect placeholder panel intervals with the gene reference.
+
+    Returns gene-body rows (chrom/start/end/gene) for each overlapping gene.
+    """
+    annotated: List[Dict[str, object]] = []
+    seen_genes: set[str] = set()
+    genes_by_chrom = {chrom: group for chrom, group in genes_df.groupby("chrom", sort=False)}
+
+    for chrom, intervals in panel_df.groupby("chrom", sort=False):
+        gene_chrom = genes_by_chrom.get(chrom)
+        if gene_chrom is None or gene_chrom.empty:
+            continue
+        gene_starts = gene_chrom["start"].to_numpy()
+        gene_ends = gene_chrom["end"].to_numpy()
+        gene_names = gene_chrom["gene"].to_numpy()
+        for _, row in intervals.iterrows():
+            start = int(row["start"])
+            end = int(row["end"])
+            overlaps = (gene_starts < end) & (gene_ends > start)
+            if not overlaps.any():
+                continue
+            for idx in overlaps.nonzero()[0]:
+                gene = str(gene_names[idx])
+                if gene in seen_genes:
+                    continue
+                seen_genes.add(gene)
+                annotated.append(
+                    {
+                        "chrom": chrom,
+                        "start": int(gene_starts[idx]),
+                        "end": int(gene_ends[idx]),
+                        "gene": gene,
+                    }
+                )
+    return annotated
+
+
 def _generate_unique_gene_bed(input_bed_path: Path, output_bed_path: Path) -> bool:
-    """Generate unique gene BED file from input BED file."""
+    """Generate unique gene BED file from input BED file.
+
+    Intervals that already carry gene names keep those names and coordinates.
+    Intervals named ``.`` / empty / missing are annotated by intersecting with
+    ``all_genes2.bed`` (gene-body coordinates from the reference).
+    """
     try:
         import pandas as pd
-        
+
         # Read the input BED file - handle both 4-column and 6-column BED formats
         try:
             # Try 6-column format first (chrom, start, end, gene, score, strand)
@@ -1660,37 +1748,95 @@ def _generate_unique_gene_bed(input_bed_path: Path, output_bed_path: Path) -> bo
                 comment='#'
             )
         except ValueError:
-            # Fallback to 4-column format (chrom, start, end, gene)
-            df = pd.read_csv(
+            # Fallback to 4-column / 3-column format
+            raw = pd.read_csv(
                 input_bed_path,
                 sep='\t',
                 header=None,
-                names=['chrom', 'start', 'end', 'gene'],
-                comment='#'
+                comment='#',
             )
-        
-        # Process gene names - handle comma-separated genes
-        processed_regions = []
-        for _, row in df.iterrows():
-            genes = [g.strip() for g in str(row['gene']).split(',')]
+            if raw.shape[1] < 3:
+                click.echo("Error: BED file must have at least 3 columns", err=True)
+                return False
+            raw = raw.iloc[:, :4].copy()
+            while raw.shape[1] < 4:
+                raw[raw.shape[1]] = "."
+            raw.columns = ['chrom', 'start', 'end', 'gene']
+            df = raw
+
+        df["chrom"] = df["chrom"].astype(str)
+        df["start"] = df["start"].astype(int)
+        df["end"] = df["end"].astype(int)
+        if "gene" not in df.columns:
+            df["gene"] = "."
+        df["gene"] = df["gene"].fillna(".").astype(str)
+
+        named_mask = ~df["gene"].map(_is_placeholder_gene_name)
+        named_df = df.loc[named_mask]
+        placeholder_df = df.loc[~named_mask]
+
+        processed_regions: List[Dict[str, object]] = []
+
+        # Keep explicit gene names from the upload (comma-separated supported).
+        for _, row in named_df.iterrows():
+            genes = [g.strip() for g in str(row["gene"]).split(",")]
             for gene in genes:
-                if gene and gene != 'nan':  # Skip empty gene names and NaN values
-                    processed_regions.append({
-                        'chrom': row['chrom'],
-                        'start': int(row['start']),
-                        'end': int(row['end']),
-                        'gene': gene
-                    })
-        
+                if _is_placeholder_gene_name(gene):
+                    continue
+                processed_regions.append(
+                    {
+                        "chrom": row["chrom"],
+                        "start": int(row["start"]),
+                        "end": int(row["end"]),
+                        "gene": gene,
+                    }
+                )
+
+        annotated_from_reference = 0
+        if not placeholder_df.empty:
+            genes_bed = _resolve_all_genes_bed()
+            if genes_bed is None:
+                if named_df.empty:
+                    click.echo(
+                        "Error: panel intervals have no gene names and "
+                        "all_genes2.bed was not found for annotation",
+                        err=True,
+                    )
+                    return False
+                click.echo(
+                    "Warning: some intervals have placeholder gene names ('.') but "
+                    "all_genes2.bed was not found; those intervals will be skipped",
+                    err=True,
+                )
+            else:
+                genes_df = _load_all_genes_dataframe(genes_bed)
+                annotated = _annotate_placeholder_intervals_with_genes(
+                    placeholder_df, genes_df
+                )
+                annotated_from_reference = len(annotated)
+                processed_regions.extend(annotated)
+                click.echo(
+                    f"Annotated {len(placeholder_df)} placeholder interval(s) via "
+                    f"{genes_bed.name}: {annotated_from_reference} unique gene(s)"
+                )
+
+        if not processed_regions:
+            click.echo(
+                "Error: no gene names could be recovered from the panel BED "
+                "(provide gene names in column 4, or ensure all_genes2.bed is available)",
+                err=True,
+            )
+            return False
+
         # Convert to DataFrame and remove duplicates
         processed_df = pd.DataFrame(processed_regions)
-        
+
         # Remove duplicates based on gene name (keep first occurrence)
         processed_df = processed_df.drop_duplicates(subset=['gene'], keep='first')
-        
+
         # Sort by chromosome and position
         processed_df = processed_df.sort_values(['chrom', 'start', 'end'])
-        
+
         # Write to output file in standard 4-column BED format
         processed_df[['chrom', 'start', 'end', 'gene']].to_csv(
             output_bed_path,
@@ -1698,7 +1844,15 @@ def _generate_unique_gene_bed(input_bed_path: Path, output_bed_path: Path) -> bo
             header=False,
             index=False
         )
-        
+
+        click.echo(
+            f"Wrote {len(processed_df)} unique gene(s) to {output_bed_path.name}"
+            + (
+                f" ({annotated_from_reference} from gene-reference intersect)"
+                if annotated_from_reference
+                else ""
+            )
+        )
         return True
         
     except Exception as e:
@@ -1877,15 +2031,19 @@ def add_panel(bed_file: Path, panel_name: str, validate_only: bool) -> None:
     BED_FILE: Path to the BED file containing panel regions
     PANEL_NAME: Name for the panel (e.g., 'CustomPanel', 'MyPanel')
     
-    The BED file should be in standard format with at least 4 columns:
-    chromosome, start, end, gene_name(s) [, score, strand]
+    The BED file should be in standard format with at least 3 columns:
+    chromosome, start, end [, gene_name(s) [, score, strand]]
     
     Supported formats:
+    - 3-column: chr1, 1000000, 2000000
     - 4-column: chr1, 1000000, 2000000, GENE1
     - 6-column: chr1, 1000000, 2000000, GENE1, 0, +
     
     Gene names can be comma-separated for regions covering multiple genes.
-    The output will be a unique gene list with one entry per gene.
+    When gene names are missing or '.', intervals are annotated by intersecting
+    with the packaged all_genes2.bed reference. Named intervals keep their
+    uploaded gene labels. The processed output is a unique gene list with one
+    entry per gene.
 
     ROBIN also stores an unmodified copy of your upload as
     '{panel_name}_panel_source.bed' alongside the processed file.

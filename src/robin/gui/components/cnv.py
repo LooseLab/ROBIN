@@ -1,6 +1,6 @@
-from __future__ import annotations
+src/robin/gui/components/cnv.pyfrom __future__ import annotations
 
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 from pathlib import Path
 
 import asyncio
@@ -72,6 +72,215 @@ _CNV_PLOT_BIN_KEY_TO_BP = {
     "10 Mb": 10_000_000,
 }
 _CNV_PLOT_BIN_KEYS_ORDERED = list(_CNV_PLOT_BIN_KEY_TO_BP.keys())
+
+# ECharts JS: y values to at most 1 decimal place, trailing ".0" dropped, so
+# axis ticks and zoom-slider handles never show full float precision.
+_CNV_Y_VALUE_FORMATTER_JS = (
+    "(value) => { const n = Number(value); "
+    "return Number.isFinite(n) ? String(Number(n.toFixed(1))) : value; }"
+)
+_CONFIGURED_GENES_SERIES_NAME = "configured_genes_highlight"
+
+
+@lru_cache(maxsize=16)
+def _load_cnv_gene_locations(gene_names: tuple[str, ...]) -> tuple[Dict[str, Any], ...]:
+    """Resolve configured gene symbols to GRCh38 intervals in the packaged gene BED."""
+    requested = {name.casefold(): name for name in gene_names if name.strip()}
+    if not requested:
+        return ()
+
+    intervals: Dict[tuple[str, str], Dict[str, Any]] = {}
+    try:
+        resources = importlib_resources.files("robin.resources")
+        unresolved = set(requested)
+        # all_genes3 supplies gene-body coordinates. unique_genes includes a few
+        # panel aliases/non-coding genes absent from that reference.
+        for resource_name in ("all_genes3.bed", "unique_genes.bed"):
+            if not unresolved:
+                break
+            resource = resources / resource_name
+            with resource.open("r", encoding="utf-8") as handle:
+                for line in handle:
+                    fields = line.rstrip("\n").split("\t")
+                    if len(fields) < 4:
+                        continue
+                    chrom = fields[0].strip()
+                    try:
+                        start_pos, end_pos = int(fields[1]), int(fields[2])
+                    except ValueError:
+                        continue
+                    for raw_symbol in fields[3].split(","):
+                        symbol_key = raw_symbol.strip().casefold()
+                        if symbol_key not in unresolved:
+                            continue
+                        requested_name = requested[symbol_key]
+                        key = (symbol_key, chrom)
+                        existing = intervals.get(key)
+                        if existing is None:
+                            intervals[key] = {
+                                "gene": requested_name,
+                                "chrom": chrom,
+                                "start_pos": start_pos,
+                                "end_pos": end_pos,
+                            }
+                        else:
+                            existing["start_pos"] = min(
+                                existing["start_pos"], start_pos
+                            )
+                            existing["end_pos"] = max(existing["end_pos"], end_pos)
+            unresolved -= {key[0] for key in intervals}
+    except Exception:
+        logging.warning("Could not load CNV gene locations", exc_info=True)
+        return ()
+
+    order = {name.casefold(): index for index, name in enumerate(gene_names)}
+    return tuple(
+        sorted(
+            intervals.values(),
+            key=lambda row: (order.get(str(row["gene"]).casefold(), 10**9), row["chrom"]),
+        )
+    )
+
+
+def _configured_genes_on_chrom(
+    gene_locations: Sequence[Dict[str, Any]],
+    selected: str,
+) -> List[Dict[str, Any]]:
+    """Return configured gene intervals for one chromosome (or all when selected is All)."""
+    if selected == "All":
+        return list(gene_locations)
+    return [row for row in gene_locations if str(row["chrom"]) == selected]
+
+
+def _find_configured_gene_interval(
+    gene_locations: Sequence[Dict[str, Any]],
+    *,
+    selected: str,
+    gene_name: str,
+) -> Optional[Dict[str, Any]]:
+    """Look up a configured gene interval on the current chromosome."""
+    want = str(gene_name).casefold()
+    for row in _configured_genes_on_chrom(gene_locations, selected):
+        if str(row["gene"]).casefold() == want:
+            return row
+    return None
+
+
+def _configured_gene_mark_series(
+    gene_locations: Sequence[Dict[str, Any]],
+    *,
+    selected: str,
+    chrom_offsets: Dict[str, float],
+    dark: bool,
+) -> Dict[str, Any]:
+    """Build a dedicated ECharts overlay for configured CNV gene locations."""
+    lines: List[Dict[str, Any]] = []
+    areas: List[List[Dict[str, Any]]] = []
+    # Invisible anchors so ECharts keeps the series (empty scatter markLines can vanish).
+    anchors: List[List[float]] = []
+    label_color = "#d8b4fe" if dark else "#6b21a8"
+    line_color = "#a855f7" if dark else "#7e22ce"
+    for row in gene_locations:
+        chrom = str(row["chrom"])
+        if selected != "All" and chrom != selected:
+            continue
+        if selected == "All" and chrom not in chrom_offsets:
+            continue
+        start_pos = float(row["start_pos"])
+        end_pos = float(row["end_pos"])
+        midpoint = (start_pos + end_pos) / 2.0
+        offset = chrom_offsets.get(chrom, 0.0) if selected == "All" else 0.0
+        x_pos = midpoint + offset
+        gene = str(row["gene"])
+        anchors.append([x_pos, 0.0])
+        lines.append(
+            {
+                "name": gene,
+                "xAxis": x_pos,
+                "lineStyle": {
+                    "color": line_color,
+                    "width": 1 if selected == "All" else 1.5,
+                    "opacity": 0.75,
+                },
+                "label": {
+                    "show": True,
+                    "formatter": gene,
+                    "position": "insideEndTop",
+                    "rotate": 90,
+                    "fontSize": 9 if selected == "All" else 11,
+                    "color": label_color,
+                },
+            }
+        )
+        # Chromosome view also gets a labelled span so names remain readable.
+        if selected != "All":
+            areas.append(
+                [
+                    {
+                        "name": gene,
+                        "xAxis": start_pos,
+                        "itemStyle": {
+                            "color": (
+                                "rgba(168, 85, 247, 0.12)"
+                                if dark
+                                else "rgba(126, 34, 206, 0.10)"
+                            )
+                        },
+                        "label": {
+                            "show": True,
+                            "position": "insideTop",
+                            "formatter": gene,
+                            "color": label_color,
+                            "fontSize": 11,
+                        },
+                    },
+                    {"xAxis": end_pos},
+                ]
+            )
+    return {
+        "type": "scatter",
+        "name": _CONFIGURED_GENES_SERIES_NAME,
+        "data": anchors,
+        "symbolSize": 0,
+        "silent": True,
+        "zlevel": 2,
+        "markLine": {
+            "symbol": "none",
+            "animation": False,
+            "data": lines,
+        },
+        "markArea": {
+            "silent": True,
+            "data": areas,
+        },
+    }
+
+
+def _upsert_configured_gene_series(
+    chart: Any,
+    gene_locations: Sequence[Dict[str, Any]],
+    *,
+    selected: str,
+    chrom_offsets: Dict[str, float],
+    dark: bool,
+) -> None:
+    """Ensure the configured-gene overlay is present and last among chart series."""
+    series = chart.options.get("series")
+    if not isinstance(series, list):
+        return
+    chart.options["series"] = [
+        s for s in series if s.get("name") != _CONFIGURED_GENES_SERIES_NAME
+    ]
+    if not gene_locations:
+        return
+    chart.options["series"].append(
+        _configured_gene_mark_series(
+            gene_locations,
+            selected=selected,
+            chrom_offsets=chrom_offsets,
+            dark=dark,
+        )
+    )
 
 
 def _cnv_plot_bin_key_from_ui(value: Any) -> str:
@@ -204,10 +413,37 @@ def _cnv_echarts_option_to_json(obj: Any) -> Any:
     return obj
 
 
+def _cnv_extract_js_options(obj: Any, js_values: Dict[str, str]) -> Any:
+    """Swap NiceGUI ``:key`` JS options for tokens, recording the JS source.
+
+    The raw ``setOption`` push below never runs NiceGUI's dynamic-property
+    conversion, so these have to be re-inserted as unquoted JS afterwards.
+    """
+    if isinstance(obj, dict):
+        converted: Dict[Any, Any] = {}
+        for key, value in obj.items():
+            if isinstance(key, str) and key.startswith(":") and isinstance(value, str):
+                token = f"__ROBIN_JS_{len(js_values)}__"
+                js_values[token] = value
+                converted[key[1:]] = token
+            else:
+                converted[key] = _cnv_extract_js_options(value, js_values)
+        return converted
+    if isinstance(obj, list):
+        return [_cnv_extract_js_options(item, js_values) for item in obj]
+    return obj
+
+
 def _cnv_echart_push_update(chart: Any) -> None:
     """Replace the full ECharts option (NiceGUI merges by default and leaves stale scatter data)."""
-    options_clean = _cnv_echarts_option_to_json(chart.options)
+    js_values: Dict[str, str] = {}
+    options_clean = _cnv_echarts_option_to_json(
+        _cnv_extract_js_options(chart.options, js_values)
+    )
     opts_json = json.dumps(options_clean)
+    # ``:setOption`` evaluates each argument as JS, so tokens become real functions.
+    for token, js_source in js_values.items():
+        opts_json = opts_json.replace(json.dumps(token), js_source)
     try:
         # Do not call chart.update() here: NiceGUI's update_chart uses setOption merge
         # unless the series count changes, which leaves stale per-chromosome scatter data
@@ -493,7 +729,11 @@ def _apply_cnv_echart_chrome(echart: Any, dark: bool) -> None:
                 if not isinstance(ya, dict):
                     continue
                 ya["axisLine"] = {"lineStyle": {"color": p["axis_line"]}}
-                ya["axisLabel"] = {**(ya.get("axisLabel") or {}), "color": p["muted"]}
+                ya["axisLabel"] = {
+                    **(ya.get("axisLabel") or {}),
+                    "color": p["muted"],
+                    ":formatter": _CNV_Y_VALUE_FORMATTER_JS,
+                }
                 ya["nameTextStyle"] = {"color": p["muted"]}
                 ya["splitLine"] = {"lineStyle": {"color": p["split"]}}
         leg = o.get("legend")
@@ -505,6 +745,9 @@ def _apply_cnv_echart_chrome(echart: Any, dark: bool) -> None:
                 for dz in dz_list:
                     if not isinstance(dz, dict):
                         continue
+                    if dz.get("yAxisIndex") is not None:
+                        # Handle labels otherwise show the raw data min/max.
+                        dz[":labelFormatter"] = _CNV_Y_VALUE_FORMATTER_JS
                     dz["borderColor"] = p["axis_line"]
                     dz["fillerColor"] = (
                         "rgba(51, 65, 85, 0.35)"
@@ -549,6 +792,27 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
 
     Controls now trigger immediate refresh instead of waiting for timer updates.
     """
+    configured_gene_names: tuple[str, ...] = ()
+    try:
+        from robin.workflow_config import get_cnv_genes, load_workflow_toml
+
+        workflow_config = None
+        workflow_toml_path = getattr(launcher, "workflow_toml_path", None)
+        if workflow_toml_path:
+            workflow_config = load_workflow_toml(Path(workflow_toml_path))
+        configured_gene_names = get_cnv_genes(workflow_config)
+    except Exception:
+        logging.warning("Could not resolve [cnv].genes for GUI plots", exc_info=True)
+    configured_gene_locations = _load_cnv_gene_locations(configured_gene_names)
+    if configured_gene_names:
+        found = {str(row["gene"]).casefold() for row in configured_gene_locations}
+        missing = [name for name in configured_gene_names if name.casefold() not in found]
+        if missing:
+            logging.warning(
+                "No packaged GRCh38 location found for configured CNV genes: %s",
+                ", ".join(missing),
+            )
+
     with ui.element("div").classes("w-full min-w-0").props("id=analysis-detail-cnv"):
         with ui.element("div").classes("classification-insight-shell w-full min-w-0"):
             ui.label("Copy number (CNV)").classes(
@@ -688,7 +952,7 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
                             },
                         ],
                     }
-                ).classes("w-full h-72 cnv-genome-abs-chart")
+                ).classes("w-full h-[22.5rem] cnv-genome-abs-chart")
             with ui.element("div").classes("w-full target-coverage-panel__plot-wrap mt-2"):
                 cnv_diff = ui.echart(
                     {
@@ -751,7 +1015,7 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
                             },
                         ],
                     }
-                ).classes("w-full h-72 cnv-genome-diff-chart")
+                ).classes("w-full h-[22.5rem] cnv-genome-diff-chart")
             genome_charts = (cnv_abs, cnv_diff)
 
             ui.separator().classes("mgmt-detail-separator")
@@ -924,6 +1188,7 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
                 if s.get("type") == "scatter" and name not in (
                     "centromeres_highlight",
                     "cytobands_highlight",
+                    _CONFIGURED_GENES_SERIES_NAME,
                 ):
                     data = s.get("data") or []
                     if isinstance(data, list) and data:
@@ -1532,6 +1797,15 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
                                     "data": norm,
                                 }
                             )
+            if configured_gene_locations:
+                series_abs.append(
+                    _configured_gene_mark_series(
+                        configured_gene_locations,
+                        selected=selected,
+                        chrom_offsets=chrom_offsets,
+                        dark=dark_ui,
+                    )
+                )
             # Preserve highlight series (centromeres, cytobands) and replace data series only
             keep = [
                 s
@@ -1793,52 +2067,79 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
                                 ] = band_areas
                         except Exception:
                             pass
-                        # Genes of interest and gene selector options
+                        # Configured genes of interest (TOML [cnv].genes) + gene selector
                         try:
-                            gene_df = _load_gene_bed(sample_dir)
-                            gchr = gene_df[gene_df["chrom"] == selected]
-                            # limit to reduce clutter; still add many labels
                             gene_opts = {"All": "All"}
-                            for _, gr in gchr.iterrows():
-                                gene_opts[str(gr["gene"])] = str(gr["gene"])
+                            chrom_genes = _configured_genes_on_chrom(
+                                configured_gene_locations, selected
+                            )
+                            for row in chrom_genes:
+                                gene_opts[str(row["gene"])] = str(row["gene"])
+
+                            # Fall back to panel gene BED when no TOML genes are configured.
+                            if len(gene_opts) == 1:
+                                gene_df = _load_gene_bed(sample_dir)
+                                gchr = gene_df[gene_df["chrom"] == selected]
+                                for _, gr in gchr.iterrows():
+                                    gene_opts[str(gr["gene"])] = str(gr["gene"])
+                                if series_abs:
+                                    main = series_abs[0]
+                                    mark = []
+                                    for _, gr in gchr.iterrows():
+                                        mark.append(
+                                            [
+                                                {
+                                                    "name": str(gr["gene"]),
+                                                    "xAxis": float(gr["start_pos"]),
+                                                    "label": {
+                                                        "position": "insideTop",
+                                                        "color": (
+                                                            "#e2e8f0"
+                                                            if dark_ui
+                                                            else "#000"
+                                                        ),
+                                                        "fontSize": 11,
+                                                    },
+                                                },
+                                                {"xAxis": float(gr["end_pos"])},
+                                            ]
+                                        )
+                                    main.setdefault("markArea", {"data": []})
+                                    main["markArea"]["data"] = (
+                                        main["markArea"]["data"] or []
+                                    ) + mark
+                                    series_abs[0] = main
+
                             try:
                                 cnv_gene_select.set_options(gene_opts)
-                            except Exception as e:
+                                current_gene = launcher._cnv_state.setdefault(
+                                    str(sample_dir), {}
+                                ).get("selected_gene", "All")
+                                if current_gene not in gene_opts:
+                                    launcher._cnv_state[str(sample_dir)][
+                                        "selected_gene"
+                                    ] = "All"
+                                    cnv_gene_select.value = "All"
+                            except Exception:
                                 pass
-                            
-                            # annotate genes on main series
-                            if series_abs:
-                                main = series_abs[0]
-                                # attach gene regions via markArea on main series after replacement
-                                mark = []
-                                for _, gr in gchr.iterrows():
-                                    mark.append(
-                                        [
-                                            {
-                                                "name": str(gr["gene"]),
-                                                "xAxis": float(gr["start_pos"]),
-                                                "label": {
-                                                    "position": "insideTop",
-                                                    "color": (
-                                                        "#e2e8f0"
-                                                        if dark_ui
-                                                        else "#000"
-                                                    ),
-                                                    "fontSize": 11,
-                                                }
-                                            },
-                                            {"xAxis": float(gr["end_pos"])},
-                                        ]
-                                    )
-                                main.setdefault("markArea", {"data": []})
-                                main["markArea"]["data"] = (
-                                    main["markArea"]["data"] or []
-                                ) + mark
-                                # ensure series_abs[0] updated
-                                series_abs[0] = main
-                            
-                        except Exception as e:
+                        except Exception:
                             pass
+
+                        # Keep TOML gene markers on top after cytoband / breakpoint overlays.
+                        _upsert_configured_gene_series(
+                            cnv_abs,
+                            configured_gene_locations,
+                            selected=selected,
+                            chrom_offsets=chrom_offsets,
+                            dark=dark_ui,
+                        )
+                        _upsert_configured_gene_series(
+                            cnv_diff,
+                            configured_gene_locations,
+                            selected=selected,
+                            chrom_offsets=chrom_offsets,
+                            dark=dark_ui,
+                        )
                         
                         # Breakpoint candidates as dashed vertical lines
                         try:
@@ -1876,42 +2177,60 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
                                 ] = lines
                         except Exception:
                             pass
+                        # Re-assert gene overlay after breakpoint markLines mutate series order.
+                        _upsert_configured_gene_series(
+                            cnv_abs,
+                            configured_gene_locations,
+                            selected=selected,
+                            chrom_offsets=chrom_offsets,
+                            dark=dark_ui,
+                        )
                 # debug label removed
             except Exception:
                 pass
             # Adaptive thinning based on current zoom and cap total points
             _thin_chart_series(cnv_abs, MAX_POINTS_PER_CHART)
-            
+
             # Apply gene zoom before updating chart
             try:
                 sel_gene = launcher._cnv_state.setdefault(
                     str(sample_dir), {}
                 ).get("selected_gene", "All")
-                
-                if sel_gene and sel_gene != "All":
-                    # Load gene data for zoom if not already loaded
-                    gene_df = _load_gene_bed(sample_dir)
-                    gchr = gene_df[gene_df["chrom"] == selected]
-                    
-                    row = gchr[gchr["gene"] == sel_gene]
-                    if not row.empty:
-                        s_bp = int(row.iloc[0]["start_pos"])
-                        e_bp = int(row.iloc[0]["end_pos"])
-                        # Use 10x analysis bin width for padding (in bp)
-                        pad = 10 * binw_analysis
-                        zoom_start = max(0, s_bp - pad)
-                        zoom_end = e_bp + pad
-                        try:
-                            cnv_abs.options["dataZoom"][0].update(
-                                {
-                                    "startValue": zoom_start,
-                                    "endValue": zoom_end,
-                                    "start": None,  # Remove percentage-based zoom
-                                    "end": None,    # Remove percentage-based zoom
-                                }
-                            )
-                        except Exception as e:
-                            pass
+
+                gene_interval = None
+                if sel_gene and sel_gene != "All" and selected != "All":
+                    gene_interval = _find_configured_gene_interval(
+                        configured_gene_locations,
+                        selected=selected,
+                        gene_name=sel_gene,
+                    )
+                    if gene_interval is None:
+                        gene_df = _load_gene_bed(sample_dir)
+                        gchr = gene_df[gene_df["chrom"] == selected]
+                        row = gchr[gchr["gene"] == sel_gene]
+                        if not row.empty:
+                            gene_interval = {
+                                "start_pos": int(row.iloc[0]["start_pos"]),
+                                "end_pos": int(row.iloc[0]["end_pos"]),
+                            }
+
+                if gene_interval is not None:
+                    s_bp = int(gene_interval["start_pos"])
+                    e_bp = int(gene_interval["end_pos"])
+                    pad = 10 * binw_analysis
+                    zoom_start = max(0, s_bp - pad)
+                    zoom_end = e_bp + pad
+                    try:
+                        cnv_abs.options["dataZoom"][0].update(
+                            {
+                                "startValue": zoom_start,
+                                "endValue": zoom_end,
+                                "start": None,
+                                "end": None,
+                            }
+                        )
+                    except Exception:
+                        pass
                 else:
                     # Reset zoom when "All" is selected
                     try:
@@ -1920,11 +2239,20 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
                             dz.pop("startValue", None)
                             dz.pop("endValue", None)
                             dz.update({"start": 0, "end": 100})
-                    except Exception as e:
+                    except Exception:
                         pass
-            except Exception as e:
+            except Exception:
                 pass
-            
+
+            # Ensure gene markers remain on top after thinning / overlay mutations.
+            _upsert_configured_gene_series(
+                cnv_abs,
+                configured_gene_locations,
+                selected=selected,
+                chrom_offsets=chrom_offsets,
+                dark=dark_ui,
+            )
+
             _apply_cnv_echart_chrome(cnv_abs, _is_dark_mode())
             _cnv_echart_push_update(cnv_abs)
             # Difference plot (linear CNV3)
@@ -1947,7 +2275,21 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
                 except Exception:
                     keep = []
                 cnv_diff.options["series"] = series_diff + keep
+                _upsert_configured_gene_series(
+                    cnv_diff,
+                    configured_gene_locations,
+                    selected=selected,
+                    chrom_offsets=chrom_offsets,
+                    dark=dark_ui,
+                )
                 _thin_chart_series(cnv_diff, MAX_POINTS_PER_CHART)
+                _upsert_configured_gene_series(
+                    cnv_diff,
+                    configured_gene_locations,
+                    selected=selected,
+                    chrom_offsets=chrom_offsets,
+                    dark=dark_ui,
+                )
                 _apply_cnv_echart_chrome(cnv_diff, _is_dark_mode())
                 _cnv_echart_push_update(cnv_diff)
             else:
@@ -1960,27 +2302,40 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
                     str(sample_dir), {}
                 ).get("selected_gene", "All")
                 for rel_chart in (cnv_diff,):
+                    gene_interval = None
                     if sel_gene and sel_gene != "All" and selected != "All":
-                        gene_df = _load_gene_bed(sample_dir)
-                        gchr = gene_df[gene_df["chrom"] == selected]
-                        row = gchr[gchr["gene"] == sel_gene]
-                        if not row.empty:
-                            s_bp = int(row.iloc[0]["start_pos"])
-                            e_bp = int(row.iloc[0]["end_pos"])
-                            pad = 10 * binw_analysis
-                            zoom_start = max(0, s_bp - pad)
-                            zoom_end = e_bp + pad
-                            try:
-                                rel_chart.options["dataZoom"][0].update(
-                                    {
-                                        "startValue": zoom_start,
-                                        "endValue": zoom_end,
-                                        "start": None,
-                                        "end": None,
-                                    }
-                                )
-                            except Exception:
-                                pass
+                        gene_interval = _find_configured_gene_interval(
+                            configured_gene_locations,
+                            selected=selected,
+                            gene_name=sel_gene,
+                        )
+                        if gene_interval is None:
+                            gene_df = _load_gene_bed(sample_dir)
+                            gchr = gene_df[gene_df["chrom"] == selected]
+                            row = gchr[gchr["gene"] == sel_gene]
+                            if not row.empty:
+                                gene_interval = {
+                                    "start_pos": int(row.iloc[0]["start_pos"]),
+                                    "end_pos": int(row.iloc[0]["end_pos"]),
+                                }
+                    if gene_interval is not None:
+                        s_bp = int(gene_interval["start_pos"])
+                        e_bp = int(gene_interval["end_pos"])
+                        pad = 10 * binw_analysis
+                        zoom_start = max(0, s_bp - pad)
+                        zoom_end = e_bp + pad
+                        try:
+                            rel_chart.options["dataZoom"][0].update(
+                                {
+                                    "startValue": zoom_start,
+                                    "endValue": zoom_end,
+                                    "start": None,
+                                    "end": None,
+                                }
+                            )
+                            _cnv_echart_push_update(rel_chart)
+                        except Exception:
+                            pass
                     else:
                         try:
                             if (
@@ -2292,6 +2647,13 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
                 if current_series:
                     current_series[0].pop("markLine", None)
             chart.options["series"] = current_series
+            _upsert_configured_gene_series(
+                chart,
+                configured_gene_locations,
+                selected=selected,
+                chrom_offsets={},
+                dark=_is_dark_mode(),
+            )
             _apply_cnv_echart_chrome(chart, _is_dark_mode())
             _cnv_echart_push_update(chart)
         except Exception:

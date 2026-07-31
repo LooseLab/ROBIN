@@ -80,6 +80,7 @@ reference = "~/references/GCA_000001405.15_GRCh38_no_alt_analysis_set.fna"
 # [cnv]
 # penalty_value = 10
 # min_contiguous_bins = 3
+# genes = ["EGFR", "CDKN2A", "MYCN"]
 """
 
 
@@ -207,6 +208,29 @@ def parse_cnv_min_contiguous_bins(
     )
 
 
+def parse_cnv_genes(value: Any) -> tuple[str, ...]:
+    """Normalize a CNV plot gene list, preserving order and removing duplicates."""
+    if value is None:
+        return ()
+    if isinstance(value, str):
+        candidates = value.split(",")
+    elif isinstance(value, Sequence):
+        candidates = value
+    else:
+        _logger.warning("Invalid [cnv] genes %r; expected a list of gene names", value)
+        return ()
+
+    genes: list[str] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        gene = str(candidate).strip()
+        key = gene.casefold()
+        if gene and key not in seen:
+            genes.append(gene)
+            seen.add(key)
+    return tuple(genes)
+
+
 def _parse_positive_int(
     value: Any,
     *,
@@ -313,6 +337,18 @@ def get_cnv_min_contiguous_bins(
         cnv_section.get("min_contiguous_bins"),
         default=default,
     )
+
+
+def get_cnv_genes(
+    workflow_config: Optional[Mapping[str, Any]] = None,
+    *,
+    environ: Optional[Mapping[str, str]] = None,
+) -> tuple[str, ...]:
+    """Resolve gene names to annotate on GUI CNV plots from ``[cnv].genes``."""
+    cnv_section = _load_cnv_section(workflow_config, environ=environ)
+    if cnv_section is None:
+        return ()
+    return parse_cnv_genes(cnv_section.get("genes"))
 
 
 def _parameter_from_commandline(ctx: click.Context, param_name: str) -> bool:
