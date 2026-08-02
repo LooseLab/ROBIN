@@ -47,6 +47,7 @@ from robin.analysis.cnv_regional import (
     is_reportable_chromosome,
     load_panel_gene_bed,
 )
+from robin.analysis.itd_work import load_gene_target_coverage
 from robin.classification_config import get_cnv_thresholds
 
 # Same chromosome set as reporting (plotting.py): chr0–chr22, chrX, chrY only
@@ -80,6 +81,19 @@ _CNV_Y_VALUE_FORMATTER_JS = (
     "return Number.isFinite(n) ? String(Number(n.toFixed(1))) : value; }"
 )
 _CONFIGURED_GENES_SERIES_NAME = "configured_genes_highlight"
+_CONFIGURED_GENES_LABELS_SERIES_NAME = "configured_genes_labels"
+_CNV_GENE_COVERAGE_FILTER_ALL = "all"
+_CNV_GENE_COVERAGE_FILTER_OUTLIERS = "outliers"
+_CNV_GENE_COVERAGE_FILTERS = (
+    _CNV_GENE_COVERAGE_FILTER_ALL,
+    _CNV_GENE_COVERAGE_FILTER_OUTLIERS,
+)
+_CNV_GENE_GAIN_COLOR = "#DC2626"
+_CNV_GENE_LOSS_COLOR = "#2563EB"
+_CNV_GENE_OUTLIER_SD = 3.0
+# Soft safety only — axis auto-scales to highlighted genes within this envelope.
+_CNV_LOLLIPOP_LOG_Y_SOFT_CAP = 20.0
+_CNV_LOLLIPOP_LINEAR_Y_SOFT_CAP_FACTOR = 20.0
 
 
 @lru_cache(maxsize=16)
@@ -269,7 +283,13 @@ def _upsert_configured_gene_series(
     if not isinstance(series, list):
         return
     chart.options["series"] = [
-        s for s in series if s.get("name") != _CONFIGURED_GENES_SERIES_NAME
+        s
+        for s in series
+        if s.get("name")
+        not in (
+            _CONFIGURED_GENES_SERIES_NAME,
+            _CONFIGURED_GENES_LABELS_SERIES_NAME,
+        )
     ]
     if not gene_locations:
         return
@@ -281,6 +301,605 @@ def _upsert_configured_gene_series(
             dark=dark,
         )
     )
+
+
+def _is_configured_gene_cnv_outlier(
+    cnv_val: float,
+    mean_cnv: float,
+    std_cnv: float,
+) -> bool:
+    """True when gene CNV differs from the local expected average by >3 SD."""
+    if not np.isfinite(cnv_val) or not np.isfinite(mean_cnv):
+        return False
+    if not np.isfinite(std_cnv) or std_cnv < 1e-6:
+        return abs(cnv_val - mean_cnv) > 0.5
+    return abs(cnv_val - mean_cnv) > _CNV_GENE_OUTLIER_SD * std_cnv
+
+
+def _configured_gene_region_cnv(
+    values: np.ndarray,
+    *,
+    start_pos: float,
+    end_pos: float,
+    bin_width: int,
+    use_max_abs: bool,
+) -> Optional[float]:
+    """Peak (or max-abs) CNV across bins overlapping a gene interval."""
+    arr = np.asarray(values, dtype=float)
+    if arr.size == 0 or bin_width <= 0:
+        return None
+    start_bin = max(0, int(start_pos // bin_width))
+    end_bin = min(arr.size - 1, int(end_pos // bin_width))
+    if end_bin < start_bin:
+        return None
+    region = arr[start_bin : end_bin + 1]
+    finite = region[np.isfinite(region)]
+    if finite.size == 0:
+        return None
+    if use_max_abs:
+        return float(finite[np.nanargmax(np.abs(finite))])
+    return float(np.nanmax(finite))
+
+
+def _chrom_track_stats(
+    values: np.ndarray,
+    *,
+    use_log: bool,
+) -> Tuple[float, float]:
+    """Mean/std for outlier + direction calls on one chromosome track."""
+    vals = np.asarray(values, dtype=float)
+    finite = vals[np.isfinite(vals)]
+    default_mean = 0.0 if use_log else 2.0
+    if finite.size == 0:
+        return default_mean, 1.0
+    return float(np.mean(finite)), float(np.std(finite))
+
+
+def _configured_gene_cnv_direction(
+    cnv_val: float,
+    *,
+    use_log: bool,
+    mean_cnv: float,
+) -> str:
+    """Classify gene CNV as gain or loss relative to the expected average."""
+    if use_log:
+        return "gain" if cnv_val >= 0.0 else "loss"
+    return "gain" if cnv_val >= mean_cnv else "loss"
+
+
+def _normalise_coverage_to_cnv_axis(
+    coverage: float,
+    *,
+    mean_cov: float,
+    scale_mean_cnv: float,
+    use_log: bool,
+) -> Optional[float]:
+    """Map target depth onto the CNV y-axis for visual comparison.
+
+    Linear/ploidy: ``scale_mean_cnv * (cov / mean_cov)`` so mean coverage sits
+    at the CNV mean. Log2: ``log2(cov / mean_cov)`` so mean coverage sits at 0.
+    """
+    if not np.isfinite(coverage) or coverage <= 0:
+        return None
+    if not np.isfinite(mean_cov) or mean_cov <= 0:
+        return None
+    ratio = float(coverage) / float(mean_cov)
+    if use_log:
+        return float(np.log2(ratio))
+    if not np.isfinite(scale_mean_cnv):
+        return None
+    return float(scale_mean_cnv) * ratio
+
+
+def _build_configured_gene_coverage_points(
+    gene_locations: Sequence[Dict[str, Any]],
+    *,
+    selected: str,
+    chrom_offsets: Dict[str, float],
+    abs_plot_map: Dict[str, np.ndarray],
+    bin_width: int,
+    coverage_by_gene: Dict[str, float],
+    filter_mode: str,
+    use_log: bool,
+    scale_mean_cnv: float,
+) -> Tuple[List[Dict[str, Any]], Optional[float]]:
+    """Join configured genes to target coverage for abs-chart lollipops."""
+    if not gene_locations or not coverage_by_gene:
+        return [], None
+
+    cov_lookup = {str(k).casefold(): float(v) for k, v in coverage_by_gene.items()}
+    cov_vals = [v for v in cov_lookup.values() if np.isfinite(v) and v > 0]
+    mean_cov = float(np.mean(cov_vals)) if cov_vals else None
+    if mean_cov is None:
+        return [], None
+
+    baseline_y = 0.0 if use_log else float(scale_mean_cnv)
+    chrom_stats: Dict[str, Tuple[float, float]] = {}
+    points: List[Dict[str, Any]] = []
+    for row in _configured_genes_on_chrom(gene_locations, selected):
+        gene = str(row["gene"])
+        chrom = str(row["chrom"])
+        if selected == "All" and chrom not in chrom_offsets and chrom not in abs_plot_map:
+            continue
+        coverage = cov_lookup.get(gene.casefold())
+        if coverage is None or not np.isfinite(coverage):
+            continue
+        track = abs_plot_map.get(chrom)
+        if track is None:
+            continue
+        if chrom not in chrom_stats:
+            chrom_stats[chrom] = _chrom_track_stats(track, use_log=use_log)
+        mean_cnv, std_cnv = chrom_stats[chrom]
+        cnv_val = _configured_gene_region_cnv(
+            track,
+            start_pos=float(row["start_pos"]),
+            end_pos=float(row["end_pos"]),
+            bin_width=int(bin_width),
+            use_max_abs=use_log,
+        )
+        if cnv_val is None:
+            continue
+        if filter_mode == _CNV_GENE_COVERAGE_FILTER_OUTLIERS and not (
+            _is_configured_gene_cnv_outlier(cnv_val, mean_cnv, std_cnv)
+        ):
+            continue
+        y_norm = _normalise_coverage_to_cnv_axis(
+            float(coverage),
+            mean_cov=mean_cov,
+            scale_mean_cnv=float(scale_mean_cnv),
+            use_log=use_log,
+        )
+        if y_norm is None:
+            continue
+        start_pos = float(row["start_pos"])
+        end_pos = float(row["end_pos"])
+        midpoint = (start_pos + end_pos) / 2.0
+        offset = chrom_offsets.get(chrom, 0.0) if selected == "All" else 0.0
+        points.append(
+            {
+                "gene": gene,
+                "chrom": chrom,
+                "x": midpoint + offset,
+                "coverage": float(coverage),
+                "y": float(y_norm),
+                "baseline_y": float(baseline_y),
+                "cnv_val": float(cnv_val),
+                "direction": _configured_gene_cnv_direction(
+                    float(cnv_val),
+                    use_log=use_log,
+                    mean_cnv=mean_cnv,
+                ),
+            }
+        )
+    return points, mean_cov
+
+
+def _stagger_lollipop_label_distances(
+    points: Sequence[Dict[str, Any]],
+    *,
+    base_distance: int = 10,
+    step: int = 14,
+    x_proximity_frac: float = 0.018,
+) -> List[int]:
+    """Push nearby gene labels apart vertically (pixel distance from the head)."""
+    if not points:
+        return []
+    xs = [float(p["x"]) for p in points]
+    x_span = max(xs) - min(xs) if len(xs) > 1 else 1.0
+    proximity = max(x_span * x_proximity_frac, 1.0)
+    order = sorted(range(len(points)), key=lambda idx: xs[idx])
+    distances = [base_distance] * len(points)
+    occupied: List[Tuple[float, int]] = []
+    for idx in order:
+        x_pos = xs[idx]
+        lane = 0
+        while any(
+            abs(x_pos - other_x) < proximity and lane == other_lane
+            for other_x, other_lane in occupied
+        ):
+            lane += 1
+            if lane > 8:
+                break
+        occupied.append((x_pos, lane))
+        distances[idx] = base_distance + lane * step
+    return distances
+
+
+def _lollipop_baseline_y_range(
+    *,
+    use_log: bool,
+    scale_mean_cnv: float,
+) -> Tuple[float, float]:
+    """Minimum CNV-friendly window before expanding for highlighted genes."""
+    if use_log:
+        return (-2.0, 2.0)
+    return (0.0, max(4.0, float(scale_mean_cnv) * 1.75))
+
+
+def _lollipop_view_y_range(
+    points: Sequence[Dict[str, Any]],
+    *,
+    use_log: bool,
+    scale_mean_cnv: float,
+) -> Tuple[float, float]:
+    """Auto-scale the Y window so highlighted genes and nearby labels stay in range."""
+    base_lo, base_hi = _lollipop_baseline_y_range(
+        use_log=use_log,
+        scale_mean_cnv=scale_mean_cnv,
+    )
+    gene_ys = [
+        float(p["y"])
+        for p in points
+        if p.get("y") is not None and np.isfinite(float(p["y"]))
+    ]
+    if not gene_ys:
+        span = max(base_hi - base_lo, 1.0)
+        return float(base_lo - 0.1 * span), float(base_hi + 0.1 * span)
+
+    g_lo = float(min(gene_ys))
+    g_hi = float(max(gene_ys))
+    lo = min(float(base_lo), g_lo)
+    hi = max(float(base_hi), g_hi)
+    span = max(hi - lo, 1.0)
+    # Room for labels placed just above gains / below losses.
+    label_pad = max(0.35, 0.18 * span)
+    lo -= label_pad
+    hi += label_pad
+    if not use_log:
+        lo = max(0.0, lo)
+    return float(lo), float(hi)
+
+
+def _soft_cap_lollipop_display_y(
+    y_norm: float,
+    *,
+    use_log: bool,
+    scale_mean_cnv: float,
+) -> Tuple[float, bool]:
+    """Only clip pathological extremes; normal gene values stay unscaled."""
+    if use_log:
+        lo, hi = -_CNV_LOLLIPOP_LOG_Y_SOFT_CAP, _CNV_LOLLIPOP_LOG_Y_SOFT_CAP
+    else:
+        lo = 0.0
+        hi = max(12.0, float(scale_mean_cnv) * _CNV_LOLLIPOP_LINEAR_Y_SOFT_CAP_FACTOR)
+    capped = bool(y_norm < lo or y_norm > hi)
+    return float(np.clip(y_norm, lo, hi)), capped
+
+
+def _layout_lollipop_label_placements(
+    points: Sequence[Dict[str, Any]],
+    *,
+    y_lo: float,
+    y_hi: float,
+    x_proximity_frac: float = 0.022,
+    n_lanes: int = 4,
+) -> List[Dict[str, Any]]:
+    """Place each gene badge beside its marker: above gains, below losses."""
+    if not points:
+        return []
+    span = max(float(y_hi) - float(y_lo), 1e-6)
+    base_offset = max(0.22, 0.08 * span)
+    lane_step = max(0.16, 0.045 * span)
+    lanes = n_lanes if len(points) > 8 else max(2, min(n_lanes, 3))
+
+    xs = [float(p["x"]) for p in points]
+    x_span = max(xs) - min(xs) if len(xs) > 1 else 1.0
+    proximity = max(x_span * x_proximity_frac, 1.0)
+    order = sorted(range(len(points)), key=lambda idx: xs[idx])
+
+    placements: List[Optional[Dict[str, Any]]] = [None] * len(points)
+    occupied: List[Tuple[float, str, int]] = []  # x, side, lane
+
+    for idx in order:
+        point = points[idx]
+        x_pos = float(point["x"])
+        y_head = float(point.get("y_disp", point.get("y", 0.0)))
+        baseline = float(point.get("baseline_y", 0.0))
+        direction = str(point.get("direction") or "")
+        # Prefer the side away from the CNV baseline / toward the stem tip.
+        if direction == "loss" or y_head < baseline:
+            side = "below"
+        else:
+            side = "above"
+
+        lane = 0
+        while any(
+            abs(x_pos - other_x) < proximity
+            and side == other_side
+            and lane == other_lane
+            for other_x, other_side, other_lane in occupied
+        ):
+            lane += 1
+            if lane >= lanes:
+                lane = lanes - 1
+                break
+        occupied.append((x_pos, side, lane))
+
+        offset = base_offset + lane * lane_step
+        if side == "above":
+            label_y = min(y_head + offset, float(y_hi) - 0.03 * span)
+            label_position = "top"
+        else:
+            label_y = max(y_head - offset, float(y_lo) + 0.03 * span)
+            label_position = "bottom"
+        placements[idx] = {
+            "y": float(label_y),
+            "side": side,
+            "position": label_position,
+        }
+
+    return [
+        p if p is not None else {"y": 0.0, "side": "above", "position": "top"}
+        for p in placements
+    ]
+
+
+def _configured_gene_coverage_lollipop_series(
+    points: Sequence[Dict[str, Any]],
+    *,
+    use_log: bool,
+    dark: bool,
+    scale_mean_cnv: float,
+    view_y_lo: float,
+    view_y_hi: float,
+) -> List[Dict[str, Any]]:
+    """Build head + callout-label series on the shared CNV axis."""
+    if not points:
+        return []
+
+    label_bg = "rgba(15, 23, 42, 0.94)" if dark else "rgba(255, 255, 255, 0.97)"
+    head_border = "#0f172a" if dark else "#ffffff"
+    label_font = 12 if len(points) <= 20 else 11
+
+    prepared: List[Dict[str, Any]] = []
+    for point in points:
+        y_raw = float(point["y"])
+        y_disp, capped = _soft_cap_lollipop_display_y(
+            y_raw,
+            use_log=use_log,
+            scale_mean_cnv=scale_mean_cnv,
+        )
+        prepared.append({**point, "y_disp": y_disp, "capped": capped})
+
+    placements = _layout_lollipop_label_placements(
+        prepared,
+        y_lo=view_y_lo,
+        y_hi=view_y_hi,
+    )
+
+    heads: List[Dict[str, Any]] = []
+    labels: List[Dict[str, Any]] = []
+    stems: List[Any] = []
+    leaders: List[Any] = []
+
+    for point, place in zip(prepared, placements):
+        x_pos = float(point["x"])
+        y_disp = float(point["y_disp"])
+        baseline = float(point.get("baseline_y", 0.0 if use_log else 2.0))
+        label_y = float(place["y"])
+        gene = str(point["gene"])
+        cov = float(point["coverage"])
+        capped = bool(point.get("capped"))
+        color = (
+            _CNV_GENE_GAIN_COLOR
+            if point.get("direction") == "gain"
+            else _CNV_GENE_LOSS_COLOR
+        )
+        heads.append(
+            {
+                "name": gene,
+                "value": [x_pos, y_disp],
+                "coverage": cov,
+                "capped": capped,
+                "itemStyle": {
+                    "color": color,
+                    "borderColor": head_border,
+                    "borderWidth": 2,
+                    "shadowBlur": 5,
+                    "shadowColor": "rgba(0, 0, 0, 0.3)",
+                },
+                "label": {"show": False},
+            }
+        )
+        labels.append(
+            {
+                "name": gene,
+                "value": [x_pos, label_y],
+                "coverage": cov,
+                "capped": capped,
+                "symbol": "roundRect",
+                "symbolSize": [2, 2],
+                "itemStyle": {
+                    "color": "transparent",
+                    "borderWidth": 0,
+                },
+                "label": {
+                    "show": True,
+                    "formatter": gene,
+                    "position": place["position"],
+                    "distance": 2,
+                    "rotate": 0,
+                    "fontSize": label_font,
+                    "fontWeight": "bold",
+                    "color": color,
+                    "backgroundColor": label_bg,
+                    "borderColor": color,
+                    "borderWidth": 1.5,
+                    "borderRadius": 4,
+                    "padding": [5, 8],
+                    "align": "center",
+                    "verticalAlign": "middle",
+                },
+            }
+        )
+        stems.append(
+            [
+                {
+                    "coord": [x_pos, baseline],
+                    "lineStyle": {
+                        "color": color,
+                        "type": "solid",
+                        "width": 2,
+                        "opacity": 0.9,
+                    },
+                },
+                {"coord": [x_pos, y_disp]},
+            ]
+        )
+        # Short leader from the marker head to the gene badge.
+        leaders.append(
+            [
+                {
+                    "coord": [x_pos, y_disp],
+                    "lineStyle": {
+                        "color": color,
+                        "type": "dashed",
+                        "width": 1.25,
+                        "opacity": 0.85,
+                    },
+                },
+                {"coord": [x_pos, label_y]},
+            ]
+        )
+
+    tooltip = {
+        "trigger": "item",
+        ":formatter": (
+            "(params) => { const d = params.data || {}; "
+            "const cov = Number(d.coverage); "
+            "const v = params.value; "
+            "const y = Array.isArray(v) ? Number(v[1]) : Number(v); "
+            "const covTxt = Number.isFinite(cov) ? cov.toFixed(1) + 'x' : 'n/a'; "
+            "const yTxt = Number.isFinite(y) ? y.toFixed(2) : ''; "
+            "const cap = d.capped ? ' (capped)' : ''; "
+            "return params.name + ': ' + covTxt + "
+            "(yTxt ? ' (norm ' + yTxt + ')' : '') + cap; }"
+        ),
+    }
+
+    head_series = {
+        "type": "scatter",
+        "name": _CONFIGURED_GENES_SERIES_NAME,
+        "yAxisIndex": 0,
+        "symbolSize": 13,
+        "zlevel": 4,
+        "z": 12,
+        "clip": False,
+        "animation": False,
+        "animationDuration": 0,
+        "progressive": 0,
+        "data": heads,
+        "markLine": {
+            "symbol": "none",
+            "animation": False,
+            "animationDuration": 0,
+            "silent": True,
+            "z": 11,
+            "data": stems + leaders,
+        },
+        "tooltip": tooltip,
+    }
+    label_series = {
+        "type": "scatter",
+        "name": _CONFIGURED_GENES_LABELS_SERIES_NAME,
+        "yAxisIndex": 0,
+        "symbolSize": 1,
+        "zlevel": 5,
+        "z": 14,
+        "clip": False,
+        "animation": False,
+        "animationDuration": 0,
+        "progressive": 0,
+        "data": labels,
+        "tooltip": tooltip,
+        "silent": False,
+    }
+    return [head_series, label_series]
+
+
+def _apply_cnv_abs_y_window(chart: Any, y_lo: float, y_hi: float) -> None:
+    """Pin the abs-chart Y axis and slider to a marker-aware window."""
+    try:
+        dz_list = chart.options.get("dataZoom")
+        if isinstance(dz_list, list) and len(dz_list) > 1 and isinstance(dz_list[1], dict):
+            dz_list[1]["startValue"] = float(y_lo)
+            dz_list[1]["endValue"] = float(y_hi)
+            dz_list[1]["filterMode"] = "none"
+            dz_list[1].pop("start", None)
+            dz_list[1].pop("end", None)
+    except Exception:
+        pass
+    try:
+        y_axes = chart.options.get("yAxis")
+        if isinstance(y_axes, list) and y_axes and isinstance(y_axes[0], dict):
+            y_axes[0]["min"] = float(y_lo)
+            y_axes[0]["max"] = float(y_hi)
+            y_axes[0]["scale"] = False
+    except Exception:
+        pass
+
+
+def _upsert_configured_gene_coverage_lollipops(
+    chart: Any,
+    points: Sequence[Dict[str, Any]],
+    *,
+    use_log: bool,
+    dark: bool,
+    scale_mean_cnv: float,
+) -> None:
+    """Replace the abs-chart gene series with coverage lollipops (or remove it)."""
+    series = chart.options.get("series")
+    if not isinstance(series, list):
+        return
+    chart.options["series"] = [
+        s
+        for s in series
+        if s.get("name")
+        not in (
+            _CONFIGURED_GENES_SERIES_NAME,
+            _CONFIGURED_GENES_LABELS_SERIES_NAME,
+        )
+    ]
+    if not points:
+        # No markers: restore a CNV-friendly baseline window.
+        base_lo, base_hi = _lollipop_baseline_y_range(
+            use_log=use_log,
+            scale_mean_cnv=scale_mean_cnv,
+        )
+        span = max(base_hi - base_lo, 1.0)
+        _apply_cnv_abs_y_window(chart, base_lo, base_hi + 0.15 * span)
+        return
+    view_y_lo, view_y_hi = _lollipop_view_y_range(
+        points,
+        use_log=use_log,
+        scale_mean_cnv=scale_mean_cnv,
+    )
+    _apply_cnv_abs_y_window(chart, view_y_lo, view_y_hi)
+    chart.options["series"].extend(
+        _configured_gene_coverage_lollipop_series(
+            points,
+            use_log=use_log,
+            dark=dark,
+            scale_mean_cnv=scale_mean_cnv,
+            view_y_lo=view_y_lo,
+            view_y_hi=view_y_hi,
+        )
+    )
+
+
+def _set_cnv_abs_coverage_axis(chart: Any, *, show: bool = False) -> None:
+    """Keep the unused right-hand axis hidden (lollipops share the CNV axis)."""
+    y_axes = chart.options.get("yAxis")
+    if not isinstance(y_axes, list) or len(y_axes) < 2:
+        return
+    axis = y_axes[1]
+    if not isinstance(axis, dict):
+        return
+    axis["show"] = bool(show)
+    axis.pop("max", None)
+    grid = chart.options.get("grid")
+    if isinstance(grid, dict):
+        grid["right"] = "8%" if show else "5%"
 
 
 def _cnv_plot_bin_key_from_ui(value: Any) -> str:
@@ -314,6 +933,30 @@ def _cnv_plot_bin_key_from_bp(bp: Optional[int]) -> str:
         if width == bp:
             return key
     return _CNV_PLOT_BIN_KEY_DEFAULT
+
+
+def _cnv_gene_coverage_filter_from_ui(value: Any) -> str:
+    """Normalize Coverage genes toggle value/label to a filter mode key."""
+    if isinstance(value, dict):
+        inner = value.get("value", value.get("label"))
+        if inner is not None and inner is not value:
+            return _cnv_gene_coverage_filter_from_ui(inner)
+    vlow = str(value or "").strip().lower()
+    if vlow in (
+        _CNV_GENE_COVERAGE_FILTER_ALL,
+        "all genes",
+    ):
+        return _CNV_GENE_COVERAGE_FILTER_ALL
+    if vlow in (
+        _CNV_GENE_COVERAGE_FILTER_OUTLIERS,
+        "≠ average",
+        "!= average",
+        "vs average",
+        "average",
+        "not average",
+    ):
+        return _CNV_GENE_COVERAGE_FILTER_OUTLIERS
+    return _CNV_GENE_COVERAGE_FILTER_OUTLIERS
 
 
 def _cnv_contig_ok(contig: str) -> bool:
@@ -859,6 +1502,14 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
                 cnv_gene_select = ui.select(options={"All": "All"}, value="All").style(
                     "width: 200px"
                 )
+                ui.label("Coverage genes").classes("classification-insight-meta ml-2")
+                cnv_gene_cov_filter = ui.toggle(
+                    options={
+                        _CNV_GENE_COVERAGE_FILTER_ALL: "All",
+                        _CNV_GENE_COVERAGE_FILTER_OUTLIERS: "≠ average",
+                    },
+                    value=_CNV_GENE_COVERAGE_FILTER_OUTLIERS,
+                ).classes("mt-1")
                 ui.label("Color by").classes("classification-insight-meta ml-2")
                 cnv_color = ui.toggle(
                     options={"chromosome": "Chromosome", "value": "Up/Down"},
@@ -913,15 +1564,17 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
                             {"type": "value", "name": "Ploidy"},
                             {
                                 "type": "value",
-                                "name": "Breakpoint density",
+                                "name": "Coverage (x)",
                                 "position": "right",
+                                "show": False,
+                                "min": 0,
                             },
                         ],
                         "dataZoom": [
                             {"type": "slider", "xAxisIndex": [0]},
                             {
                                 "type": "slider",
-                                "yAxisIndex": [0, 1],
+                                "yAxisIndex": [0],
                                 "right": 20,
                                 "startValue": 0,
                                 "endValue": 6,
@@ -971,15 +1624,17 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
                             {"type": "value", "name": "Relative"},
                             {
                                 "type": "value",
-                                "name": "Breakpoint density",
+                                "name": "Coverage (x)",
                                 "position": "right",
+                                "show": False,
+                                "min": 0,
                             },
                         ],
                         "dataZoom": [
                             {"type": "slider", "xAxisIndex": [0]},
                             {
                                 "type": "slider",
-                                "yAxisIndex": [0, 1],
+                                "yAxisIndex": [0],
                                 "right": 20,
                                 "startValue": -4,
                                 "endValue": 4,
@@ -1189,6 +1844,7 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
                     "centromeres_highlight",
                     "cytobands_highlight",
                     _CONFIGURED_GENES_SERIES_NAME,
+                    _CONFIGURED_GENES_LABELS_SERIES_NAME,
                 ):
                     data = s.get("data") or []
                     if isinstance(data, list) and data:
@@ -1576,6 +2232,20 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
                     cnv_plot_bin.update()
             except Exception:
                 pass
+            try:
+                want_filter = str(
+                    state.get(
+                        "gene_coverage_filter",
+                        _CNV_GENE_COVERAGE_FILTER_OUTLIERS,
+                    )
+                )
+                if want_filter not in _CNV_GENE_COVERAGE_FILTERS:
+                    want_filter = _CNV_GENE_COVERAGE_FILTER_OUTLIERS
+                if getattr(cnv_gene_cov_filter, "value", None) != want_filter:
+                    cnv_gene_cov_filter.value = want_filter
+                    cnv_gene_cov_filter.update()
+            except Exception:
+                pass
             selected = state.get("selected_chrom", "All")
             use_log = state.get("y_scale", "linear") == "log"
             abs_plot_map = (
@@ -1599,16 +2269,16 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
                 color_mode = "value"
             else:
                 color_mode = "chromosome"
-            
-            # Show/hide breakpoint density y-axis based on selection
-            should_show_breakpoint_density = selected != "All"
-            for chart in genome_charts:
-                if len(chart.options["yAxis"]) > 1:
-                    # Index 1 is the "Breakpoint density" axis
-                    chart.options["yAxis"][1]["show"] = should_show_breakpoint_density
-            
+
+            # Diff chart never uses the right axis; abs coverage axis is set with lollipops.
+            if len(cnv_diff.options.get("yAxis") or []) > 1:
+                cnv_diff.options["yAxis"][1]["show"] = False
+
             cnv_abs.options["yAxis"][0]["type"] = "value"
             cnv_abs.options["yAxis"][0].pop("logBase", None)
+            # Clear any previous pinned Y window; marker overlay re-applies auto-scale.
+            cnv_abs.options["yAxis"][0].pop("min", None)
+            cnv_abs.options["yAxis"][0].pop("max", None)
             if use_log:
                 cnv_abs.options["yAxis"][0]["name"] = "Log2 ratio (ploidy / expected)"
                 cnv_abs.options["title"]["text"] = "CNV scatter plot"
@@ -1617,24 +2287,21 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
                     "log2(ploidy / expected copy number); 0 = normal"
                 )
                 cnv_abs.options["grid"]["top"] = "26%"
-                try:
-                    y_dz = cnv_abs.options["dataZoom"][1]
-                    y_dz["startValue"] = -2
-                    y_dz["endValue"] = 2
-                except Exception:
-                    pass
             else:
                 cnv_abs.options["yAxis"][0]["name"] = "Ploidy"
                 cnv_abs.options["title"]["text"] = "CNV scatter plot"
                 cnv_abs.options["title"]["top"] = 10
                 cnv_abs.options["title"].pop("subtext", None)
                 cnv_abs.options["grid"]["top"] = "20%"
-                try:
-                    y_dz = cnv_abs.options["dataZoom"][1]
-                    y_dz["startValue"] = 0
-                    y_dz["endValue"] = 6
-                except Exception:
-                    pass
+            # Temporary baseline until gene-marker auto-scale runs at the end of render.
+            try:
+                _apply_cnv_abs_y_window(
+                    cnv_abs,
+                    -2.0 if use_log else 0.0,
+                    2.0 if use_log else 6.0,
+                )
+            except Exception:
+                pass
             # X-axis is always in genomic base pairs; use actual genome/chromosome length
             # so the scale does not change when plot bin width changes (dataMax would shrink
             # with fewer downsampled points).
@@ -1653,6 +2320,66 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
                 abs_plot_map if isinstance(abs_plot_map, dict) else None,
                 use_log=use_log,
             )
+            try:
+                coverage_by_gene = load_gene_target_coverage(sample_dir)
+            except Exception:
+                logging.debug(
+                    "Could not load gene target coverage for CNV lollipops",
+                    exc_info=True,
+                )
+                coverage_by_gene = {}
+
+            def _apply_abs_gene_coverage_overlay() -> None:
+                """Coverage lollipops on the abs chart only (position markers if no coverage)."""
+                filter_mode = str(
+                    state.get(
+                        "gene_coverage_filter",
+                        _CNV_GENE_COVERAGE_FILTER_OUTLIERS,
+                    )
+                )
+                if filter_mode not in _CNV_GENE_COVERAGE_FILTERS:
+                    filter_mode = _CNV_GENE_COVERAGE_FILTER_OUTLIERS
+                plot_map = (
+                    abs_plot_map if isinstance(abs_plot_map, dict) else cnv_map
+                )
+                points, _mean_cov = _build_configured_gene_coverage_points(
+                    configured_gene_locations,
+                    selected=selected,
+                    chrom_offsets=chrom_offsets,
+                    abs_plot_map=plot_map,
+                    bin_width=int(binw_analysis),
+                    coverage_by_gene=coverage_by_gene,
+                    filter_mode=filter_mode,
+                    use_log=use_log,
+                    scale_mean_cnv=float(sample_rel_mean),
+                )
+                _set_cnv_abs_coverage_axis(cnv_abs, show=False)
+                if points:
+                    _upsert_configured_gene_coverage_lollipops(
+                        cnv_abs,
+                        points,
+                        use_log=use_log,
+                        dark=dark_ui,
+                        scale_mean_cnv=float(sample_rel_mean),
+                    )
+                    return
+                _upsert_configured_gene_coverage_lollipops(
+                    cnv_abs,
+                    (),
+                    use_log=use_log,
+                    dark=dark_ui,
+                    scale_mean_cnv=float(sample_rel_mean),
+                )
+                # Fall back to position markers when target coverage is unavailable.
+                if configured_gene_locations and not coverage_by_gene:
+                    _upsert_configured_gene_series(
+                        cnv_abs,
+                        configured_gene_locations,
+                        selected=selected,
+                        chrom_offsets=chrom_offsets,
+                        dark=dark_ui,
+                    )
+
             # Absolute plot
             series_abs = []
             # Prepare chromosome partitions for labels/areas when viewing All
@@ -1797,15 +2524,6 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
                                     "data": norm,
                                 }
                             )
-            if configured_gene_locations:
-                series_abs.append(
-                    _configured_gene_mark_series(
-                        configured_gene_locations,
-                        selected=selected,
-                        chrom_offsets=chrom_offsets,
-                        dark=dark_ui,
-                    )
-                )
             # Preserve highlight series (centromeres, cytobands) and replace data series only
             keep = [
                 s
@@ -1813,6 +2531,7 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
                 if s.get("name") in ("centromeres_highlight", "cytobands_highlight")
             ]
             cnv_abs.options["series"] = series_abs + keep
+            _apply_abs_gene_coverage_overlay()
             if use_log and series_abs:
                 series_abs[0]["markLine"] = {
                     "symbol": "none",
@@ -2125,14 +2844,8 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
                         except Exception:
                             pass
 
-                        # Keep TOML gene markers on top after cytoband / breakpoint overlays.
-                        _upsert_configured_gene_series(
-                            cnv_abs,
-                            configured_gene_locations,
-                            selected=selected,
-                            chrom_offsets=chrom_offsets,
-                            dark=dark_ui,
-                        )
+                        # Keep gene overlays on top after cytoband / breakpoint overlays.
+                        _apply_abs_gene_coverage_overlay()
                         _upsert_configured_gene_series(
                             cnv_diff,
                             configured_gene_locations,
@@ -2177,14 +2890,8 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
                                 ] = lines
                         except Exception:
                             pass
-                        # Re-assert gene overlay after breakpoint markLines mutate series order.
-                        _upsert_configured_gene_series(
-                            cnv_abs,
-                            configured_gene_locations,
-                            selected=selected,
-                            chrom_offsets=chrom_offsets,
-                            dark=dark_ui,
-                        )
+                        # Re-assert abs coverage lollipops after breakpoint markLines mutate series.
+                        _apply_abs_gene_coverage_overlay()
                 # debug label removed
             except Exception:
                 pass
@@ -2244,14 +2951,8 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
             except Exception:
                 pass
 
-            # Ensure gene markers remain on top after thinning / overlay mutations.
-            _upsert_configured_gene_series(
-                cnv_abs,
-                configured_gene_locations,
-                selected=selected,
-                chrom_offsets=chrom_offsets,
-                dark=dark_ui,
-            )
+            # Ensure abs coverage lollipops remain on top after thinning / overlay mutations.
+            _apply_abs_gene_coverage_overlay()
 
             _apply_cnv_echart_chrome(cnv_abs, _is_dark_mode())
             _cnv_echart_push_update(cnv_abs)
@@ -2437,7 +3138,22 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
 
         current_time = time.time()
         last_refresh = state.get("_last_refresh", 0)
-        if current_time - last_refresh < 0.1:
+        force_color_refresh = state.get("_force_color_refresh", False)
+        force_gene_refresh = state.get("_force_gene_refresh", False)
+        force_chrom_refresh = state.get("_force_chrom_refresh", False)
+        force_gene_cov_filter_refresh = state.get(
+            "_force_gene_cov_filter_refresh", False
+        )
+        force_ui_refresh = state.get("_force_ui_refresh", False)
+        force_refresh = (
+            force_color_refresh
+            or force_gene_refresh
+            or force_chrom_refresh
+            or force_gene_cov_filter_refresh
+            or force_ui_refresh
+        )
+        # Never debounce away an explicit UI control click.
+        if current_time - last_refresh < 0.1 and not force_refresh:
             return None
         state["_last_refresh"] = current_time
 
@@ -2448,9 +3164,17 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
                 state["selected_chrom"] = ui_sel
                 ui_changed = True
             ui_scale = getattr(cnv_scale, "value", None)
-            if ui_scale and ui_scale != state.get("y_scale"):
-                state["y_scale"] = ui_scale
-                ui_changed = True
+            if ui_scale is not None:
+                scale_key = str(ui_scale).strip().lower()
+                if scale_key in ("log", "log2", "log2 ratio", "log2 ratio (ploidy / expected)"):
+                    want_scale = "log"
+                elif scale_key in ("linear", "ploidy"):
+                    want_scale = "linear"
+                else:
+                    want_scale = "log" if "log" in scale_key else state.get("y_scale", "linear")
+                if want_scale != state.get("y_scale"):
+                    state["y_scale"] = want_scale
+                    ui_changed = True
             ui_bp = getattr(cnv_bp, "value", None)
             if ui_bp is not None:
                 desired = ui_bp == "show"
@@ -2467,6 +3191,14 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
                 want_bin = _cnv_plot_bin_bp_from_ui(ui_plot_bin)
                 if want_bin != state.get("plot_bin_width"):
                     state["plot_bin_width"] = want_bin
+                    ui_changed = True
+            ui_gene_cov = getattr(cnv_gene_cov_filter, "value", None)
+            if ui_gene_cov is not None:
+                want_filter = _cnv_gene_coverage_filter_from_ui(ui_gene_cov)
+                if want_filter != state.get(
+                    "gene_coverage_filter", _CNV_GENE_COVERAGE_FILTER_OUTLIERS
+                ):
+                    state["gene_coverage_filter"] = want_filter
                     ui_changed = True
         except Exception:
             pass
@@ -2499,10 +3231,6 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
         data_array_npy_changed = prev_data_array_npy_mtime != data_array_npy_mtime
         xy_pkl_changed = prev_xy_pkl_mtime != xy_pkl_mtime
 
-        force_color_refresh = state.get("_force_color_refresh", False)
-        force_gene_refresh = state.get("_force_gene_refresh", False)
-        force_chrom_refresh = state.get("_force_chrom_refresh", False)
-
         files_changed = (
             cnv_npy_changed
             or cnv3_npy_changed
@@ -2515,9 +3243,7 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
             is_fresh_visit
             or files_changed
             or ui_changed
-            or force_color_refresh
-            or force_gene_refresh
-            or force_chrom_refresh
+            or force_refresh
             or not state.get("_rendered_once")
         )
 
@@ -2547,6 +3273,10 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
             reasons.append("force_gene_refresh")
         if force_chrom_refresh:
             reasons.append("force_chrom_refresh")
+        if force_gene_cov_filter_refresh:
+            reasons.append("force_gene_cov_filter_refresh")
+        if force_ui_refresh:
+            reasons.append("force_ui_refresh")
         if not state.get("_rendered_once"):
             reasons.append("first_render")
         logging.debug(f"[CNV] Update needed. Reasons: {', '.join(reasons)}")
@@ -2752,6 +3482,10 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
             force_color_refresh = state.get("_force_color_refresh", False)
             force_gene_refresh = state.get("_force_gene_refresh", False)
             force_chrom_refresh = state.get("_force_chrom_refresh", False)
+            force_gene_cov_filter_refresh = state.get(
+                "_force_gene_cov_filter_refresh", False
+            )
+            force_ui_refresh = state.get("_force_ui_refresh", False)
             if (
                 changed
                 or ui_changed
@@ -2759,6 +3493,8 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
                 or force_color_refresh
                 or force_gene_refresh
                 or force_chrom_refresh
+                or force_gene_cov_filter_refresh
+                or force_ui_refresh
             ):
                 _render_cnv_from_state(state)
                 state["_rendered_once"] = True
@@ -2768,6 +3504,10 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
                     state["_force_gene_refresh"] = False
                 if force_chrom_refresh:
                     state["_force_chrom_refresh"] = False
+                if force_gene_cov_filter_refresh:
+                    state["_force_gene_cov_filter_refresh"] = False
+                if force_ui_refresh:
+                    state["_force_ui_refresh"] = False
 
             _update_cnv_events_analysis(state)
 
@@ -2920,6 +3660,12 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
                 else (getattr(ev, "args", None) or default)
             )
 
+        def _force_redraw_with_marker_autoscale() -> None:
+            """Every CNV control click should re-render and re-fit Y to markers."""
+            st = launcher._cnv_state.setdefault(str(sample_dir), {})
+            st["_force_ui_refresh"] = True
+            ui.timer(0.05, _refresh_cnv, once=True)
+
         def _on_chrom(ev):
             st = launcher._cnv_state.setdefault(str(sample_dir), {})
             st["selected_chrom"] = _val(ev, "All") or "All"
@@ -2938,21 +3684,19 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
                         chart.options["dataZoom"][0].pop("endValue", None)
             except Exception:
                 pass
-            # Trigger immediate refresh to update all UI elements
-            ui.timer(0.1, _refresh_cnv, once=True)
+            _force_redraw_with_marker_autoscale()
 
         def _on_scale(ev):
             st = launcher._cnv_state.setdefault(str(sample_dir), {})
-            st["y_scale"] = _val(ev, "linear") or "linear"
-            # Trigger immediate refresh to update all UI elements
-            ui.timer(0.1, _refresh_cnv, once=True)
+            raw = str(_val(ev, "linear") or "linear").strip().lower()
+            st["y_scale"] = "log" if "log" in raw else "linear"
+            _force_redraw_with_marker_autoscale()
 
         def _on_bp(ev):
             st = launcher._cnv_state.setdefault(str(sample_dir), {})
             show_bp = _val(ev, "show") == "show"
             st["show_bp"] = show_bp
-            # Trigger immediate refresh to update all UI elements
-            ui.timer(0.1, _refresh_cnv, once=True)
+            _force_redraw_with_marker_autoscale()
 
         def _on_color(ev):
             st = launcher._cnv_state.setdefault(str(sample_dir), {})
@@ -2967,9 +3711,7 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
                 st["color_mode"] = "chromosome"
             # Force a refresh by setting a flag that bypasses the state sync logic
             st["_force_color_refresh"] = True
-            
-            # Trigger immediate refresh to update all UI elements
-            ui.timer(0.1, _refresh_cnv, once=True)
+            _force_redraw_with_marker_autoscale()
 
         def _on_plot_bin(ev):
             st = launcher._cnv_state.setdefault(str(sample_dir), {})
@@ -2978,7 +3720,7 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
                 v = ev.value
             st["plot_bin_width"] = _cnv_plot_bin_bp_from_ui(v)
             st["_force_chrom_refresh"] = True  # force re-render with new bin width
-            ui.timer(0.1, _refresh_cnv, once=True)
+            _force_redraw_with_marker_autoscale()
 
         # Bind both native change and model-value updates for robustness
         cnv_chrom_select.on("change", _on_chrom)
@@ -2990,11 +3732,21 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
             selected_gene = _val(ev, "All") or "All"
             st["selected_gene"] = selected_gene
             st["_force_gene_refresh"] = True  # Force refresh for gene selection
-            # Trigger immediate refresh to update all UI elements
-            ui.timer(0.1, _refresh_cnv, once=True)
+            _force_redraw_with_marker_autoscale()
 
         cnv_gene_select.on("change", _on_gene)
         cnv_gene_select.on("update:model-value", _on_gene)
+
+        def _on_gene_cov_filter(ev):
+            st = launcher._cnv_state.setdefault(str(sample_dir), {})
+            st["gene_coverage_filter"] = _cnv_gene_coverage_filter_from_ui(
+                _val(ev, _CNV_GENE_COVERAGE_FILTER_OUTLIERS)
+            )
+            st["_force_gene_cov_filter_refresh"] = True
+            _force_redraw_with_marker_autoscale()
+
+        cnv_gene_cov_filter.on("change", _on_gene_cov_filter)
+        cnv_gene_cov_filter.on("update:model-value", _on_gene_cov_filter)
         cnv_scale.on("change", _on_scale)
         cnv_scale.on("update:model-value", _on_scale)
         cnv_plot_bin.on("change", _on_plot_bin)
