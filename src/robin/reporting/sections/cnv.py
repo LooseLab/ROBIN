@@ -8,6 +8,8 @@ import os
 import re
 import pickle
 import logging
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 import natsort
@@ -52,10 +54,31 @@ from robin.analysis.cnv_regional import (
 )
 from robin.reference_contigs import is_visible_contig
 from robin.classification_config import get_cnv_thresholds, is_resolution_sufficient
+from robin.workflow_config import get_cnv_genes, load_workflow_toml
 
 from robin import resources
 
 logger = logging.getLogger(__name__)
+
+
+def _resolve_configured_cnv_genes(output_dir: str) -> tuple[str, ...]:
+    """Resolve ``[cnv].genes`` for report overlays from env/TOML or sample pointer."""
+    genes = get_cnv_genes()
+    if genes:
+        return genes
+    pointer = Path(output_dir) / ".robin_workflow_toml"
+    if not pointer.is_file():
+        return ()
+    try:
+        toml_path = Path(pointer.read_text(encoding="utf-8").strip())
+        if toml_path.is_file():
+            return get_cnv_genes(load_workflow_toml(toml_path))
+    except Exception:
+        logger.debug(
+            "Could not resolve [cnv].genes from sample workflow pointer",
+            exc_info=True,
+        )
+    return ()
 
 
 def calculate_chromosome_stats(result, ref_result, XYestimate):
@@ -341,6 +364,7 @@ class CNVSection(ReportSection):
 
             panel_name, panel_genes_df = load_panel_gene_bed(self.report.output)
             target_coverage_df = load_target_coverage_df(self.report.output)
+            configured_genes = _resolve_configured_cnv_genes(self.report.output)
             scope = getattr(self.report, "reference_contig_scope", None)
             reportable_chromosomes = [
                 chrom
@@ -596,6 +620,7 @@ class CNVSection(ReportSection):
                 target_coverage_df=target_coverage_df,
                 significant_regions=significant_regions,
                 reference_contig_scope=scope,
+                configured_genes=configured_genes,
             )
             summary_caption_scale = (
                 "normalized_difference" if use_normalized_summary else "ploidy"
@@ -826,17 +851,29 @@ class CNVSection(ReportSection):
                     )
 
                 if panel_name and not panel_genes_df.empty:
+                    if configured_genes:
+                        gene_selection_blurb = (
+                            "Coverage markers show configured "
+                            f"[cnv].genes targets ({len(configured_genes)}): "
+                            + ", ".join(configured_genes)
+                            + ". "
+                        )
+                    else:
+                        gene_selection_blurb = (
+                            "Coverage markers show panel targets >3 SD from the "
+                            "chromosome mean. "
+                        )
                     panel_plot_blurb = (
                         "Scatter points show bin-level log2(ploidy / expected copy number); "
-                        "the dark trace is a rolling median. Panel target points (right axis) show "
-                        "significantly altered genes at sequencing coverage depth; dashed line = "
-                        "mean panel coverage."
+                        "the dark trace is a rolling median. Gene markers show sequencing "
+                        "coverage normalised onto the shared CNV axis "
+                        "(log2(cov / mean cov) in log mode)."
                         if use_normalized_summary
                         else (
                             "Scatter points show bin-level copy number; the dark "
-                            "trace is a rolling median. Panel target points (right axis) show "
-                            "significantly altered genes at sequencing coverage depth; dashed line = "
-                            "mean panel coverage."
+                            "trace is a rolling median. Gene markers show sequencing "
+                            "coverage normalised onto the shared CNV axis "
+                            "(mean_cnv × cov / mean cov)."
                         )
                     )
                     self.elements.append(
@@ -845,10 +882,10 @@ class CNVSection(ReportSection):
                                 f"Individual chromosome plots include coverage-scaled markers for "
                                 f"genes in the <b>{panel_name}</b> target panel "
                                 f"({len(panel_genes_df)} genes). "
+                                f"{gene_selection_blurb}"
                                 f"{panel_plot_blurb} "
-                                "Genes are labelled when >3 SD from the chromosome mean; "
-                                "the right-hand coverage axis appears only on chromosomes "
-                                "with such outlier targets."
+                                "Coverage is normalised to the genome-wide mean "
+                                "target coverage so gene markers match the summary plot."
                             ),
                             ParagraphStyle(
                                 "PanelGeneLegend",
@@ -881,6 +918,7 @@ class CNVSection(ReportSection):
                     sex_estimate=str(XYestimate),
                     fig_height=chromosome_plot_height_inch,
                     fig_width=chromosome_plot_width_inch,
+                    configured_genes=configured_genes,
                 )
                 plot_lookup = dict(chromosome_plots)
                 plotted_chromosomes = [
