@@ -936,7 +936,16 @@ def _cnv_plot_bin_key_from_bp(bp: Optional[int]) -> str:
 
 
 def _cnv_gene_coverage_filter_from_ui(value: Any) -> str:
-    """Normalize Coverage genes toggle value/label to a filter mode key."""
+    """Normalize Coverage genes switch value to a filter mode key.
+
+    Switch semantics: True / on = outliers only; False / off = all configured genes.
+    """
+    if isinstance(value, bool):
+        return (
+            _CNV_GENE_COVERAGE_FILTER_OUTLIERS
+            if value
+            else _CNV_GENE_COVERAGE_FILTER_ALL
+        )
     if isinstance(value, dict):
         inner = value.get("value", value.get("label"))
         if inner is not None and inner is not value:
@@ -945,15 +954,23 @@ def _cnv_gene_coverage_filter_from_ui(value: Any) -> str:
     if vlow in (
         _CNV_GENE_COVERAGE_FILTER_ALL,
         "all genes",
+        "all",
+        "false",
+        "0",
+        "off",
     ):
         return _CNV_GENE_COVERAGE_FILTER_ALL
     if vlow in (
         _CNV_GENE_COVERAGE_FILTER_OUTLIERS,
+        "outliers only",
+        "outliers",
         "≠ average",
         "!= average",
         "vs average",
-        "average",
         "not average",
+        "true",
+        "1",
+        "on",
     ):
         return _CNV_GENE_COVERAGE_FILTER_OUTLIERS
     return _CNV_GENE_COVERAGE_FILTER_OUTLIERS
@@ -1502,39 +1519,84 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
                 cnv_gene_select = ui.select(options={"All": "All"}, value="All").style(
                     "width: 200px"
                 )
-                ui.label("Coverage genes").classes("classification-insight-meta ml-2")
-                cnv_gene_cov_filter = ui.toggle(
-                    options={
-                        _CNV_GENE_COVERAGE_FILTER_ALL: "All",
-                        _CNV_GENE_COVERAGE_FILTER_OUTLIERS: "≠ average",
-                    },
-                    value=_CNV_GENE_COVERAGE_FILTER_OUTLIERS,
-                ).classes("mt-1")
-                ui.label("Color by").classes("classification-insight-meta ml-2")
-                cnv_color = ui.toggle(
-                    options={"chromosome": "Chromosome", "value": "Up/Down"},
-                    value="chromosome",
-                ).classes("mt-1")
-                ui.label("Y-axis").classes("classification-insight-meta ml-2")
-                from robin.gui.plotting_preferences import resolve_cnv_summary_normalized
+                _cnv_ui_state = launcher._cnv_state.setdefault(str(sample_dir), {})
+                from robin.gui.plotting_preferences import (
+                    resolve_cnv_gui_color_mode,
+                    resolve_cnv_gui_gene_coverage_filter,
+                    resolve_cnv_gui_show_breakpoints,
+                    resolve_cnv_gui_y_scale,
+                )
 
-                default_y_scale = (
-                    "log"
-                    if resolve_cnv_summary_normalized(
-                        None,
-                        plotting_preferences=getattr(
-                            launcher, "plotting_preferences", None
-                        ),
+                _plot_prefs = getattr(launcher, "plotting_preferences", None)
+                if "gene_coverage_filter" not in _cnv_ui_state:
+                    _cnv_ui_state["gene_coverage_filter"] = (
+                        resolve_cnv_gui_gene_coverage_filter(_plot_prefs)
                     )
-                    else "linear"
-                )
-                cnv_scale = ui.toggle(
-                    options={"linear": "Linear", "log": "Log2 ratio"},
-                    value=default_y_scale,
-                ).classes("mt-1")
-                launcher._cnv_state.setdefault(str(sample_dir), {}).setdefault(
-                    "y_scale", default_y_scale
-                )
+                if "color_mode" not in _cnv_ui_state:
+                    _cnv_ui_state["color_mode"] = resolve_cnv_gui_color_mode(
+                        _plot_prefs
+                    )
+                if "y_scale" not in _cnv_ui_state:
+                    _cnv_ui_state["y_scale"] = resolve_cnv_gui_y_scale(_plot_prefs)
+                if "show_bp" not in _cnv_ui_state:
+                    _cnv_ui_state["show_bp"] = resolve_cnv_gui_show_breakpoints(
+                        _plot_prefs
+                    )
+
+                ui.label("Coverage genes").classes("classification-insight-meta ml-2")
+                _gene_cov_filter = _cnv_ui_state.get("gene_coverage_filter")
+                if _gene_cov_filter not in _CNV_GENE_COVERAGE_FILTERS:
+                    _gene_cov_filter = resolve_cnv_gui_gene_coverage_filter(_plot_prefs)
+                _cnv_ui_state["gene_coverage_filter"] = _gene_cov_filter
+                with ui.row().classes("items-center gap-1"):
+                    ui.label("All").classes("classification-insight-meta")
+                    cnv_gene_cov_filter = (
+                        ui.switch(
+                            value=_gene_cov_filter
+                            == _CNV_GENE_COVERAGE_FILTER_OUTLIERS,
+                        )
+                        .props("dense")
+                        .tooltip(
+                            "Left: all configured genes · Right: outliers only"
+                        )
+                    )
+                    cnv_gene_cov_filter.value = (
+                        _gene_cov_filter == _CNV_GENE_COVERAGE_FILTER_OUTLIERS
+                    )
+                    ui.label("Outliers").classes("classification-insight-meta")
+                ui.label("Color by").classes("classification-insight-meta ml-2")
+                _color_mode = _cnv_ui_state.get("color_mode", "chromosome")
+                if _color_mode not in ("chromosome", "value"):
+                    _color_mode = resolve_cnv_gui_color_mode(_plot_prefs)
+                _cnv_ui_state["color_mode"] = _color_mode
+                with ui.row().classes("items-center gap-1"):
+                    ui.label("Chromosome").classes("classification-insight-meta")
+                    cnv_color = (
+                        ui.switch(value=_color_mode == "value")
+                        .props("dense")
+                        .tooltip(
+                            "Left: colour by chromosome · Right: gain/loss (up/down)"
+                        )
+                    )
+                    cnv_color.value = _color_mode == "value"
+                    ui.label("Up/Down").classes("classification-insight-meta")
+                ui.label("Y-axis").classes("classification-insight-meta ml-2")
+                default_y_scale = resolve_cnv_gui_y_scale(_plot_prefs)
+                _y_scale = _cnv_ui_state.get("y_scale", default_y_scale)
+                if _y_scale not in ("linear", "log"):
+                    _y_scale = default_y_scale
+                _cnv_ui_state["y_scale"] = _y_scale
+                with ui.row().classes("items-center gap-1"):
+                    ui.label("Linear").classes("classification-insight-meta")
+                    cnv_scale = (
+                        ui.switch(value=_y_scale == "log")
+                        .props("dense")
+                        .tooltip(
+                            "Left: linear ploidy · Right: log2(ploidy / expected)"
+                        )
+                    )
+                    cnv_scale.value = _y_scale == "log"
+                    ui.label("Log2").classes("classification-insight-meta")
                 ui.label("Plot bin").classes("classification-insight-meta ml-2")
                 cnv_plot_bin = ui.select(
                     options=_CNV_PLOT_BIN_OPTIONS,
@@ -1543,9 +1605,19 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
                 cnv_bp_label = ui.label("Breakpoints").classes(
                     "classification-insight-meta ml-2"
                 ).style("display: none")
-                cnv_bp = ui.toggle(
-                    options={"hide": "Hide", "show": "Show"}, value="show"
-                ).classes("mt-1").style("display: none")
+                with ui.row().classes("items-center gap-1").style(
+                    "display: none"
+                ) as cnv_bp_row:
+                    ui.label("Hide").classes("classification-insight-meta")
+                    cnv_bp = (
+                        ui.switch(value=bool(_cnv_ui_state.get("show_bp", True)))
+                        .props("dense")
+                        .tooltip(
+                            "Show candidate breakpoint markers on single-chromosome view"
+                        )
+                    )
+                    cnv_bp.value = bool(_cnv_ui_state.get("show_bp", True))
+                    ui.label("Show").classes("classification-insight-meta")
             with ui.element("div").classes("w-full target-coverage-panel__plot-wrap"):
                 cnv_abs = ui.echart(
                     {
@@ -2241,8 +2313,11 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
                 )
                 if want_filter not in _CNV_GENE_COVERAGE_FILTERS:
                     want_filter = _CNV_GENE_COVERAGE_FILTER_OUTLIERS
-                if getattr(cnv_gene_cov_filter, "value", None) != want_filter:
-                    cnv_gene_cov_filter.value = want_filter
+                # Switch is boolean: True = outliers, False = all.
+                want_outliers = want_filter == _CNV_GENE_COVERAGE_FILTER_OUTLIERS
+                current = getattr(cnv_gene_cov_filter, "value", None)
+                if current is not want_outliers:
+                    cnv_gene_cov_filter.value = want_outliers
                     cnv_gene_cov_filter.update()
             except Exception:
                 pass
@@ -3165,27 +3240,59 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
                 ui_changed = True
             ui_scale = getattr(cnv_scale, "value", None)
             if ui_scale is not None:
-                scale_key = str(ui_scale).strip().lower()
-                if scale_key in ("log", "log2", "log2 ratio", "log2 ratio (ploidy / expected)"):
-                    want_scale = "log"
-                elif scale_key in ("linear", "ploidy"):
-                    want_scale = "linear"
+                # Switch: True = log2 ratio, False = linear ploidy.
+                if isinstance(ui_scale, bool):
+                    want_scale = "log" if ui_scale else "linear"
                 else:
-                    want_scale = "log" if "log" in scale_key else state.get("y_scale", "linear")
+                    scale_key = str(ui_scale).strip().lower()
+                    if scale_key in (
+                        "log",
+                        "log2",
+                        "log2 ratio",
+                        "log2 ratio (ploidy / expected)",
+                        "true",
+                        "1",
+                    ):
+                        want_scale = "log"
+                    elif scale_key in ("linear", "ploidy", "false", "0"):
+                        want_scale = "linear"
+                    else:
+                        want_scale = (
+                            "log" if "log" in scale_key else state.get("y_scale", "linear")
+                        )
                 if want_scale != state.get("y_scale"):
                     state["y_scale"] = want_scale
                     ui_changed = True
             ui_bp = getattr(cnv_bp, "value", None)
             if ui_bp is not None:
-                desired = ui_bp == "show"
+                # Switch: True = show breakpoints, False = hide.
+                if isinstance(ui_bp, bool):
+                    desired = ui_bp
+                else:
+                    desired = str(ui_bp).strip().lower() in (
+                        "show",
+                        "true",
+                        "1",
+                        "on",
+                    )
                 if desired != state.get("show_bp", True):
                     state["show_bp"] = desired
                     ui_changed = True
             ui_color = getattr(cnv_color, "value", None)
             current_color_mode = state.get("color_mode", "chromosome")
-            if ui_color and ui_color != current_color_mode:
-                state["color_mode"] = ui_color
-                ui_changed = True
+            if ui_color is not None:
+                # Switch: True = up/down, False = chromosome.
+                if isinstance(ui_color, bool):
+                    want_color = "value" if ui_color else "chromosome"
+                else:
+                    vlow = str(ui_color).strip().lower()
+                    if vlow in ("value", "up/down", "updown", "true", "1"):
+                        want_color = "value"
+                    else:
+                        want_color = "chromosome"
+                if want_color != current_color_mode:
+                    state["color_mode"] = want_color
+                    ui_changed = True
             ui_plot_bin = getattr(cnv_plot_bin, "value", None)
             if ui_plot_bin is not None:
                 want_bin = _cnv_plot_bin_bp_from_ui(ui_plot_bin)
@@ -3194,12 +3301,27 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
                     ui_changed = True
             ui_gene_cov = getattr(cnv_gene_cov_filter, "value", None)
             if ui_gene_cov is not None:
-                want_filter = _cnv_gene_coverage_filter_from_ui(ui_gene_cov)
+                # Coerce legacy string values that may still be on the widget.
+                if isinstance(ui_gene_cov, bool):
+                    want_filter = (
+                        _CNV_GENE_COVERAGE_FILTER_OUTLIERS
+                        if ui_gene_cov
+                        else _CNV_GENE_COVERAGE_FILTER_ALL
+                    )
+                else:
+                    want_filter = _cnv_gene_coverage_filter_from_ui(ui_gene_cov)
                 if want_filter != state.get(
                     "gene_coverage_filter", _CNV_GENE_COVERAGE_FILTER_OUTLIERS
                 ):
                     state["gene_coverage_filter"] = want_filter
                     ui_changed = True
+                # Keep the widget strictly boolean after any legacy string value.
+                want_outliers = want_filter == _CNV_GENE_COVERAGE_FILTER_OUTLIERS
+                if ui_gene_cov is not want_outliers:
+                    try:
+                        cnv_gene_cov_filter.value = want_outliers
+                    except Exception:
+                        pass
         except Exception:
             pass
 
@@ -3632,7 +3754,7 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
             try:
                 display_value = "block" if should_show else "none"
                 cnv_bp_label.style(f"display: {display_value}")
-                cnv_bp.style(f"display: {display_value}")
+                cnv_bp_row.style(f"display: {display_value}")
             except Exception:
                 pass
         except Exception:
@@ -3642,23 +3764,36 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
     try:
 
         def _val(ev, default=None):
-            # Handle toggle events which have args like [index, {'value': X, 'label': 'Y'}]
-            if hasattr(ev, "args") and ev.args and isinstance(ev.args, list) and len(ev.args) >= 2:
-                if isinstance(ev.args[1], dict):
-                    # Extract the label from the toggle event structure
-                    return ev.args[1].get("label", default)
+            # Prefer boolean switch values before legacy toggle label parsing.
+            if hasattr(ev, "value") and isinstance(ev.value, bool):
+                return ev.value
+            args = getattr(ev, "args", None)
+            if isinstance(args, bool):
+                return args
+            if isinstance(args, (list, tuple)) and args and isinstance(args[0], bool):
+                return args[0]
+            # Handle select/toggle events like [index, {'value': X, 'label': 'Y'}]
+            if isinstance(args, list) and len(args) >= 2 and isinstance(args[1], dict):
+                return args[1].get("label", default)
             # Handle direct value objects like {'value': 2, 'label': 'GNB1'}
             if hasattr(ev, "value") and isinstance(ev.value, dict):
                 return ev.value.get("label", default)
             # Handle args that are directly a dictionary with label
-            if hasattr(ev, "args") and isinstance(ev.args, dict) and "label" in ev.args:
-                return ev.args.get("label", default)
+            if isinstance(args, dict) and "label" in args:
+                return args.get("label", default)
             # Fallback to standard value extraction
-            return (
-                getattr(ev, "value", None)
-                if hasattr(ev, "value")
-                else (getattr(ev, "args", None) or default)
-            )
+            if hasattr(ev, "value"):
+                return ev.value
+            return args if args is not None else default
+
+        def _switch_bool(ev, *, default: bool = False) -> bool:
+            """Read a ui.switch boolean, falling back to the widget value if needed."""
+            raw = _val(ev, None)
+            if isinstance(raw, bool):
+                return raw
+            if raw is None:
+                return default
+            return str(raw).strip().lower() in ("true", "1", "on", "show")
 
         def _force_redraw_with_marker_autoscale() -> None:
             """Every CNV control click should re-render and re-fit Y to markers."""
@@ -3688,27 +3823,33 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
 
         def _on_scale(ev):
             st = launcher._cnv_state.setdefault(str(sample_dir), {})
-            raw = str(_val(ev, "linear") or "linear").strip().lower()
-            st["y_scale"] = "log" if "log" in raw else "linear"
+            st["y_scale"] = "log" if _switch_bool(ev, default=False) else "linear"
+            # Prefer live widget value if event parsing failed.
+            try:
+                if isinstance(getattr(cnv_scale, "value", None), bool):
+                    st["y_scale"] = "log" if cnv_scale.value else "linear"
+            except Exception:
+                pass
             _force_redraw_with_marker_autoscale()
 
         def _on_bp(ev):
             st = launcher._cnv_state.setdefault(str(sample_dir), {})
-            show_bp = _val(ev, "show") == "show"
-            st["show_bp"] = show_bp
+            st["show_bp"] = _switch_bool(ev, default=True)
+            try:
+                if isinstance(getattr(cnv_bp, "value", None), bool):
+                    st["show_bp"] = bool(cnv_bp.value)
+            except Exception:
+                pass
             _force_redraw_with_marker_autoscale()
 
         def _on_color(ev):
             st = launcher._cnv_state.setdefault(str(sample_dir), {})
-            val = _val(ev, "chromosome") or "chromosome"
-            # Accept either keys or labels from the toggle
-            vlow = str(val).strip().lower()
-            if vlow in ("chromosome", "chromosomes"):
-                st["color_mode"] = "chromosome"
-            elif vlow in ("value", "up/down", "updown", "up_down", "up down"):
-                st["color_mode"] = "value"
-            else:
-                st["color_mode"] = "chromosome"
+            st["color_mode"] = "value" if _switch_bool(ev, default=False) else "chromosome"
+            try:
+                if isinstance(getattr(cnv_color, "value", None), bool):
+                    st["color_mode"] = "value" if cnv_color.value else "chromosome"
+            except Exception:
+                pass
             # Force a refresh by setting a flag that bypasses the state sync logic
             st["_force_color_refresh"] = True
             _force_redraw_with_marker_autoscale()
@@ -3739,9 +3880,26 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
 
         def _on_gene_cov_filter(ev):
             st = launcher._cnv_state.setdefault(str(sample_dir), {})
-            st["gene_coverage_filter"] = _cnv_gene_coverage_filter_from_ui(
-                _val(ev, _CNV_GENE_COVERAGE_FILTER_OUTLIERS)
+            # Prefer the live widget boolean; event args can be ambiguous.
+            enabled = True
+            try:
+                raw = getattr(cnv_gene_cov_filter, "value", None)
+                if isinstance(raw, bool):
+                    enabled = raw
+                else:
+                    enabled = _switch_bool(ev, default=True)
+            except Exception:
+                enabled = _switch_bool(ev, default=True)
+            st["gene_coverage_filter"] = (
+                _CNV_GENE_COVERAGE_FILTER_OUTLIERS
+                if enabled
+                else _CNV_GENE_COVERAGE_FILTER_ALL
             )
+            try:
+                if cnv_gene_cov_filter.value is not enabled:
+                    cnv_gene_cov_filter.value = enabled
+            except Exception:
+                pass
             st["_force_gene_cov_filter_refresh"] = True
             _force_redraw_with_marker_autoscale()
 

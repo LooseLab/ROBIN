@@ -451,8 +451,12 @@ def _build_sample_display_panel(launcher: "GUILauncher") -> None:
 
 def _build_plotting_preferences_panel(launcher: "GUILauncher") -> None:
     from robin.gui.plotting_preferences import (
-        CNV_REPORT_SCALE_LABELS,
-        CNV_REPORT_SCALES,
+        CNV_GUI_COLOR_MODE_CHROMOSOME,
+        CNV_GUI_COLOR_MODE_VALUE,
+        CNV_GUI_GENE_COVERAGE_FILTER_ALL,
+        CNV_GUI_GENE_COVERAGE_FILTER_OUTLIERS,
+        CNV_REPORT_SCALE_NORMALIZED_DIFFERENCE,
+        CNV_REPORT_SCALE_PLOIDY,
         PlottingPreferencesConfig,
     )
     from robin.reference_contigs import (
@@ -466,26 +470,78 @@ def _build_plotting_preferences_panel(launcher: "GUILauncher") -> None:
         else PlottingPreferencesConfig()
     )
 
+    def _labeled_switch(
+        *,
+        left: str,
+        right: str,
+        value: bool,
+        tooltip: str,
+    ):
+        with ui.row().classes("items-center gap-2 flex-wrap"):
+            ui.label(left).classes("classification-insight-meta")
+            switch = ui.switch(value=bool(value)).props("dense").tooltip(tooltip)
+            switch.value = bool(value)
+            ui.label(right).classes("classification-insight-meta")
+        return switch
+
     with ui.element("div").classes("classification-insight-card w-full min-w-0"):
         with ui.column().classes("w-full min-w-0 gap-3 p-2 md:p-3"):
             ui.label("Report plotting").classes("classification-insight-model")
             ui.label(
-                "Global defaults for CNV figures in the live GUI and generated PDF reports. "
-                "CNV plots can use absolute ploidy or log2(ploidy / expected copy number). "
-                "Reports from the GUI and reporting CLI "
-                "use this setting unless --cnv-normalized-difference is passed on the CLI."
+                "Global defaults for CNV controls in the live GUI and for CNV figures "
+                "in generated PDF reports. The Y-axis default applies to both; other "
+                "toggles apply when opening a sample CNV view. Reports from the GUI "
+                "and reporting CLI use the Y-axis setting unless "
+                "--cnv-normalized-difference is passed on the CLI."
             ).classes("classification-insight-foot mb-2")
 
-            ui.label("Copy number variation (CNV)").classes(
+            ui.label("CNV Y-axis (GUI + report)").classes(
                 "classification-insight-meta font-medium mt-2"
             )
-            scale_toggle = ui.toggle(
-                {
-                    scale: CNV_REPORT_SCALE_LABELS[scale]
-                    for scale in CNV_REPORT_SCALES
-                },
-                value=current.cnv_report_scale,
-            ).classes("w-full")
+            scale_switch = _labeled_switch(
+                left="Linear",
+                right="Log2",
+                value=current.cnv_report_scale
+                == CNV_REPORT_SCALE_NORMALIZED_DIFFERENCE,
+                tooltip=(
+                    "Left: estimated ploidy · Right: log2(ploidy / expected)"
+                ),
+            )
+
+            ui.label("CNV coverage genes (GUI)").classes(
+                "classification-insight-meta font-medium mt-2"
+            )
+            gene_cov_switch = _labeled_switch(
+                left="All",
+                right="Outliers",
+                value=current.cnv_gui_gene_coverage_filter
+                == CNV_GUI_GENE_COVERAGE_FILTER_OUTLIERS,
+                tooltip="Left: all configured genes · Right: outliers only",
+            )
+
+            ui.label("CNV colour by (GUI)").classes(
+                "classification-insight-meta font-medium mt-2"
+            )
+            color_switch = _labeled_switch(
+                left="Chromosome",
+                right="Up/Down",
+                value=current.cnv_gui_color_mode == CNV_GUI_COLOR_MODE_VALUE,
+                tooltip=(
+                    "Left: colour by chromosome · Right: gain/loss (up/down)"
+                ),
+            )
+
+            ui.label("CNV breakpoints (GUI)").classes(
+                "classification-insight-meta font-medium mt-2"
+            )
+            bp_switch = _labeled_switch(
+                left="Hide",
+                right="Show",
+                value=bool(current.cnv_gui_show_breakpoints),
+                tooltip=(
+                    "Default for breakpoint markers on single-chromosome CNV view"
+                ),
+            )
 
             ui.label("Reference contigs in plots").classes(
                 "classification-insight-meta font-medium mt-2"
@@ -507,15 +563,30 @@ def _build_plotting_preferences_panel(launcher: "GUILauncher") -> None:
 
             def _save() -> None:
                 nonlocal current
-                scale = str(scale_toggle.value or current.cnv_report_scale)
-                if scale not in CNV_REPORT_SCALES:
-                    scale = current.cnv_report_scale
+                scale = (
+                    CNV_REPORT_SCALE_NORMALIZED_DIFFERENCE
+                    if bool(scale_switch.value)
+                    else CNV_REPORT_SCALE_PLOIDY
+                )
+                gene_filter = (
+                    CNV_GUI_GENE_COVERAGE_FILTER_OUTLIERS
+                    if bool(gene_cov_switch.value)
+                    else CNV_GUI_GENE_COVERAGE_FILTER_ALL
+                )
+                color_mode = (
+                    CNV_GUI_COLOR_MODE_VALUE
+                    if bool(color_switch.value)
+                    else CNV_GUI_COLOR_MODE_CHROMOSOME
+                )
                 contig_scope = str(
                     contig_scope_select.value or current.reference_contig_scope
                 )
                 updated = current.with_updates(
                     cnv_report_scale=scale,
                     reference_contig_scope=contig_scope,
+                    cnv_gui_gene_coverage_filter=gene_filter,
+                    cnv_gui_color_mode=color_mode,
+                    cnv_gui_show_breakpoints=bool(bp_switch.value),
                 )
                 launcher.save_plotting_preferences(
                     updated,
@@ -529,7 +600,9 @@ def _build_plotting_preferences_panel(launcher: "GUILauncher") -> None:
                 ui.notify("Plotting preferences saved", type="positive")
 
             with ui.row().classes("w-full gap-2 flex-wrap mt-2"):
-                ui.button("Save", icon="save", on_click=_save).props("color=primary no-caps")
+                ui.button("Save", icon="save", on_click=_save).props(
+                    "color=primary no-caps"
+                )
 
             if current.updated_at:
                 by = f" by {current.updated_by}" if current.updated_by else ""
