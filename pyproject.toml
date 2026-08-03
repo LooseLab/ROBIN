@@ -57,7 +57,7 @@ dependencies = [
     "requests",
     "PyPDF2",
     "alive-progress",
-    "nicegui>=3.6",
+    "nicegui>=3.15.0",
     "argon2-cffi>=23.1.0",
     "gff3_parser",
     "dna_features_viewer", 
@@ -81,7 +81,7 @@ dependencies = [
 
 [project.optional-dependencies]
 gui = [
-    "nicegui>=3.0.4",
+    "nicegui>=3.15.0",
 ]
 minknow = [
     # Install a minor version matching MinKNOW Core, e.g. pip install 'minknow_api>=6.8.0,<6.9.0'
