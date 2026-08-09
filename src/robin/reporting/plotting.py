@@ -50,10 +50,12 @@ CNV_COLORS = {
     "plot_neutral": "#9CA3AF",
 }
 
-# Scatter alpha for dense CNV tracks (lower = clearer overplotting).
-CNV_POINT_ALPHA_NEUTRAL = 0.18
-CNV_POINT_ALPHA_CALLED = 0.28
-CNV_POINT_ALPHA_DEFAULT = 0.22
+# Scatter styling for dense CNV tracks.
+CNV_POINT_MARKER = "."
+CNV_POINT_ALPHA = 1.0
+CNV_POINT_ALPHA_NEUTRAL = CNV_POINT_ALPHA
+CNV_POINT_ALPHA_CALLED = CNV_POINT_ALPHA
+CNV_POINT_ALPHA_DEFAULT = CNV_POINT_ALPHA
 
 _CNV_GENE_LABEL_PATH_EFFECTS = [
     mpath_effects.withStroke(linewidth=2.6, foreground="white", alpha=0.95),
@@ -84,6 +86,10 @@ CNV_CHROMOSOME_PLOTS_PER_PAGE = 4
 CNV_CHROMOSOME_PLOT_SPACER_PT = 6
 # ReportLab's default Frame uses 6pt padding on each side.
 CNV_REPORT_FRAME_PADDING_PT = 12
+# Genome-wide summary plot sits on a dedicated A4 landscape page.
+CNV_GENOME_LANDSCAPE_FIG_WIDTH = 16.0
+CNV_GENOME_LANDSCAPE_FIG_HEIGHT = 6.0
+CNV_GENOME_LANDSCAPE_CAPTION_RESERVE_PT = 42.0
 
 _CNV_FONT_REGULAR: Optional[fm.FontProperties] = None
 _CNV_FONT_BOLD: Optional[fm.FontProperties] = None
@@ -233,6 +239,7 @@ def _plot_cnv_track(
         cnv_df["ploidy"],
         s=point_size,
         c=CNV_COLORS["points"],
+        marker=CNV_POINT_MARKER,
         alpha=CNV_POINT_ALPHA_DEFAULT,
         linewidths=0,
         edgecolors="none",
@@ -581,10 +588,17 @@ def _add_panel_coverage_points(
     min_x_spacing: float,
     y_min: float,
     y_max: float,
+    label_font_size: Optional[int] = None,
 ) -> bool:
     """Plot panel genes as coverage normalised onto the shared CNV axis."""
     if not coverage_points:
         return False
+
+    font_size = (
+        int(label_font_size)
+        if label_font_size is not None
+        else LOLLIPOP_LABEL_FONT_SIZE
+    )
 
     for point in coverage_points:
         x_pos = float(point[x_key])
@@ -601,7 +615,7 @@ def _add_panel_coverage_points(
             max(y_base, y_head),
             colors=color,
             linewidths=0.8,
-            alpha=0.75,
+            alpha=1.0,
             zorder=5,
             clip_on=True,
         )
@@ -647,7 +661,7 @@ def _add_panel_coverage_points(
             _truncate_panel_label(point["label"]),
             ha="center",
             va="bottom" if above else "top",
-            fontsize=LOLLIPOP_LABEL_FONT_SIZE,
+            fontsize=font_size,
             color=color,
             fontweight="bold",
             zorder=8,
@@ -710,6 +724,7 @@ def _add_genome_panel_coverage_points(
     *,
     y_min: float,
     y_max: float,
+    label_font_size: Optional[int] = None,
 ) -> bool:
     """Plot panel gene coverage markers on the genome-wide summary plot."""
     return _add_panel_coverage_points(
@@ -720,6 +735,7 @@ def _add_genome_panel_coverage_points(
         min_x_spacing=1_800_000.0,
         y_min=y_min,
         y_max=y_max,
+        label_font_size=label_font_size,
     )
 
 
@@ -730,6 +746,7 @@ def _add_chromosome_panel_coverage_overlay(
     *,
     y_min: float,
     y_max: float,
+    label_font_size: Optional[int] = None,
 ) -> bool:
     """Add coverage-normalised panel markers on the shared chromosome CNV axis."""
     if not panel_points:
@@ -742,6 +759,7 @@ def _add_chromosome_panel_coverage_overlay(
         min_x_spacing=1.8,
         y_min=y_min,
         y_max=y_max,
+        label_font_size=label_font_size,
     )
 
 
@@ -1073,6 +1091,7 @@ def _scatter_cnv_chromosome_points(
                 subset["ploidy"],
                 c=color,
                 s=point_size,
+                marker=CNV_POINT_MARKER,
                 alpha=(
                     CNV_POINT_ALPHA_NEUTRAL
                     if state == "neutral"
@@ -1109,6 +1128,7 @@ def _scatter_cnv_genome_points(ax, df: pd.DataFrame, *, color_by_state: bool) ->
                 subset["ploidy"],
                 c=color,
                 s=4,
+                marker=CNV_POINT_MARKER,
                 alpha=(
                     CNV_POINT_ALPHA_NEUTRAL
                     if state == "neutral"
@@ -1130,6 +1150,7 @@ def _scatter_cnv_genome_points(ax, df: pd.DataFrame, *, color_by_state: bool) ->
             subset["ploidy"],
             c=[color],
             s=4,
+            marker=CNV_POINT_MARKER,
             alpha=CNV_POINT_ALPHA_DEFAULT,
             linewidth=0,
             edgecolors="none",
@@ -1312,10 +1333,12 @@ def create_CNV_plot(
             CNV_REPORT_SCALE_NORMALIZED_DIFFERENCE,
             CNV_REPORT_SCALE_PLOIDY,
             cnv_report_genome_ylabel_mathtext,
+            resolve_cnv_gene_label_font_size,
         )
 
         set_modern_style()
 
+        gene_label_font_size = resolve_cnv_gene_label_font_size()
         cnv_source = result.cnv if hasattr(result, "cnv") else None
         plot_normalized = use_normalized_difference and normalized_cnv
         if use_normalized_difference and not normalized_cnv:
@@ -1394,8 +1417,10 @@ def create_CNV_plot(
             y_min = max(0.0, float(df["ploidy"].min()) - 0.25)
             y_max = max(mean_value + (4 * std_value), mean_value * 1.35, 2.5)
 
-        width = 16
-        fig, ax = plt.subplots(figsize=(width, width / 4))
+        width = CNV_GENOME_LANDSCAPE_FIG_WIDTH
+        fig, ax = plt.subplots(
+            figsize=(width, CNV_GENOME_LANDSCAPE_FIG_HEIGHT)
+        )
         genome_panel_points = _collect_genome_significant_panel_points(
             panel_genes_df,
             cnv_source,
@@ -1471,6 +1496,7 @@ def create_CNV_plot(
                 offset_bp,
                 y_min=y_min,
                 y_max=y_max,
+                label_font_size=gene_label_font_size,
             )
 
         buf = io.BytesIO()
@@ -1523,6 +1549,34 @@ def cnv_chromosome_fig_width_for_page(
 ) -> float:
     """Matplotlib figure width that fits the printable ReportLab frame."""
     return page_width_inch - frame_padding_pt / 72.0
+
+
+def cnv_genome_landscape_image_size_pt(
+    *,
+    left_margin_pt: float = 72.0,
+    right_margin_pt: float = 72.0,
+    top_margin_pt: float = 1.35 * 72.0,
+    bottom_margin_pt: float = 72.0,
+    frame_padding_pt: float = CNV_REPORT_FRAME_PADDING_PT,
+    caption_reserve_pt: float = CNV_GENOME_LANDSCAPE_CAPTION_RESERVE_PT,
+) -> tuple[float, float]:
+    """Return (width, height) in points for the genome-wide CNV plot on A4 landscape."""
+    from reportlab.lib.pagesizes import A4, landscape as rl_landscape
+
+    page_w, page_h = rl_landscape(A4)
+    frame_w = page_w - left_margin_pt - right_margin_pt - frame_padding_pt
+    frame_h = (
+        page_h
+        - top_margin_pt
+        - bottom_margin_pt
+        - frame_padding_pt
+        - caption_reserve_pt
+    )
+    # Prefer a wide landscape aspect (~2.4:1) while filling available width.
+    width = max(frame_w, 1.0)
+    target_height = width / 2.4
+    height = min(max(target_height, 1.0), max(frame_h, 1.0))
+    return width, height
 
 
 def _panel_target_label(gene_row) -> str:
@@ -1721,7 +1775,10 @@ def create_CNV_plot_per_chromosome(
             downsample_cnv_chromosome_track,
             resolve_cnv_plot_bin_width,
         )
-        from robin.gui.plotting_preferences import cnv_report_genome_ylabel_mathtext
+        from robin.gui.plotting_preferences import (
+            cnv_report_genome_ylabel_mathtext,
+            resolve_cnv_gene_label_font_size,
+        )
 
         set_modern_style()
 
@@ -1736,6 +1793,8 @@ def create_CNV_plot_per_chromosome(
         if not cnv_source:
             logger.warning("No CNV data available for per-chromosome plotting")
             return plots
+
+        gene_label_font_size = resolve_cnv_gene_label_font_size()
 
         if chromosomes is None:
             chromosomes = [
@@ -1871,6 +1930,7 @@ def create_CNV_plot_per_chromosome(
                     x_max_mb,
                     y_min=y_min,
                     y_max=y_max,
+                    label_font_size=gene_label_font_size,
                 )
 
             try:

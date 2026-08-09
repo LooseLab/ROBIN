@@ -148,15 +148,48 @@ class RobinReport:
         return self.center
 
     def _create_document(self):
-        """Create the PDF document with enhanced M3 margins and settings."""
-        return SimpleDocTemplate(
+        """Create the PDF document with portrait and landscape page templates."""
+        from reportlab.platypus import Frame, PageTemplate
+        from reportlab.lib.pagesizes import landscape as rl_landscape
+
+        left = right = 1.0 * inch
+        top = 1.35 * inch
+        bottom = 1.0 * inch
+
+        doc = SimpleDocTemplate(
             self.filename,
             pagesize=A4,
-            rightMargin=1.0 * inch,  # Enhanced from 0.75 inch
-            leftMargin=1.0 * inch,  # Enhanced from 0.75 inch
-            topMargin=1.35 * inch,  # Keep existing for header compatibility
-            bottomMargin=1.0 * inch,  # Enhanced from 0.75 inch
+            rightMargin=right,
+            leftMargin=left,
+            topMargin=top,
+            bottomMargin=bottom,
         )
+
+        portrait_frame = Frame(
+            left,
+            bottom,
+            A4[0] - left - right,
+            A4[1] - top - bottom,
+            id="portrait",
+        )
+        land_w, land_h = rl_landscape(A4)
+        landscape_frame = Frame(
+            left,
+            bottom,
+            land_w - left - right,
+            land_h - top - bottom,
+            id="landscape",
+        )
+        # Replace SimpleDocTemplate's default template so NextPageTemplate can switch.
+        doc.pageTemplates = [
+            PageTemplate(id="portrait", frames=[portrait_frame], pagesize=A4),
+            PageTemplate(
+                id="landscape",
+                frames=[landscape_frame],
+                pagesize=rl_landscape(A4),
+            ),
+        ]
+        return doc
 
     def _initialize_sections(self):
         """Initialize all report sections."""

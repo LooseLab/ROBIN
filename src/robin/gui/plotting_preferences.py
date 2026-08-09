@@ -13,7 +13,7 @@ from robin.reference_contigs import (
 )
 
 PLOTTING_PREFERENCES_KEY = "plotting_preferences"
-PLOTTING_PREFERENCES_SCHEMA_VERSION = 3
+PLOTTING_PREFERENCES_SCHEMA_VERSION = 4
 
 CNV_REPORT_SCALE_PLOIDY = "ploidy"
 CNV_REPORT_SCALE_NORMALIZED_DIFFERENCE = "normalized_difference"
@@ -50,6 +50,19 @@ CNV_GUI_COLOR_MODES = (
 DEFAULT_CNV_GUI_COLOR_MODE = CNV_GUI_COLOR_MODE_CHROMOSOME
 
 DEFAULT_CNV_GUI_SHOW_BREAKPOINTS = True
+
+# Gene name labels on CNV coverage markers (GUI ECharts + report PDF).
+DEFAULT_CNV_GENE_LABEL_FONT_SIZE = 12
+MIN_CNV_GENE_LABEL_FONT_SIZE = 6
+MAX_CNV_GENE_LABEL_FONT_SIZE = 24
+
+
+def _resolve_gene_label_font_size(value: Any) -> int:
+    try:
+        size = int(round(float(value)))
+    except (TypeError, ValueError):
+        return DEFAULT_CNV_GENE_LABEL_FONT_SIZE
+    return max(MIN_CNV_GENE_LABEL_FONT_SIZE, min(MAX_CNV_GENE_LABEL_FONT_SIZE, size))
 
 
 def _resolve_gene_coverage_filter(value: Any) -> str:
@@ -95,6 +108,7 @@ class PlottingPreferencesConfig:
     cnv_gui_gene_coverage_filter: str = DEFAULT_CNV_GUI_GENE_COVERAGE_FILTER
     cnv_gui_color_mode: str = DEFAULT_CNV_GUI_COLOR_MODE
     cnv_gui_show_breakpoints: bool = DEFAULT_CNV_GUI_SHOW_BREAKPOINTS
+    cnv_gene_label_font_size: int = DEFAULT_CNV_GENE_LABEL_FONT_SIZE
     updated_at: Optional[str] = None
     updated_by: Optional[str] = None
 
@@ -106,6 +120,7 @@ class PlottingPreferencesConfig:
             "cnv_gui_gene_coverage_filter": self.cnv_gui_gene_coverage_filter,
             "cnv_gui_color_mode": self.cnv_gui_color_mode,
             "cnv_gui_show_breakpoints": bool(self.cnv_gui_show_breakpoints),
+            "cnv_gene_label_font_size": int(self.cnv_gene_label_font_size),
         }
         if self.updated_at:
             out["updated_at"] = self.updated_at
@@ -146,6 +161,9 @@ class PlottingPreferencesConfig:
                 "off",
                 "hide",
             )
+        gene_font = _resolve_gene_label_font_size(
+            data.get("cnv_gene_label_font_size", DEFAULT_CNV_GENE_LABEL_FONT_SIZE)
+        )
         schema_version = int(data.get("schema_version") or 1)
         if schema_version < PLOTTING_PREFERENCES_SCHEMA_VERSION:
             schema_version = PLOTTING_PREFERENCES_SCHEMA_VERSION
@@ -156,6 +174,7 @@ class PlottingPreferencesConfig:
             cnv_gui_gene_coverage_filter=gene_filter,
             cnv_gui_color_mode=color_mode,
             cnv_gui_show_breakpoints=show_bp,
+            cnv_gene_label_font_size=gene_font,
             updated_at=data.get("updated_at"),
             updated_by=data.get("updated_by"),
         )
@@ -168,6 +187,7 @@ class PlottingPreferencesConfig:
         cnv_gui_gene_coverage_filter: Optional[str] = None,
         cnv_gui_color_mode: Optional[str] = None,
         cnv_gui_show_breakpoints: Optional[bool] = None,
+        cnv_gene_label_font_size: Optional[int] = None,
         updated_at: Optional[str] = None,
         updated_by: Optional[str] = None,
     ) -> "PlottingPreferencesConfig":
@@ -193,6 +213,11 @@ class PlottingPreferencesConfig:
             if cnv_gui_show_breakpoints is None
             else bool(cnv_gui_show_breakpoints)
         )
+        gene_font = _resolve_gene_label_font_size(
+            self.cnv_gene_label_font_size
+            if cnv_gene_label_font_size is None
+            else cnv_gene_label_font_size
+        )
         return PlottingPreferencesConfig(
             schema_version=PLOTTING_PREFERENCES_SCHEMA_VERSION,
             cnv_report_scale=scale,
@@ -200,6 +225,7 @@ class PlottingPreferencesConfig:
             cnv_gui_gene_coverage_filter=gene_filter,
             cnv_gui_color_mode=color_mode,
             cnv_gui_show_breakpoints=show_bp,
+            cnv_gene_label_font_size=gene_font,
             updated_at=updated_at or self.updated_at,
             updated_by=updated_by or self.updated_by,
         )
@@ -286,6 +312,14 @@ def resolve_cnv_gui_y_scale(
     if resolve_cnv_summary_normalized(None, plotting_preferences=plotting_preferences):
         return "log"
     return "linear"
+
+
+def resolve_cnv_gene_label_font_size(
+    plotting_preferences: Optional[PlottingPreferencesConfig] = None,
+) -> int:
+    """Font size for gene name labels on CNV coverage markers (GUI + report)."""
+    prefs = plotting_preferences or load_plotting_preferences()
+    return _resolve_gene_label_font_size(prefs.cnv_gene_label_font_size)
 
 
 def cnv_report_ylabel(scale: str) -> str:

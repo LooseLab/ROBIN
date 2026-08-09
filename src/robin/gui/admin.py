@@ -457,6 +457,8 @@ def _build_plotting_preferences_panel(launcher: "GUILauncher") -> None:
         CNV_GUI_GENE_COVERAGE_FILTER_OUTLIERS,
         CNV_REPORT_SCALE_NORMALIZED_DIFFERENCE,
         CNV_REPORT_SCALE_PLOIDY,
+        MAX_CNV_GENE_LABEL_FONT_SIZE,
+        MIN_CNV_GENE_LABEL_FONT_SIZE,
         PlottingPreferencesConfig,
     )
     from robin.reference_contigs import (
@@ -543,6 +545,26 @@ def _build_plotting_preferences_panel(launcher: "GUILauncher") -> None:
                 ),
             )
 
+            ui.label("CNV gene label font size (GUI + report)").classes(
+                "classification-insight-meta font-medium mt-2"
+            )
+            ui.label(
+                "Point size for gene names on CNV coverage markers in the live plot "
+                "and PDF report figures."
+            ).classes("classification-insight-foot mb-1")
+            gene_font_input = (
+                ui.number(
+                    label="Font size (pt)",
+                    value=int(current.cnv_gene_label_font_size),
+                    min=MIN_CNV_GENE_LABEL_FONT_SIZE,
+                    max=MAX_CNV_GENE_LABEL_FONT_SIZE,
+                    step=1,
+                    precision=0,
+                )
+                .classes("w-40")
+                .props("dense outlined")
+            )
+
             ui.label("Reference contigs in plots").classes(
                 "classification-insight-meta font-medium mt-2"
             )
@@ -587,6 +609,7 @@ def _build_plotting_preferences_panel(launcher: "GUILauncher") -> None:
                     cnv_gui_gene_coverage_filter=gene_filter,
                     cnv_gui_color_mode=color_mode,
                     cnv_gui_show_breakpoints=bool(bp_switch.value),
+                    cnv_gene_label_font_size=gene_font_input.value,
                 )
                 launcher.save_plotting_preferences(
                     updated,

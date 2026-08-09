@@ -14,7 +14,15 @@ import numpy as np
 import pandas as pd
 import natsort
 from reportlab.lib.units import inch
-from reportlab.platypus import PageBreak, Paragraph, Image, Spacer, Table, TableStyle
+from reportlab.platypus import (
+    PageBreak,
+    Paragraph,
+    Image,
+    Spacer,
+    Table,
+    TableStyle,
+    NextPageTemplate,
+)
 from reportlab.lib.styles import ParagraphStyle
 from ..sections.base import ReportSection
 from ..plotting import (
@@ -22,6 +30,7 @@ from ..plotting import (
     create_CNV_plot_per_chromosome,
     cnv_chromosome_fig_height_for_page,
     cnv_chromosome_fig_width_for_page,
+    cnv_genome_landscape_image_size_pt,
     CNV_CHROMOSOME_PLOT_SPACER_PT,
     CNV_CHROMOSOME_PLOTS_PER_PAGE,
     CNV_REPORT_FRAME_PADDING_PT,
@@ -154,7 +163,6 @@ def calculate_chromosome_stats(result, ref_result, XYestimate):
 class CNVSection(ReportSection):
     """Section containing the CNV analysis."""
 
-    FULL_PLOT_WIDTH = inch * 7.5
     CHROMOSOME_PLOTS_PER_PAGE = CNV_CHROMOSOME_PLOTS_PER_PAGE
     CHROMOSOME_PLOT_SPACER = CNV_CHROMOSOME_PLOT_SPACER_PT
 
@@ -625,8 +633,13 @@ class CNVSection(ReportSection):
             summary_caption_scale = (
                 "normalized_difference" if use_normalized_summary else "ploidy"
             )
-            width, height = inch * 7.5, inch * 2  # A4 width minus margins
-            self.summary_elements.append(Image(img_buf, width=width, height=height))
+            plot_width, plot_height = cnv_genome_landscape_image_size_pt()
+            # Dedicated landscape page for the genome-wide overview, then back to portrait.
+            self.summary_elements.append(NextPageTemplate("landscape"))
+            self.summary_elements.append(PageBreak())
+            self.summary_elements.append(
+                Image(img_buf, width=plot_width, height=plot_height)
+            )
             self.summary_elements.append(
                 Paragraph(
                     cnv_report_plot_caption(summary_caption_scale),
@@ -642,6 +655,8 @@ class CNVSection(ReportSection):
                     ),
                 )
             )
+            self.summary_elements.append(NextPageTemplate("portrait"))
+            self.summary_elements.append(PageBreak())
 
             # Create summary of CNV events using centralized detection
             logger.debug("Creating CNV summary using centralized events")

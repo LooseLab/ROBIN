@@ -33,7 +33,12 @@ def header_footer_canvas_factory(
         def __init__(self, *args, **kwargs):
             canvas.Canvas.__init__(self, *args, **kwargs)
             self.pages = []
-            self.width, self.height = A4
+            self._sync_page_size()
+
+        def _sync_page_size(self) -> None:
+            """Use the active page size (portrait or landscape)."""
+            pagesize = getattr(self, "_pagesize", None) or A4
+            self.width, self.height = pagesize
 
         def showPage(self):
             self.pages.append(dict(self.__dict__))
@@ -43,6 +48,7 @@ def header_footer_canvas_factory(
             # page_count = len(self.pages)
             for page in self.pages:
                 self.__dict__.update(page)
+                self._sync_page_size()
                 self._draw_header_footer()
                 canvas.Canvas.showPage(self)
             canvas.Canvas.save(self)

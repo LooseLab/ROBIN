@@ -88,6 +88,10 @@ _CNV_GENE_COVERAGE_FILTERS = (
     _CNV_GENE_COVERAGE_FILTER_ALL,
     _CNV_GENE_COVERAGE_FILTER_OUTLIERS,
 )
+
+# CNV scatter plot container height (Tailwind arbitrary values on the echart).
+_CNV_ABS_HEIGHT_CLASS = "h-[22.5rem]"
+_CNV_ABS_HEIGHT_CLASS_TALL = "h-[45rem]"
 _CNV_GENE_GAIN_COLOR = "#DC2626"
 _CNV_GENE_LOSS_COLOR = "#2563EB"
 _CNV_GENE_OUTLIER_SD = 3.0
@@ -642,6 +646,7 @@ def _configured_gene_coverage_lollipop_series(
     scale_mean_cnv: float,
     view_y_lo: float,
     view_y_hi: float,
+    label_font_size: Optional[int] = None,
 ) -> List[Dict[str, Any]]:
     """Build head + callout-label series on the shared CNV axis."""
     if not points:
@@ -649,7 +654,10 @@ def _configured_gene_coverage_lollipop_series(
 
     label_bg = "rgba(15, 23, 42, 0.94)" if dark else "rgba(255, 255, 255, 0.97)"
     head_border = "#0f172a" if dark else "#ffffff"
-    label_font = 12 if len(points) <= 20 else 11
+    if label_font_size is None:
+        label_font = 12 if len(points) <= 20 else 11
+    else:
+        label_font = int(label_font_size)
 
     prepared: List[Dict[str, Any]] = []
     for point in points:
@@ -726,7 +734,7 @@ def _configured_gene_coverage_lollipop_series(
                     "borderColor": color,
                     "borderWidth": 1.5,
                     "borderRadius": 4,
-                    "padding": [5, 8],
+                    "padding": [1, 2],
                     "align": "center",
                     "verticalAlign": "middle",
                 },
@@ -846,6 +854,7 @@ def _upsert_configured_gene_coverage_lollipops(
     use_log: bool,
     dark: bool,
     scale_mean_cnv: float,
+    label_font_size: Optional[int] = None,
 ) -> None:
     """Replace the abs-chart gene series with coverage lollipops (or remove it)."""
     series = chart.options.get("series")
@@ -883,6 +892,7 @@ def _upsert_configured_gene_coverage_lollipops(
             scale_mean_cnv=scale_mean_cnv,
             view_y_lo=view_y_lo,
             view_y_hi=view_y_hi,
+            label_font_size=label_font_size,
         )
     )
 
@@ -1542,6 +1552,8 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
                     _cnv_ui_state["show_bp"] = resolve_cnv_gui_show_breakpoints(
                         _plot_prefs
                     )
+                if "double_height" not in _cnv_ui_state:
+                    _cnv_ui_state["double_height"] = False
 
                 ui.label("Coverage genes").classes("classification-insight-meta ml-2")
                 _gene_cov_filter = _cnv_ui_state.get("gene_coverage_filter")
@@ -1618,6 +1630,20 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
                     )
                     cnv_bp.value = bool(_cnv_ui_state.get("show_bp", True))
                     ui.label("Show").classes("classification-insight-meta")
+                ui.label("Height").classes("classification-insight-meta ml-2")
+                _double_height = bool(_cnv_ui_state.get("double_height", False))
+                _cnv_ui_state["double_height"] = _double_height
+                with ui.row().classes("items-center gap-1"):
+                    ui.label("Normal").classes("classification-insight-meta")
+                    cnv_height = (
+                        ui.switch(value=_double_height)
+                        .props("dense")
+                        .tooltip(
+                            "Left: standard scatter height · Right: double height"
+                        )
+                    )
+                    cnv_height.value = _double_height
+                    ui.label("Tall").classes("classification-insight-meta")
             with ui.element("div").classes("w-full target-coverage-panel__plot-wrap"):
                 cnv_abs = ui.echart(
                     {
@@ -1677,7 +1703,9 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
                             },
                         ],
                     }
-                ).classes("w-full h-[22.5rem] cnv-genome-abs-chart")
+                ).classes(
+                    f"w-full {_CNV_ABS_HEIGHT_CLASS_TALL if _double_height else _CNV_ABS_HEIGHT_CLASS} cnv-genome-abs-chart"
+                )
             with ui.element("div").classes("w-full target-coverage-panel__plot-wrap mt-2"):
                 cnv_diff = ui.echart(
                     {
@@ -2406,6 +2434,10 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
 
             def _apply_abs_gene_coverage_overlay() -> None:
                 """Coverage lollipops on the abs chart only (position markers if no coverage)."""
+                from robin.gui.plotting_preferences import (
+                    resolve_cnv_gene_label_font_size,
+                )
+
                 filter_mode = str(
                     state.get(
                         "gene_coverage_filter",
@@ -2429,6 +2461,9 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
                     scale_mean_cnv=float(sample_rel_mean),
                 )
                 _set_cnv_abs_coverage_axis(cnv_abs, show=False)
+                label_font_size = resolve_cnv_gene_label_font_size(
+                    getattr(launcher, "plotting_preferences", None)
+                )
                 if points:
                     _upsert_configured_gene_coverage_lollipops(
                         cnv_abs,
@@ -2436,6 +2471,7 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
                         use_log=use_log,
                         dark=dark_ui,
                         scale_mean_cnv=float(sample_rel_mean),
+                        label_font_size=label_font_size,
                     )
                     return
                 _upsert_configured_gene_coverage_lollipops(
@@ -3842,6 +3878,35 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
                 pass
             _force_redraw_with_marker_autoscale()
 
+        def _apply_cnv_abs_height(tall: bool) -> None:
+            """Toggle scatter plot container height and ask ECharts to resize."""
+            try:
+                if tall:
+                    cnv_abs.classes(
+                        remove=_CNV_ABS_HEIGHT_CLASS, add=_CNV_ABS_HEIGHT_CLASS_TALL
+                    )
+                else:
+                    cnv_abs.classes(
+                        remove=_CNV_ABS_HEIGHT_CLASS_TALL, add=_CNV_ABS_HEIGHT_CLASS
+                    )
+            except Exception:
+                logging.debug("CNV scatter height class update failed", exc_info=True)
+            try:
+                cnv_abs.run_chart_method("resize")
+            except Exception:
+                logging.debug("CNV scatter resize after height change failed", exc_info=True)
+
+        def _on_height(ev):
+            st = launcher._cnv_state.setdefault(str(sample_dir), {})
+            tall = _switch_bool(ev, default=False)
+            try:
+                if isinstance(getattr(cnv_height, "value", None), bool):
+                    tall = bool(cnv_height.value)
+            except Exception:
+                pass
+            st["double_height"] = tall
+            _apply_cnv_abs_height(tall)
+
         def _on_color(ev):
             st = launcher._cnv_state.setdefault(str(sample_dir), {})
             st["color_mode"] = "value" if _switch_bool(ev, default=False) else "chromosome"
@@ -3911,6 +3976,8 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
         cnv_plot_bin.on("update:model-value", _on_plot_bin)
         cnv_bp.on("change", _on_bp)
         cnv_bp.on("update:model-value", _on_bp)
+        cnv_height.on("change", _on_height)
+        cnv_height.on("update:model-value", _on_height)
         cnv_color.on("change", _on_color)
         cnv_color.on("update:model-value", _on_color)
     except Exception:
