@@ -1628,13 +1628,17 @@ def _collect_panel_gene_points(
     use_max_abs: bool = False,
     target_coverage_df: Optional[pd.DataFrame] = None,
 ) -> List[Dict[str, Any]]:
-    """Collect panel target positions and peak CNV across each target region."""
+    """Collect panel target positions and representative CNV per target region."""
+    from robin.analysis.cnv_analysis import gene_region_cnv_value
+    from robin.classification_config import get_cnv_thresholds
+
     if panel_genes_df is None or panel_genes_df.empty:
         return []
 
     values_array = np.array(values)
     genes = panel_genes_df[panel_genes_df["chrom"] == contig].sort_values("start_pos")
     points: List[Dict[str, Any]] = []
+    gain_thr, _ = get_cnv_thresholds("chr1", "Female")
 
     for _, gene_row in genes.iterrows():
         label_text = _panel_target_label(gene_row)
@@ -1645,19 +1649,25 @@ def _collect_panel_gene_points(
         end_bp = float(gene_row["end_pos"])
         mid_bp = (start_bp + end_bp) / 2.0
         mid_mb = mid_bp / 1_000_000
-        start_bin = max(0, int(start_bp // bin_width))
-        end_bin = min(len(values_array) - 1, int(end_bp // bin_width))
-        if end_bin < start_bin:
-            cnv_val = 0.0
-        else:
-            region_vals = values_array[start_bin : end_bin + 1]
-            if len(region_vals):
-                if use_max_abs:
-                    cnv_val = float(region_vals[np.nanargmax(np.abs(region_vals))])
-                else:
-                    cnv_val = float(np.nanmax(region_vals))
-            else:
+        if use_max_abs:
+            cnv_val = gene_region_cnv_value(
+                values_array,
+                start_pos=start_bp,
+                end_pos=end_bp,
+                bin_width=bin_width,
+                calling_cutoff=float(gain_thr),
+            )
+            if cnv_val is None:
                 cnv_val = 0.0
+        else:
+            start_bin = max(0, int(start_bp // bin_width))
+            end_bin = min(len(values_array) - 1, int(end_bp // bin_width))
+            if end_bin < start_bin:
+                cnv_val = 0.0
+            else:
+                region_vals = values_array[start_bin : end_bin + 1]
+                finite = region_vals[np.isfinite(region_vals)]
+                cnv_val = float(np.nanmax(finite)) if finite.size else 0.0
 
         coverage_val = _coverage_for_panel_target(gene_row, contig, target_coverage_df)
 
@@ -1676,7 +1686,7 @@ def _collect_panel_gene_points(
         if existing is None:
             merged[point["label"]] = point
             continue
-        if point["cnv_val"] > existing["cnv_val"]:
+        if abs(point["cnv_val"]) > abs(existing["cnv_val"]):
             existing["cnv_val"] = point["cnv_val"]
         if point.get("coverage_val") is not None:
             prev = existing.get("coverage_val")

@@ -35,6 +35,7 @@ from robin.analysis.cnv_classification import (
 from robin.analysis.cnv_analysis import (
     compute_cnv_log2_from_ploidy,
     downsample_cnv_for_plot,
+    gene_region_cnv_value,
     prepare_cnv_calling_track,
     resolve_cnv_calling_track,
     resolve_cnv_plot_bin_width,
@@ -328,7 +329,17 @@ def _configured_gene_region_cnv(
     bin_width: int,
     use_max_abs: bool,
 ) -> Optional[float]:
-    """Peak (or max-abs) CNV across bins overlapping a gene interval."""
+    """Representative gene CNV (mean + focal rescue on log2; peak on ploidy)."""
+    if use_max_abs:
+        # Log2 track: unbiased mean with focal rescue at 3× the calling cut-off.
+        gain_thr, _ = get_cnv_thresholds("chr1", "Female")
+        return gene_region_cnv_value(
+            values,
+            start_pos=start_pos,
+            end_pos=end_pos,
+            bin_width=bin_width,
+            calling_cutoff=float(gain_thr),
+        )
     arr = np.asarray(values, dtype=float)
     if arr.size == 0 or bin_width <= 0:
         return None
@@ -340,8 +351,6 @@ def _configured_gene_region_cnv(
     finite = region[np.isfinite(region)]
     if finite.size == 0:
         return None
-    if use_max_abs:
-        return float(finite[np.nanargmax(np.abs(finite))])
     return float(np.nanmax(finite))
 
 
@@ -3163,20 +3172,24 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
             except Exception:
                 pass
 
-            # Regional CNV events table (same logic as PDF reports)
+            # Regional CNV events table (same logic as PDF reports): log2 track
             try:
                 selected = state.get("selected_chrom", "All")
                 binw = state.get("cnv_dict", {}).get("bin_width", 1_000_000)
                 sex_lbl = _sex_label(state.get("xy"))
-                if isinstance(cnv3_map, dict):
-                    data = cnv3_map
-                    source = "cnv3"
-                else:
-                    data = cnv_map if isinstance(cnv_map, dict) else None
+                if isinstance(cnv_log2_map, dict) and cnv_log2_map:
+                    data = cnv_log2_map
+                    source = "cnv_log2"
+                elif isinstance(cnv_map, dict):
+                    data = cnv_map
                     source = "cnv"
+                else:
+                    data = None
+                    source = "none"
                 if data and binw:
                     cache_key = (
-                        f"{source}:{state.get(source+'_m')}:{int(binw)}:{sex_lbl}"
+                        f"{source}:{state.get('cnv_m')}:{state.get('cnv_log2_m')}:"
+                        f"{int(binw)}:{sex_lbl}"
                     )
                     if state.get("cyto_cache_key") != cache_key:
                         panel_name, panel_genes_df = load_panel_gene_bed(str(sample_dir))

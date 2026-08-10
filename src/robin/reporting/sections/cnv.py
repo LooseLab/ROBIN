@@ -280,11 +280,8 @@ class CNVSection(ReportSection):
             use_normalized_summary = getattr(
                 self.report, "cnv_summary_normalized", False
             )
-            log2_cnv = (
-                compute_cnv_log2_from_ploidy(CNVresult.cnv, XYestimate)
-                if use_normalized_summary
-                else None
-            )
+            # Always compute log2 for regional calling; optional for summary plot scale.
+            log2_cnv = compute_cnv_log2_from_ploidy(CNVresult.cnv, XYestimate)
 
             # Initialize CNV_Difference object for normalized values
             result3 = CNV_Difference()
@@ -374,16 +371,18 @@ class CNVSection(ReportSection):
             target_coverage_df = load_target_coverage_df(self.report.output)
             configured_genes = _resolve_configured_cnv_genes(self.report.output)
             scope = getattr(self.report, "reference_contig_scope", None)
+            # Regional events use the log2 track (same scale as arm/whole-chr calling).
+            regional_source = log2_cnv if log2_cnv else result3.cnv
             reportable_chromosomes = [
                 chrom
-                for chrom in natsort.natsorted(result3.cnv.keys())
+                for chrom in natsort.natsorted(regional_source.keys())
                 if is_visible_contig(chrom, scope)
             ]
             cytoband_analysis_by_chrom: dict[str, pd.DataFrame] = {}
             regional_cnv_events: list[dict] = []
             for chrom in reportable_chromosomes:
                 cytoband_analysis = analyze_cytoband_cnv(
-                    result3.cnv,
+                    regional_source,
                     chrom,
                     cnv_dict,
                     cytobands_bed,
@@ -401,12 +400,12 @@ class CNVSection(ReportSection):
             # Calculate gene counts
             total_gained_genes = set()
             total_lost_genes = set()
-            for chrom in natsort.natsorted(result3.cnv.keys()):
+            for chrom in natsort.natsorted(regional_source.keys()):
                 if chrom != "chrM" and re.match(r"^chr(\d+|X|Y)$", chrom):
                     analysis = cytoband_analysis_by_chrom.get(chrom)
                     if analysis is None:
                         analysis = analyze_cytoband_cnv(
-                            result3.cnv,
+                            regional_source,
                             chrom,
                             cnv_dict,
                             cytobands_bed,

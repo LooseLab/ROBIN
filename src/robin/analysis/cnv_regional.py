@@ -222,8 +222,15 @@ def analyze_cytoband_cnv(
 ) -> pd.DataFrame:
     """
     Analyze CNV values within each cytoband to detect duplications and deletions.
-    Uses dynamic thresholds based on data variation for more robust detection.
+
+    Expects ``cnv_data`` on the log2(ploidy / expected) scale (0 = normal).
+    Gain/loss cut-offs are the same fixed thresholds as arm / whole-chromosome
+    calling (``get_cnv_thresholds``, default ±0.30). Non-finite bins (no
+    coverage) are excluded from band means; bands without usable data are
+    marked ``NO_DATA``.
     """
+    from robin.classification_config import get_cnv_thresholds
+
     logger.debug(f"\n{'='*50}")
     logger.debug(f"Starting CNV analysis for {chromosome}")
     logger.debug(f"CNV data keys: {list(cnv_data.keys())}")
@@ -238,190 +245,91 @@ def analyze_cytoband_cnv(
         logger.debug("Resolution insufficient for CNV calling")
         return pd.DataFrame()
 
-    bin_width = cnv_dict["bin_width"]
+    if chromosome not in cnv_data:
+        return pd.DataFrame()
+
+    bin_width = int(cnv_dict["bin_width"])
     chromosome_cytobands = cytobands_bed[cytobands_bed["chrom"] == chromosome].copy()
     logger.debug(f"Number of cytobands for {chromosome}: {len(chromosome_cytobands)}")
+    if chromosome_cytobands.empty:
+        return pd.DataFrame()
+
+    chrom_arr = np.asarray(cnv_data[chromosome], dtype=float)
+    if not np.any(np.isfinite(chrom_arr)):
+        logger.debug(f"No finite CNV bins for {chromosome}")
+        return pd.DataFrame()
+
+    # Same absolute cut-offs as arm / whole-chromosome event detection.
+    cytoband_gain_threshold, cytoband_loss_threshold = get_cnv_thresholds(
+        chromosome, sex_estimate
+    )
+    logger.debug(
+        "Thresholds - Cytoband gain: %.3f, loss: %.3f (arm-rule cut-offs)",
+        cytoband_gain_threshold,
+        cytoband_loss_threshold,
+    )
+
+    centromere = centromere_bed[centromere_bed["chrom"] == chromosome]
+    cen_start = int(centromere["start_pos"].iloc[0]) if not centromere.empty else None
+    cen_end = int(centromere["end_pos"].iloc[0]) if not centromere.empty else None
 
     max_expected_cytobands = len(chromosome_cytobands)
     merged_cytobands = [None] * max_expected_cytobands
     merged_idx = 0
-    whole_chr_event = False
-    whole_chr_state = "NORMAL"
+    current_group = None
 
-    if chromosome in cnv_data:
-        logger.debug(
-            f"\nAnalyzing chromosome {chromosome} for whole chromosome events:"
+    for _, cytoband in chromosome_cytobands.iterrows():
+        start_bin = int(cytoband["start_pos"] / bin_width)
+        end_bin = int(cytoband["end_pos"] / bin_width)
+        start_bin = max(0, start_bin)
+        end_bin = min(chrom_arr.size - 1, end_bin)
+
+        # Centromeric / satellite bands are not assessed (same as prior regional logic).
+        band_overlaps_centromere = (
+            cen_start is not None
+            and cen_end is not None
+            and int(cytoband["start_pos"]) < cen_end
+            and int(cytoband["end_pos"]) > cen_start
         )
 
-        mask = np.ones(len(cnv_data[chromosome]), dtype=bool)
-        centromere = centromere_bed[centromere_bed["chrom"] == chromosome]
-        if not centromere.empty:
-            cent_start_bin = int(centromere["start_pos"].iloc[0] / bin_width)
-            cent_end_bin = int(centromere["end_pos"].iloc[0] / bin_width)
-            mask[cent_start_bin:cent_end_bin] = False
-            logger.debug(f"Excluded centromere region: {cent_start_bin}-{cent_end_bin}")
-        chr_cnv = cnv_data[chromosome][mask]
-
-        chr_mean = np.mean(chr_cnv)
-        chr_std = np.std(chr_cnv)
-        logger.debug(f"Chromosome-wide mean: {chr_mean:.3f}, std: {chr_std:.3f}")
-
-        chromosome_means = []
-        for chrom in cnv_data:
-            if chrom.startswith("chr") and chrom[3:].isdigit():
-                mask = np.ones(len(cnv_data[chrom]), dtype=bool)
-                cent = centromere_bed[centromere_bed["chrom"] == chrom]
-                if not cent.empty:
-                    cent_start = int(cent["start_pos"].iloc[0] / bin_width)
-                    cent_end = int(cent["end_pos"].iloc[0] / bin_width)
-                    mask[cent_start:cent_end] = False
-                chrom_data = cnv_data[chrom][mask]
-                if len(chrom_data) > 0:
-                    chromosome_means.append(np.mean(chrom_data))
-
-        means_std = np.std(chromosome_means)
-        means_mean = np.mean(chromosome_means)
-        logger.debug(
-            f"Mean of chromosome means: {means_mean:.3f}, std of means: {means_std:.3f}"
-        )
-
-        if chromosome.startswith("chr") and chromosome[3:].isdigit():
-            gain_threshold = means_mean + (1.0 * means_std)
-            loss_threshold = means_mean - (1.0 * means_std)
-            cytoband_gain_threshold = chr_mean + (1.0 * chr_std)
-            cytoband_loss_threshold = chr_mean - (1.0 * chr_std)
-        elif chromosome == "chrX":
-            gain_threshold = means_mean + (1.0 * means_std)
-            loss_threshold = means_mean - (1.0 * means_std)
-            cytoband_gain_threshold = chr_mean + (1.0 * chr_std)
-            cytoband_loss_threshold = chr_mean - (1.0 * chr_std)
-        elif chromosome == "chrY":
-            if sex_estimate in ("Male", "XY"):
-                gain_threshold = means_mean + (1.0 * means_std)
-                loss_threshold = means_mean - (1.0 * means_std)
-                cytoband_gain_threshold = chr_mean + (1.0 * chr_std)
-                cytoband_loss_threshold = chr_mean - (1.0 * chr_std)
+        if band_overlaps_centromere:
+            mean_cnv = float("nan")
+            state = "NO_DATA"
+        elif start_bin < chrom_arr.size and end_bin >= start_bin:
+            region_cnv = chrom_arr[start_bin : end_bin + 1]
+            finite = region_cnv[np.isfinite(region_cnv)]
+            if finite.size == 0:
+                mean_cnv = float("nan")
+                state = "NO_DATA"
             else:
-                gain_threshold = means_mean + (1.2 * means_std)
-                loss_threshold = means_mean - (1.2 * means_std)
-                cytoband_gain_threshold = chr_mean + (1.2 * chr_std)
-                cytoband_loss_threshold = chr_mean - (1.2 * chr_std)
-        else:
-            gain_threshold = means_mean + (1.0 * means_std)
-            loss_threshold = means_mean - (1.0 * means_std)
-            cytoband_gain_threshold = chr_mean + (1.0 * chr_std)
-            cytoband_loss_threshold = chr_mean - (1.0 * chr_std)
-
-        logger.debug(
-            f"Thresholds - Whole chr gain: {gain_threshold:.3f}, loss: {loss_threshold:.3f}"
-        )
-        logger.debug(
-            f"Thresholds - Cytoband gain: {cytoband_gain_threshold:.3f}, loss: {cytoband_loss_threshold:.3f}"
-        )
-
-        bins_above_gain = np.sum(chr_cnv > gain_threshold) / len(chr_cnv)
-        bins_below_loss = np.sum(chr_cnv < loss_threshold) / len(chr_cnv)
-
-        logger.debug(
-            f"Proportion of bins - Above gain: {bins_above_gain:.3f}, Below loss: {bins_below_loss:.3f}"
-        )
-
-        min_proportion = 0.7
-        if bins_above_gain > min_proportion:
-            whole_chr_event = True
-            whole_chr_state = "GAIN"
-            logger.debug(f"WHOLE CHROMOSOME EVENT DETECTED: {chromosome} GAIN")
-        elif bins_below_loss > min_proportion:
-            whole_chr_event = True
-            whole_chr_state = "LOSS"
-            logger.debug(f"WHOLE CHROMOSOME EVENT DETECTED: {chromosome} LOSS")
-
-        if whole_chr_event:
-            genes_in_chr = gene_bed[gene_bed["chrom"] == chromosome]["gene"].tolist()
-
-            merged_cytobands[merged_idx] = {
-                "chrom": chromosome,
-                "start_pos": chromosome_cytobands["start_pos"].min(),
-                "end_pos": chromosome_cytobands["end_pos"].max(),
-                "name": f"{chromosome} WHOLE CHROMOSOME {whole_chr_state}",
-                "mean_cnv": chr_mean,
-                "cnv_state": whole_chr_state,
-                "length": chromosome_cytobands["end_pos"].max()
-                - chromosome_cytobands["start_pos"].min(),
-                "genes": genes_in_chr,
-            }
-            merged_idx += 1
-
-        current_group = None
-
-        for _, cytoband in chromosome_cytobands.iterrows():
-            start_bin = int(cytoband["start_pos"] / bin_width)
-            end_bin = int(cytoband["end_pos"] / bin_width)
-
-            if start_bin < len(cnv_data[chromosome]):
-                region_cnv = cnv_data[chromosome][start_bin : end_bin + 1]
-                mean_cnv = np.mean(region_cnv) if len(region_cnv) > 0 else 0
-
-                if mean_cnv > cytoband_gain_threshold:
+                mean_cnv = float(np.mean(finite))
+                if mean_cnv >= cytoband_gain_threshold:
                     state = "GAIN"
-                elif mean_cnv < cytoband_loss_threshold:
+                elif mean_cnv <= cytoband_loss_threshold:
                     state = "LOSS"
                 else:
                     state = "NORMAL"
-            else:
-                mean_cnv = 0
-                state = "NO_DATA"
+        else:
+            mean_cnv = float("nan")
+            state = "NO_DATA"
 
-            if current_group is None:
-                current_group = {
-                    "chrom": cytoband["chrom"],
-                    "start_pos": cytoband["start_pos"],
-                    "end_pos": cytoband["end_pos"],
-                    "name": cytoband["name"],
-                    "mean_cnv": [mean_cnv],
-                    "cnv_state": state,
-                    "bands": [cytoband["name"]],
-                    "length": cytoband["end_pos"] - cytoband["start_pos"],
-                    "genes": [],
-                }
-            elif state == current_group["cnv_state"]:
-                current_group["end_pos"] = cytoband["end_pos"]
-                current_group["mean_cnv"].append(mean_cnv)
-                current_group["bands"].append(cytoband["name"])
-            else:
-                if current_group["cnv_state"] in SIGNIFICANT_CNV_STATES:
-                    genes_in_region = gene_bed[
-                        (gene_bed["chrom"] == current_group["chrom"])
-                        & (gene_bed["start_pos"] <= current_group["end_pos"])
-                        & (gene_bed["end_pos"] >= current_group["start_pos"])
-                    ]["gene"].tolist()
-                    current_group["genes"] = genes_in_region
-
-                current_group["name"] = (
-                    f"{current_group['chrom']} {current_group['bands'][0]}-{current_group['bands'][-1]}"
-                )
-                current_group["mean_cnv"] = np.mean(current_group["mean_cnv"])
-                current_group["length"] = (
-                    current_group["end_pos"] - current_group["start_pos"]
-                )
-
-                if current_group["cnv_state"] not in ("NORMAL", "NO_DATA"):
-                    merged_cytobands[merged_idx] = current_group
-                    merged_idx += 1
-
-                current_group = {
-                    "chrom": cytoband["chrom"],
-                    "start_pos": cytoband["start_pos"],
-                    "end_pos": cytoband["end_pos"],
-                    "name": cytoband["name"],
-                    "mean_cnv": [mean_cnv],
-                    "cnv_state": state,
-                    "bands": [cytoband["name"]],
-                    "length": cytoband["end_pos"] - cytoband["start_pos"],
-                    "genes": [],
-                }
-
-        if current_group is not None:
+        if current_group is None:
+            current_group = {
+                "chrom": cytoband["chrom"],
+                "start_pos": cytoband["start_pos"],
+                "end_pos": cytoband["end_pos"],
+                "name": cytoband["name"],
+                "mean_cnv": [mean_cnv],
+                "cnv_state": state,
+                "bands": [cytoband["name"]],
+                "length": cytoband["end_pos"] - cytoband["start_pos"],
+                "genes": [],
+            }
+        elif state == current_group["cnv_state"]:
+            current_group["end_pos"] = cytoband["end_pos"]
+            current_group["mean_cnv"].append(mean_cnv)
+            current_group["bands"].append(cytoband["name"])
+        else:
             if current_group["cnv_state"] in SIGNIFICANT_CNV_STATES:
                 genes_in_region = gene_bed[
                     (gene_bed["chrom"] == current_group["chrom"])
@@ -433,7 +341,12 @@ def analyze_cytoband_cnv(
             current_group["name"] = (
                 f"{current_group['chrom']} {current_group['bands'][0]}-{current_group['bands'][-1]}"
             )
-            current_group["mean_cnv"] = np.mean(current_group["mean_cnv"])
+            finite_means = [
+                v for v in current_group["mean_cnv"] if np.isfinite(v)
+            ]
+            current_group["mean_cnv"] = (
+                float(np.mean(finite_means)) if finite_means else float("nan")
+            )
             current_group["length"] = (
                 current_group["end_pos"] - current_group["start_pos"]
             )
@@ -441,6 +354,42 @@ def analyze_cytoband_cnv(
             if current_group["cnv_state"] not in ("NORMAL", "NO_DATA"):
                 merged_cytobands[merged_idx] = current_group
                 merged_idx += 1
+
+            current_group = {
+                "chrom": cytoband["chrom"],
+                "start_pos": cytoband["start_pos"],
+                "end_pos": cytoband["end_pos"],
+                "name": cytoband["name"],
+                "mean_cnv": [mean_cnv],
+                "cnv_state": state,
+                "bands": [cytoband["name"]],
+                "length": cytoband["end_pos"] - cytoband["start_pos"],
+                "genes": [],
+            }
+
+    if current_group is not None:
+        if current_group["cnv_state"] in SIGNIFICANT_CNV_STATES:
+            genes_in_region = gene_bed[
+                (gene_bed["chrom"] == current_group["chrom"])
+                & (gene_bed["start_pos"] <= current_group["end_pos"])
+                & (gene_bed["end_pos"] >= current_group["start_pos"])
+            ]["gene"].tolist()
+            current_group["genes"] = genes_in_region
+
+        current_group["name"] = (
+            f"{current_group['chrom']} {current_group['bands'][0]}-{current_group['bands'][-1]}"
+        )
+        finite_means = [v for v in current_group["mean_cnv"] if np.isfinite(v)]
+        current_group["mean_cnv"] = (
+            float(np.mean(finite_means)) if finite_means else float("nan")
+        )
+        current_group["length"] = (
+            current_group["end_pos"] - current_group["start_pos"]
+        )
+
+        if current_group["cnv_state"] not in ("NORMAL", "NO_DATA"):
+            merged_cytobands[merged_idx] = current_group
+            merged_idx += 1
 
     merged_cytobands = merged_cytobands[:merged_idx]
 

@@ -82,7 +82,7 @@ import gc
 import subprocess
 import sys
 from functools import lru_cache
-from typing import Dict, Optional, List, Tuple
+from typing import Any, Dict, Optional, List, Tuple
 from dataclasses import dataclass
 
 import numpy as np
@@ -324,19 +324,18 @@ def run_cnv_analysis_direct(
         pass1_time = time.time() - pass1_start
         logger.info(f"Pass 1 completed in {pass1_time:.2f}s (bin_width: {result.bin_width}, variance: {result.variance:.6f})")
 
-        # Second pass: process against reference using the same bin width
-        logger.debug(f"Starting Pass 2: Reference CNV extraction with {threads} threads")
+        # Reference track from packaged control counts only (no sample BAM).
+        # Re-reading the sample BAM onto the control previously contaminated CNV2.
         pass2_start = time.time()
-        result2 = cnv_from_bam.iterate_bam_file(
-            bam_path,
-            _threads=threads,
-            mapq_filter=mapq_filter,
-            copy_numbers=ref_cnv_dict_loaded,
-            log_level=int(logging.ERROR),
-            bin_width=result.bin_width,  # Use the same bin width as the sample
+        r2_cnv = build_reference_cnv_from_counts(
+            ref_cnv_dict_loaded,
+            int(result.bin_width),
         )
         pass2_time = time.time() - pass2_start
-        logger.info(f"Pass 2 completed in {pass2_time:.2f}s")
+        logger.info(
+            f"Pass 2 completed in {pass2_time:.2f}s "
+            f"(uncontaminated reference at bin_width={result.bin_width})"
+        )
         logger.info(f"Total CNV extraction time: {pass1_time + pass2_time:.2f}s")
 
         # Prepare results
@@ -346,7 +345,7 @@ def run_cnv_analysis_direct(
             "r_bin": result.bin_width,
             "r_var": result.variance,
             "genome_length": result.genome_length,
-            "r2_cnv": result2.cnv,
+            "r2_cnv": r2_cnv,
             "updated_copy_numbers": copy_numbers,  # The mutated copy_numbers
             "timing": {
                 "pass1_time": pass1_time,
@@ -715,6 +714,103 @@ def resolve_cnv_calling_track(
     normal for that chromosome and sex. Matches the GUI CNV log2 ratio plot.
     """
     return compute_cnv_log2_from_ploidy(cnv_map, sex_estimate)
+
+
+# Gene representative value: mean of bins spanning the gene, with focal rescue.
+# A single bin at >= this multiple of the calling cut-off is kept at its own depth
+# so real focal events are not diluted by flanking neutral bins.
+GENE_FOCAL_RESCUE_MULTIPLE = 3.0
+
+# Packaged control pickle stores mapping-start counts in fixed-width bins
+# (cnv_from_bam default ``bin_size``).
+REF_COUNT_BIN_SIZE = 1000
+
+
+def gene_region_cnv_value(
+    values: np.ndarray,
+    *,
+    start_pos: float,
+    end_pos: float,
+    bin_width: int,
+    calling_cutoff: float = 0.3,
+    focal_rescue_multiple: float = GENE_FOCAL_RESCUE_MULTIPLE,
+) -> Optional[float]:
+    """Representative CNV for a gene interval: mean, with focal rescue.
+
+    Uses the mean of finite bins overlapping ``[start_pos, end_pos]``. If any
+    single bin reaches ``focal_rescue_multiple × |calling_cutoff|`` from zero,
+    that bin's own depth is returned instead (most extreme such bin wins).
+
+    This replaces the biased max-|bin| estimator that over-called large genes
+    on flat chromosomes.
+    """
+    arr = np.asarray(values, dtype=float)
+    if arr.size == 0 or bin_width <= 0:
+        return None
+    start_bin = max(0, int(start_pos // bin_width))
+    end_bin = min(arr.size - 1, int(end_pos // bin_width))
+    if end_bin < start_bin:
+        return None
+    region = arr[start_bin : end_bin + 1]
+    finite = region[np.isfinite(region)]
+    if finite.size == 0:
+        return None
+
+    rescue_thr = float(focal_rescue_multiple) * abs(float(calling_cutoff))
+    if rescue_thr > 0:
+        extreme = finite[np.abs(finite) >= rescue_thr]
+        if extreme.size:
+            return float(extreme[np.argmax(np.abs(extreme))])
+    return float(np.mean(finite))
+
+
+def build_reference_cnv_from_counts(
+    ref_count_bins: Dict[str, Any],
+    bin_width: int,
+    *,
+    bin_size: int = REF_COUNT_BIN_SIZE,
+    ploidy: float = 2.0,
+) -> Dict[str, np.ndarray]:
+    """Build an uncontaminated reference ploidy track from control count bins.
+
+    The packaged control pickle holds per-contig mapping-start counts at
+    ``bin_size`` (default 1000 bp). Previously the second CNV pass re-read the
+    *sample* BAM on top of those counts, so the reference inherited the
+    sample's own aberrations. This mirrors ``cnv_from_bam``'s chunk + median
+    normalisation **without** adding sample reads:
+
+        CN = sum(count chunk) / median(all chunk sums) * ploidy
+    """
+    bw = max(int(bin_width), int(bin_size))
+    chunk_size = max(1, bw // int(bin_size))
+
+    chunk_sums_by_chrom: Dict[str, List[float]] = {}
+    all_sums: List[float] = []
+    for chrom, counts in ref_count_bins.items():
+        arr = np.asarray(counts, dtype=float).ravel()
+        if arr.size == 0:
+            continue
+        sums = [
+            float(np.sum(arr[i : i + chunk_size]))
+            for i in range(0, arr.size, chunk_size)
+        ]
+        if not sums:
+            continue
+        chunk_sums_by_chrom[str(chrom)] = sums
+        all_sums.extend(sums)
+
+    if not all_sums:
+        return {}
+
+    median_value = float(np.median(all_sums))
+    if not np.isfinite(median_value) or median_value <= 0:
+        median_value = 1.0
+
+    scale = float(ploidy) / median_value
+    return {
+        chrom: np.asarray(sums, dtype=float) * scale
+        for chrom, sums in chunk_sums_by_chrom.items()
+    }
 
 
 CNV_CALLING_MIN_BIN_WIDTH = 1_000_000
