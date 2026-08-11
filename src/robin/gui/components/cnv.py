@@ -1022,7 +1022,11 @@ def _cnv_sex_estimate_label(xy_val: Any) -> str:
 
 
 def _recompute_cnv_log2_state(state: Dict[str, Any]) -> None:
-    """log2(ploidy / expected copy number) from the same track as the ploidy plot."""
+    """log2(ploidy / expected copy number) from the same track as the ploidy plot.
+
+    When CNV2 is available, unmappable reference bins are masked to NaN so
+    regional / arm calling cannot treat flat-zero difference loci as losses.
+    """
     sample = _unwrap_cnv_track_map(state.get("cnv"))
     if not sample:
         state.pop("cnv_log2", None)
@@ -1030,6 +1034,7 @@ def _recompute_cnv_log2_state(state: Dict[str, Any]) -> None:
     state["cnv_log2"] = resolve_cnv_calling_track(
         sample,
         _cnv_sex_estimate_label(state.get("xy")),
+        ref_cnv_map=_unwrap_cnv_track_map(state.get("cnv2")),
     )
 
 
@@ -1238,6 +1243,7 @@ def _cnv_load_binary_payload(
     *,
     cnv_dict_npy_changed: bool,
     cnv_npy_changed: bool,
+    cnv2_npy_changed: bool,
     cnv3_npy_changed: bool,
     data_array_reload: bool,
     xy_pkl_changed: bool,
@@ -1246,6 +1252,7 @@ def _cnv_load_binary_payload(
     out: Dict[str, Any] = {}
     cnv_dict_npy = sample_dir / "CNV_dict.npy"
     cnv_npy = sample_dir / "CNV.npy"
+    cnv2_npy = sample_dir / "CNV2.npy"
     cnv3_npy = sample_dir / "CNV3.npy"
     data_array_npy = sample_dir / "cnv_data_array.npy"
     xy_pkl = sample_dir / "XYestimate.pkl"
@@ -1265,6 +1272,12 @@ def _cnv_load_binary_payload(
             out["cnv"] = np.load(cnv_npy, allow_pickle=True).item()
         except Exception:
             out["cnv"] = None
+
+    if cnv2_npy_changed and cnv2_npy.exists():
+        try:
+            out["cnv2"] = np.load(cnv2_npy, allow_pickle=True).item()
+        except Exception:
+            out["cnv2"] = None
 
     if cnv3_npy_changed and cnv3_npy.exists():
         try:
@@ -2260,10 +2273,11 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
 
             binw = state.get("cnv_dict", {}).get("bin_width", 1000000)
             sex_lbl = _sex_label(state.get("xy"))
-            data, calling_binw = prepare_cnv_calling_track(
+            data, calling_binw, analysis_log2 = prepare_cnv_calling_track(
                 cnv_map,
                 int(binw),
                 _cnv_sex_estimate_label(state.get("xy")),
+                ref_cnv_map=_unwrap_cnv_track_map(state.get("cnv2")),
             )
 
             if data and calling_binw:
@@ -2277,7 +2291,9 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
                     bin_width=int(calling_binw),
                     sex_estimate=sex_lbl,
                     cytobands_df=cyto_df,
-                    gene_df=gene_df
+                    gene_df=gene_df,
+                    support_cnv_data=analysis_log2,
+                    support_bin_width=int(binw),
                 )
                 
                 # Update events table
@@ -2821,10 +2837,15 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
                                 try:
                                     sex_lbl = _sex_label(state.get("xy"))
                                     gene_df = _load_gene_bed(sample_dir)
-                                    calling_map, calling_binw = prepare_cnv_calling_track(
-                                        cnv_map,
-                                        int(binw_analysis),
-                                        _cnv_sex_estimate_label(state.get("xy")),
+                                    calling_map, calling_binw, analysis_log2 = (
+                                        prepare_cnv_calling_track(
+                                            cnv_map,
+                                            int(binw_analysis),
+                                            _cnv_sex_estimate_label(state.get("xy")),
+                                            ref_cnv_map=_unwrap_cnv_track_map(
+                                                state.get("cnv2")
+                                            ),
+                                        )
                                     )
                                     call_vals = calling_map.get(selected)
                                     if call_vals is not None:
@@ -2834,6 +2855,8 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
                                             sex_estimate=sex_lbl,
                                             cytobands_df=cyto_df,
                                             gene_df=gene_df,
+                                            support_cnv_data=analysis_log2,
+                                            support_bin_width=int(binw_analysis),
                                         )
                                 except Exception:
                                     pass
@@ -3188,7 +3211,8 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
                     source = "none"
                 if data and binw:
                     cache_key = (
-                        f"{source}:{state.get('cnv_m')}:{state.get('cnv_log2_m')}:"
+                        f"{source}:{state.get('cnv_m')}:{state.get('cnv2_m')}:"
+                        f"{state.get('cnv_log2_m')}:"
                         f"{int(binw)}:{sex_lbl}"
                     )
                     if state.get("cyto_cache_key") != cache_key:
@@ -3379,24 +3403,28 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
             state["last_visit_time"] = time.time()
 
         cnv_npy = sample_dir / "CNV.npy"
+        cnv2_npy = sample_dir / "CNV2.npy"
         cnv3_npy = sample_dir / "CNV3.npy"
         cnv_dict_npy = sample_dir / "CNV_dict.npy"
         data_array_npy = sample_dir / "cnv_data_array.npy"
         xy_pkl = sample_dir / "XYestimate.pkl"
 
         cnv_npy_mtime = cnv_npy.stat().st_mtime if cnv_npy.exists() else 0
+        cnv2_npy_mtime = cnv2_npy.stat().st_mtime if cnv2_npy.exists() else 0
         cnv3_npy_mtime = cnv3_npy.stat().st_mtime if cnv3_npy.exists() else 0
         cnv_dict_npy_mtime = cnv_dict_npy.stat().st_mtime if cnv_dict_npy.exists() else 0
         data_array_npy_mtime = data_array_npy.stat().st_mtime if data_array_npy.exists() else 0
         xy_pkl_mtime = xy_pkl.stat().st_mtime if xy_pkl.exists() else 0
 
         prev_cnv_npy_mtime = state.get("cnv_m", 0)
+        prev_cnv2_npy_mtime = state.get("cnv2_m", 0)
         prev_cnv3_npy_mtime = state.get("cnv3_m", 0)
         prev_cnv_dict_npy_mtime = state.get("dict_m", 0)
         prev_data_array_npy_mtime = state.get("bp_array_mtime", 0)
         prev_xy_pkl_mtime = state.get("xy_m", 0)
 
         cnv_npy_changed = prev_cnv_npy_mtime != cnv_npy_mtime
+        cnv2_npy_changed = prev_cnv2_npy_mtime != cnv2_npy_mtime
         cnv3_npy_changed = prev_cnv3_npy_mtime != cnv3_npy_mtime
         cnv_dict_npy_changed = prev_cnv_dict_npy_mtime != cnv_dict_npy_mtime
         data_array_npy_changed = prev_data_array_npy_mtime != data_array_npy_mtime
@@ -3404,6 +3432,7 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
 
         files_changed = (
             cnv_npy_changed
+            or cnv2_npy_changed
             or cnv3_npy_changed
             or cnv_dict_npy_changed
             or data_array_npy_changed
@@ -3428,6 +3457,8 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
             reasons.append("fresh_visit")
         if cnv_npy_changed:
             reasons.append("CNV.npy")
+        if cnv2_npy_changed:
+            reasons.append("CNV2.npy")
         if cnv3_npy_changed:
             reasons.append("CNV3.npy")
         if cnv_dict_npy_changed:
@@ -3456,6 +3487,7 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
         need_load = (
             cnv_dict_npy_changed
             or cnv_npy_changed
+            or cnv2_npy_changed
             or cnv3_npy_changed
             or data_array_reload
             or xy_pkl_changed
@@ -3467,17 +3499,20 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
             "ui_changed": ui_changed,
             "is_fresh_visit": is_fresh_visit,
             "cnv_npy": cnv_npy,
+            "cnv2_npy": cnv2_npy,
             "cnv3_npy": cnv3_npy,
             "cnv_dict_npy": cnv_dict_npy,
             "data_array_npy": data_array_npy,
             "xy_pkl": xy_pkl,
             "cnv_npy_mtime": cnv_npy_mtime,
+            "cnv2_npy_mtime": cnv2_npy_mtime,
             "cnv3_npy_mtime": cnv3_npy_mtime,
             "cnv_dict_npy_mtime": cnv_dict_npy_mtime,
             "data_array_npy_mtime": data_array_npy_mtime,
             "xy_pkl_mtime": xy_pkl_mtime,
             "cnv_dict_npy_changed": cnv_dict_npy_changed,
             "cnv_npy_changed": cnv_npy_changed,
+            "cnv2_npy_changed": cnv2_npy_changed,
             "cnv3_npy_changed": cnv3_npy_changed,
             "data_array_npy_changed": data_array_npy_changed,
             "xy_pkl_changed": xy_pkl_changed,
@@ -3571,22 +3606,30 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
         is_fresh_visit = p["is_fresh_visit"]
         cnv_dict_npy = p["cnv_dict_npy"]
         cnv_npy = p["cnv_npy"]
+        cnv2_npy = p["cnv2_npy"]
         cnv3_npy = p["cnv3_npy"]
         data_array_npy = p["data_array_npy"]
         xy_pkl = p["xy_pkl"]
         cnv_npy_mtime = p["cnv_npy_mtime"]
+        cnv2_npy_mtime = p["cnv2_npy_mtime"]
         cnv3_npy_mtime = p["cnv3_npy_mtime"]
         cnv_dict_npy_mtime = p["cnv_dict_npy_mtime"]
         data_array_npy_mtime = p["data_array_npy_mtime"]
         xy_pkl_mtime = p["xy_pkl_mtime"]
         cnv_dict_npy_changed = p["cnv_dict_npy_changed"]
         cnv_npy_changed = p["cnv_npy_changed"]
+        cnv2_npy_changed = p["cnv2_npy_changed"]
         cnv3_npy_changed = p["cnv3_npy_changed"]
         data_array_npy_changed = p["data_array_npy_changed"]
         data_array_reload = p["data_array_reload"]
         xy_pkl_changed = p["xy_pkl_changed"]
 
-        changed = ("cnv" in payload or "cnv3" in payload or "xy" in payload)
+        changed = (
+            "cnv" in payload
+            or "cnv2" in payload
+            or "cnv3" in payload
+            or "xy" in payload
+        )
 
         if cnv_dict_npy.exists():
             m = cnv_dict_npy_mtime
@@ -3616,6 +3659,9 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
         if "cnv" in payload:
             state["cnv"] = payload["cnv"]
             state["cnv_m"] = cnv_npy_mtime
+        if "cnv2" in payload:
+            state["cnv2"] = payload["cnv2"]
+            state["cnv2_m"] = cnv2_npy_mtime
         if "cnv3" in payload:
             state["cnv3"] = payload["cnv3"]
             state["cnv3_m"] = cnv3_npy_mtime
@@ -3724,6 +3770,7 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
                     pass
 
         state["cnv_m"] = cnv_npy_mtime
+        state["cnv2_m"] = cnv2_npy_mtime
         state["cnv3_m"] = cnv3_npy_mtime
         state["dict_m"] = cnv_dict_npy_mtime
         state["xy_m"] = xy_pkl_mtime
@@ -3744,6 +3791,7 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
                     sample_dir,
                     cnv_dict_npy_changed=plan["cnv_dict_npy_changed"],
                     cnv_npy_changed=plan["cnv_npy_changed"],
+                    cnv2_npy_changed=plan["cnv2_npy_changed"],
                     cnv3_npy_changed=plan["cnv3_npy_changed"],
                     data_array_reload=plan["data_array_reload"],
                     xy_pkl_changed=plan["xy_pkl_changed"],
@@ -3765,6 +3813,7 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
                     sample_dir,
                     cnv_dict_npy_changed=plan["cnv_dict_npy_changed"],
                     cnv_npy_changed=plan["cnv_npy_changed"],
+                    cnv2_npy_changed=plan["cnv2_npy_changed"],
                     cnv3_npy_changed=plan["cnv3_npy_changed"],
                     data_array_reload=plan["data_array_reload"],
                     xy_pkl_changed=plan["xy_pkl_changed"],

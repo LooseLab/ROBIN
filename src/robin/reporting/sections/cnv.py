@@ -281,7 +281,10 @@ class CNVSection(ReportSection):
                 self.report, "cnv_summary_normalized", False
             )
             # Always compute log2 for regional calling; optional for summary plot scale.
-            log2_cnv = compute_cnv_log2_from_ploidy(CNVresult.cnv, XYestimate)
+            # Mask with CNV2 so unmappable loci (flat-zero difference) are not called.
+            log2_cnv = compute_cnv_log2_from_ploidy(
+                CNVresult.cnv, XYestimate, ref_cnv_map=r2_cnv
+            )
 
             # Initialize CNV_Difference object for normalized values
             result3 = CNV_Difference()
@@ -518,15 +521,20 @@ class CNVSection(ReportSection):
             else:
                 # Arm/whole-chromosome events: log2(ploidy / expected), ≥1 Mb bins
                 analysis_binw = int(cnv_dict.get("bin_width", 1000000))
-                calling_cnv, calling_binw = prepare_cnv_calling_track(
-                    CNVresult.cnv, analysis_binw, XYestimate
+                calling_cnv, calling_binw, analysis_log2 = prepare_cnv_calling_track(
+                    CNVresult.cnv,
+                    analysis_binw,
+                    XYestimate,
+                    ref_cnv_map=r2_cnv,
                 )
                 events = detect_cnv_events(
                     cnv_data=calling_cnv,
                     bin_width=calling_binw,
                     sex_estimate=XYestimate,
                     cytobands_df=cytobands_bed,
-                    gene_df=gene_bed
+                    gene_df=gene_bed,
+                    support_cnv_data=analysis_log2,
+                    support_bin_width=analysis_binw,
                 )
                 
                 # Convert events to summary format

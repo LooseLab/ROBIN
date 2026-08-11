@@ -170,6 +170,10 @@ _COV_OUTLIER_LINE_PALETTE_DARK = [
 _COV_MAX_DIM_GENES = 25
 # Ghost in-range traces (design: ~15–20% perceived weight via opacity × muted stroke)
 _COV_GHOST_LINE_OPACITY = 0.18
+# Time-varying ±2σ envelope series (stacked low + span); hide base from legend/tooltip.
+_COV_ENVELOPE_NAME = "±2σ envelope"
+_COV_ENVELOPE_BASE_NAME = "_envelope_base"
+_COV_ENVELOPE_STACK = "cov_envelope"
 
 
 def _cov_dim_muted_line() -> str:
@@ -184,6 +188,78 @@ def _cov_band_fill_rgba() -> str:
     if _cov_ui_dark():
         return "rgba(30,41,59,0.30)"  # #1E293B @ 30%
     return "rgba(241,245,249,0.50)"  # #F1F5F9 @ 50%
+
+
+def _cov_per_timestamp_envelope(
+    df: "pd.DataFrame",
+    *,
+    num_sd: float = 2.0,
+    min_targets: int = 3,
+) -> tuple[list[list[float]], list[list[float]]]:
+    """Build stacked ECharts series for a time-varying mean ±Nσ envelope.
+
+    At each timestamp, bounds are cross-gene mean ± ``num_sd``·SD — the same
+    basis used for outlier detection. Returns ``(low_data, span_data)`` where
+    each entry is ``[timestamp_ms, value]`` and ``span = max(0, high - low)``
+    after clamping the display floor at 0 (coverage cannot be negative).
+    """
+    low_data: list[list[float]] = []
+    span_data: list[list[float]] = []
+    if df is None or df.empty or "timestamp" not in df.columns or "coverage" not in df.columns:
+        return low_data, span_data
+
+    for ts, timepoint in df.groupby("timestamp", sort=True):
+        n = len(timepoint)
+        if n < 1:
+            continue
+        gmean = float(timepoint["coverage"].mean())
+        if n < min_targets:
+            glow = ghigh = gmean
+        else:
+            gstd = float(timepoint["coverage"].std())
+            if gstd == 0.0 or gstd != gstd:  # zero or NaN
+                glow = ghigh = gmean
+            else:
+                glow = gmean - num_sd * gstd
+                ghigh = gmean + num_sd * gstd
+        display_low = max(0.0, glow)
+        display_high = max(display_low, ghigh)
+        ts_i = float(int(ts))
+        low_data.append([ts_i, display_low])
+        span_data.append([ts_i, display_high - display_low])
+    return low_data, span_data
+
+
+def _cov_envelope_series(band_fill: str, low_data: list, span_data: list) -> list[dict]:
+    """Stacked invisible-line + area pair for the ±2σ envelope."""
+    shared = {
+        "type": "line",
+        "smooth": 0.42,
+        "symbol": "none",
+        "stack": _COV_ENVELOPE_STACK,
+        "silent": True,
+        "tooltip": {"show": False},
+        "lineStyle": {"opacity": 0, "width": 0},
+        "itemStyle": {"opacity": 0},
+        "emphasis": {"disabled": True},
+        "z": 0,
+    }
+    return [
+        {
+            **shared,
+            "name": _COV_ENVELOPE_BASE_NAME,
+            "data": low_data,
+            "showInLegend": False,
+        },
+        {
+            **shared,
+            "name": _COV_ENVELOPE_NAME,
+            "data": span_data,
+            "showInLegend": True,
+            "areaStyle": {"color": band_fill},
+            "z": 1,
+        },
+    ]
 
 
 def _cov_target_time_split() -> str:
@@ -525,16 +601,24 @@ def _apply_target_coverage_time_analysis_chrome(ec: Any) -> None:
             "lineStyle": {"color": split_t, "type": "dashed"},
         }
         o["yAxis"]["nameTextStyle"] = {"color": p["axis"]}
+        _envelope_names = {_COV_ENVELOPE_NAME, _COV_ENVELOPE_BASE_NAME}
         for s in o.get("series") or []:
             name = str(s.get("name") or "")
-            if s.get("type") == "line" and name != "_band":
+            if s.get("type") == "line" and name not in _envelope_names:
                 s["triggerLineEvent"] = True
-            if name == "_band":
-                ma = s.get("markArea") or {}
-                ist = ma.get("itemStyle") or {}
-                ist["color"] = band_fill
-                ma["itemStyle"] = ist
-                s["markArea"] = ma
+            if name == _COV_ENVELOPE_NAME:
+                s["areaStyle"] = {**(s.get("areaStyle") or {}), "color": band_fill}
+                s["lineStyle"] = {
+                    **(s.get("lineStyle") or {}),
+                    "opacity": 0,
+                    "width": 0,
+                }
+            elif name == _COV_ENVELOPE_BASE_NAME:
+                s["lineStyle"] = {
+                    **(s.get("lineStyle") or {}),
+                    "opacity": 0,
+                    "width": 0,
+                }
             elif name == "Mean (population)":
                 mls = {
                     "width": 4,
@@ -559,7 +643,10 @@ def _apply_target_coverage_time_analysis_chrome(ec: Any) -> None:
                     "color": dim_c,
                     "opacity": ghost,
                 }
-            elif s.get("type") == "line" and name not in ("_band", "Mean (population)"):
+            elif s.get("type") == "line" and name not in (
+                *_envelope_names,
+                "Mean (population)",
+            ):
                 # Outlier target lines: solid brand colours + luminous hint (dark)
                 lc = (s.get("lineStyle") or {}).get("color") or (
                     (s.get("itemStyle") or {}).get("color"))
@@ -2831,26 +2918,10 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                         )
                     ]
 
-                    mc_vals = mean_coverage["coverage"].astype(float)
-                    m_mu = float(mc_vals.mean())
-                    m_sd = float(mc_vals.std()) if len(mc_vals) > 1 else 0.0
-                    band_low = max(0.0, m_mu - 2.0 * m_sd)
-                    band_high = max(band_low + 1e-9, m_mu + 2.0 * m_sd)
+                    # Time-varying ±2σ across genes at each timestamp (same basis as outliers)
                     band_fill = _cov_band_fill_rgba()
-
-                    band_series = {
-                        "name": "_band",
-                        "type": "line",
-                        "data": [],
-                        "silent": True,
-                        "showInLegend": False,
-                        "z": 0,
-                        "markArea": {
-                            "silent": True,
-                            "itemStyle": {"color": band_fill},
-                            "data": [[{"yAxis": band_low}, {"yAxis": band_high}]],
-                        },
-                    }
+                    env_low, env_span = _cov_per_timestamp_envelope(df)
+                    envelope_series = _cov_envelope_series(band_fill, env_low, env_span)
 
                     mean_c = _cov_mean_line_color()
                     mean_ls: Dict[str, Any] = {
@@ -3113,7 +3184,7 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                                     },
                                 },
                             },
-                            "series": [band_series]
+                            "series": envelope_series
                             + dim_gene_series
                             + outlier_gene_series
                             + [mean_series],

@@ -207,8 +207,9 @@ def is_whole_chromosome_event(
     """
     Determine if a chromosome shows a whole chromosome event.
 
-    Proportion checks are direction-specific (gain bins vs loss bins) so a
-    uniform log2 shift across an arm counts toward the call.
+    ``p_arm_mean`` / ``q_arm_mean`` are arm-level location statistics (median
+    of finite bins). Proportion checks are direction-specific (gain bins vs
+    loss bins) so a uniform log2 shift across an arm counts toward the call.
     """
     rules = CNV_EVENT_RULES["whole_chromosome"]
 
@@ -253,6 +254,8 @@ def is_arm_event(
 ) -> Tuple[bool, str]:
     """
     Determine if a chromosome arm shows a significant event.
+
+    ``arm_mean`` is the arm-level location statistic (median of finite bins).
     """
     rules = CNV_EVENT_RULES["arm_specific"]
 

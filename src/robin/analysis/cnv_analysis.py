@@ -678,14 +678,72 @@ def expected_cnv_ploidy_baseline(
     return 2.0
 
 
+# Reference (CNV2) bins at or below this are treated as unmappable and excluded
+# from the log2 calling track. Matches the visual rule that a flat-zero CNV3
+# difference (sample≈ref≈0) must not yield gain/loss calls.
+CNV_REF_MAPPABILITY_EPS = 0.0
+
+# Region/arm/band must retain at least this fraction of finite (mappable) bins
+# after the CNV2 mask before GAIN/LOSS may be called. Blocks sparsely mapped
+# short arms (e.g. chr21/22 p) where only residual bins survive the mask.
+CNV_MAPPABILITY_MIN_FRACTION = 0.40
+
+
+def region_mappable_fraction(values: np.ndarray) -> float:
+    """Fraction of bins that are finite (mappable) in a region array."""
+    arr = np.asarray(values, dtype=float).ravel()
+    if arr.size == 0:
+        return 0.0
+    return float(np.mean(np.isfinite(arr)))
+
+
+def region_has_mappable_support(
+    values: np.ndarray,
+    *,
+    min_fraction: float = CNV_MAPPABILITY_MIN_FRACTION,
+) -> bool:
+    """True when a region has enough mappable bins to allow gain/loss calling."""
+    return region_mappable_fraction(values) >= float(min_fraction)
+
+
+def _mappable_mask_from_reference(
+    sample_vals: np.ndarray,
+    ref_vals: Optional[np.ndarray],
+    *,
+    eps: float = CNV_REF_MAPPABILITY_EPS,
+) -> np.ndarray:
+    """Boolean mask: True where reference has usable (mappable) signal.
+
+    When ``ref_vals`` is None the whole sample is treated as mappable (legacy
+    callers without CNV2). When provided, bins with ref ≤ ``eps`` — and any
+    sample bins beyond the reference length — are unmappable.
+    """
+    vals = np.asarray(sample_vals, dtype=float).ravel()
+    if ref_vals is None:
+        return np.ones(vals.shape, dtype=bool)
+    ref = np.asarray(ref_vals, dtype=float).ravel()
+    mask = np.zeros(vals.shape, dtype=bool)
+    n = min(vals.size, ref.size)
+    if n:
+        mask[:n] = np.isfinite(ref[:n]) & (ref[:n] > eps)
+    return mask
+
+
 def compute_cnv_log2_from_ploidy(
     cnv_map: Dict[str, np.ndarray],
     sex_estimate: Optional[str] = None,
+    ref_cnv_map: Optional[Dict[str, np.ndarray]] = None,
+    *,
+    ref_mappability_eps: float = CNV_REF_MAPPABILITY_EPS,
 ) -> Dict[str, np.ndarray]:
     """log2(observed ploidy / expected copy number) per bin.
 
     Matches the interpretation of the GUI ploidy scatter plot: a region at
     3 copies on an autosome (expected 2) yields log2(3/2) ≈ 0.585.
+
+    When ``ref_cnv_map`` (CNV2) is provided, bins with reference ploidy ≤
+    ``ref_mappability_eps`` are set to NaN so unmappable loci cannot be called
+    as gains or losses. Chromosomes absent from the reference are fully masked.
     """
     log2_ratios: Dict[str, np.ndarray] = {}
     for chrom, values in cnv_map.items():
@@ -693,12 +751,21 @@ def compute_cnv_log2_from_ploidy(
         if baseline is None or baseline <= 0:
             continue
         vals = np.asarray(values, dtype=float)
+        ref_vals = None
+        if ref_cnv_map is not None:
+            if chrom not in ref_cnv_map:
+                log2_ratios[chrom] = np.full(vals.shape, np.nan, dtype=float)
+                continue
+            ref_vals = ref_cnv_map[chrom]
+        mappable = _mappable_mask_from_reference(
+            vals, ref_vals, eps=ref_mappability_eps
+        )
         with np.errstate(divide="ignore", invalid="ignore"):
             ratio = np.divide(
                 vals,
                 baseline,
                 out=np.full_like(vals, np.nan, dtype=float),
-                where=vals > 0,
+                where=(vals > 0) & mappable,
             )
             log2_ratios[chrom] = np.log2(ratio)
     return log2_ratios
@@ -707,13 +774,22 @@ def compute_cnv_log2_from_ploidy(
 def resolve_cnv_calling_track(
     cnv_map: Dict[str, np.ndarray],
     sex_estimate: Optional[str] = None,
+    ref_cnv_map: Optional[Dict[str, np.ndarray]] = None,
+    *,
+    ref_mappability_eps: float = CNV_REF_MAPPABILITY_EPS,
 ) -> Dict[str, np.ndarray]:
     """Bin-level track for arm/whole-chromosome CNV event calling.
 
     Returns log2(observed ploidy / expected copy number) per chromosome; 0 is
     normal for that chromosome and sex. Matches the GUI CNV log2 ratio plot.
+    Pass ``ref_cnv_map`` (CNV2) to mask unmappable bins to NaN.
     """
-    return compute_cnv_log2_from_ploidy(cnv_map, sex_estimate)
+    return compute_cnv_log2_from_ploidy(
+        cnv_map,
+        sex_estimate,
+        ref_cnv_map,
+        ref_mappability_eps=ref_mappability_eps,
+    )
 
 
 # Gene representative value: mean of bins spanning the gene, with focal rescue.
@@ -863,11 +939,31 @@ def prepare_cnv_calling_track(
     analysis_bin_width: int,
     sex_estimate: Optional[str] = None,
     min_calling_bin_width: int = CNV_CALLING_MIN_BIN_WIDTH,
-) -> Tuple[Dict[str, np.ndarray], int]:
-    """Log2 calling track coarsened to at least ``min_calling_bin_width``."""
-    log2_track = resolve_cnv_calling_track(cnv_map, sex_estimate)
+    ref_cnv_map: Optional[Dict[str, np.ndarray]] = None,
+    *,
+    ref_mappability_eps: float = CNV_REF_MAPPABILITY_EPS,
+) -> Tuple[Dict[str, np.ndarray], int, Dict[str, np.ndarray]]:
+    """Log2 calling track coarsened to at least ``min_calling_bin_width``.
+
+    When ``ref_cnv_map`` (CNV2) is supplied, unmappable reference bins are
+    NaN-masked before coarsening so arm/whole-chromosome callers inherit the
+    mappability gate.
+
+    Returns ``(calling_track, calling_bin_width, analysis_log2_track)``. The
+    analysis-resolution track is used for the ≥40% mappable-bin support check.
+    """
+    log2_track = resolve_cnv_calling_track(
+        cnv_map,
+        sex_estimate,
+        ref_cnv_map,
+        ref_mappability_eps=ref_mappability_eps,
+    )
     calling_bw = resolve_cnv_calling_bin_width(analysis_bin_width, min_calling_bin_width)
-    return coarsen_cnv_track(log2_track, analysis_bin_width, calling_bw), calling_bw
+    return (
+        coarsen_cnv_track(log2_track, analysis_bin_width, calling_bw),
+        calling_bw,
+        log2_track,
+    )
 
 
 CNV_REPORT_GENOME_PLOT_BIN_WIDTH = 1_000_000
@@ -909,7 +1005,16 @@ def downsample_cnv_for_plot(
         return x_bp, values
     trimmed = values[:n_trim]
     grouped = trimmed.reshape(-1, group_size)
-    values_out = np.mean(grouped, axis=1)
+    # nanmean so CNV2-masked (NaN) bins do not zero out mappable neighbours;
+    # all-NaN groups stay NaN without a RuntimeWarning.
+    finite_counts = np.sum(np.isfinite(grouped), axis=1)
+    sums = np.nansum(grouped, axis=1)
+    values_out = np.divide(
+        sums,
+        finite_counts,
+        out=np.full(sums.shape, np.nan, dtype=float),
+        where=finite_counts > 0,
+    )
     # Centre each display bin in analysis-bin coordinates (not nominal plot_bin_width).
     x_bp = (np.arange(len(values_out)) * group_size + (group_size / 2.0)) * analysis_bin_width
     return x_bp, values_out

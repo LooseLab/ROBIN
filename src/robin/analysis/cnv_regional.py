@@ -10,6 +10,7 @@ import numpy as np
 import pandas as pd
 
 from robin import resources
+from robin.analysis.cnv_analysis import region_has_mappable_support
 from robin.analysis.cnv_classification import CNVEvent
 from robin.utils.sequencing_files import panel_bed_filename
 
@@ -226,8 +227,8 @@ def analyze_cytoband_cnv(
     Expects ``cnv_data`` on the log2(ploidy / expected) scale (0 = normal).
     Gain/loss cut-offs are the same fixed thresholds as arm / whole-chromosome
     calling (``get_cnv_thresholds``, default ±0.30). Non-finite bins (no
-    coverage) are excluded from band means; bands without usable data are
-    marked ``NO_DATA``.
+    coverage) are excluded from band means; bands without usable data, or with
+    fewer than 40% mappable bins after the CNV2 mask, are marked ``NO_DATA``.
     """
     from robin.classification_config import get_cnv_thresholds
 
@@ -299,6 +300,10 @@ def analyze_cytoband_cnv(
             region_cnv = chrom_arr[start_bin : end_bin + 1]
             finite = region_cnv[np.isfinite(region_cnv)]
             if finite.size == 0:
+                mean_cnv = float("nan")
+                state = "NO_DATA"
+            elif not region_has_mappable_support(region_cnv):
+                # Too few mappable bins (e.g. acrocentric p / seg-dup) — not assessable.
                 mean_cnv = float("nan")
                 state = "NO_DATA"
             else:

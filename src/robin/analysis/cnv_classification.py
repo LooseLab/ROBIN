@@ -25,8 +25,66 @@ from robin.classification_config import (
     is_arm_event,
     is_resolution_sufficient
 )
+from robin.analysis.cnv_analysis import (
+    CNV_MAPPABILITY_MIN_FRACTION,
+    region_has_mappable_support,
+)
 
 logger = logging.getLogger(__name__)
+
+
+def _chromosome_region_slice(
+    cnv_map: Dict[str, np.ndarray],
+    chromosome: str,
+    start_pos: int,
+    end_pos: int,
+    bin_width: int,
+) -> np.ndarray:
+    """Return bins covering [start_pos, end_pos] on a per-chromosome track."""
+    if chromosome not in cnv_map:
+        return np.asarray([], dtype=float)
+    arr = np.asarray(cnv_map[chromosome], dtype=float).ravel()
+    if arr.size == 0 or bin_width <= 0:
+        return np.asarray([], dtype=float)
+    start_bin = max(0, int(start_pos // bin_width))
+    end_bin = min(arr.size - 1, int(end_pos // bin_width))
+    if end_bin < start_bin:
+        return np.asarray([], dtype=float)
+    return arr[start_bin : end_bin + 1]
+
+
+def _arm_genomic_span(
+    cytobands_df: pd.DataFrame,
+    chromosome: str,
+    arm: str,
+) -> Optional[Tuple[int, int]]:
+    chr_cytobands = cytobands_df[cytobands_df["chrom"] == chromosome]
+    bands = chr_cytobands[chr_cytobands["name"].str.startswith(arm, na=False)]
+    if bands.empty:
+        return None
+    return int(bands["start_pos"].min()), int(bands["end_pos"].max())
+
+
+def _arm_has_mappable_support(
+    support_cnv_data: Optional[Dict[str, np.ndarray]],
+    support_bin_width: Optional[int],
+    chromosome: str,
+    arm: str,
+    cytobands_df: pd.DataFrame,
+    *,
+    min_fraction: float = CNV_MAPPABILITY_MIN_FRACTION,
+) -> bool:
+    """Gate arm calls on analysis-resolution mappable fraction when support track given."""
+    if support_cnv_data is None or support_bin_width is None:
+        return True
+    span = _arm_genomic_span(cytobands_df, chromosome, arm)
+    if span is None:
+        return False
+    start_pos, end_pos = span
+    region = _chromosome_region_slice(
+        support_cnv_data, chromosome, start_pos, end_pos, int(support_bin_width)
+    )
+    return region_has_mappable_support(region, min_fraction=min_fraction)
 
 
 class CNVEvent:
@@ -109,9 +167,12 @@ def analyze_chromosome_arms(
     """
     Analyze p and q arms of a chromosome for CNV events.
 
+    The arm level statistic is the **median** of finite bins (robust to a
+    minority of deep outlier bins that would otherwise drag a mean-based call).
+
     Returns:
         Tuple of (
-            p_arm_mean, q_arm_mean,
+            p_arm_level, q_arm_level,
             p_arm_proportion_gain, p_arm_proportion_loss,
             q_arm_proportion_gain, q_arm_proportion_loss,
         )
@@ -145,13 +206,13 @@ def analyze_chromosome_arms(
                 p_arm_values.extend(region_values)
         p_arm_values = _finite_arm_values(p_arm_values)
         if p_arm_values:
-            p_arm_mean = float(np.mean(p_arm_values))
+            p_arm_mean = float(np.median(p_arm_values))
             p_arm_proportion_gain, p_arm_proportion_loss = _arm_bin_proportions(
                 p_arm_values, gain_threshold, loss_threshold
             )
 
     logger.debug(
-        f"{chromosome} p-arm: {len(p_arm_cytobands)} bands found, mean={p_arm_mean}, "
+        f"{chromosome} p-arm: {len(p_arm_cytobands)} bands found, median={p_arm_mean}, "
         f"gain_prop={p_arm_proportion_gain:.3f}, loss_prop={p_arm_proportion_loss:.3f}"
     )
 
@@ -173,13 +234,13 @@ def analyze_chromosome_arms(
                 q_arm_values.extend(region_values)
         q_arm_values = _finite_arm_values(q_arm_values)
         if q_arm_values:
-            q_arm_mean = float(np.mean(q_arm_values))
+            q_arm_mean = float(np.median(q_arm_values))
             q_arm_proportion_gain, q_arm_proportion_loss = _arm_bin_proportions(
                 q_arm_values, gain_threshold, loss_threshold
             )
 
     logger.debug(
-        f"{chromosome} q-arm: {len(q_arm_cytobands)} bands found, mean={q_arm_mean}, "
+        f"{chromosome} q-arm: {len(q_arm_cytobands)} bands found, median={q_arm_mean}, "
         f"gain_prop={q_arm_proportion_gain:.3f}, loss_prop={q_arm_proportion_loss:.3f}"
     )
 
@@ -198,7 +259,9 @@ def detect_cnv_events(
     bin_width: int,
     sex_estimate: str,
     cytobands_df: pd.DataFrame,
-    gene_df: Optional[pd.DataFrame] = None
+    gene_df: Optional[pd.DataFrame] = None,
+    support_cnv_data: Optional[Dict[str, np.ndarray]] = None,
+    support_bin_width: Optional[int] = None,
 ) -> List[CNVEvent]:
     """
     Detect CNV events using centralized classification rules.
@@ -207,12 +270,18 @@ def detect_cnv_events(
     use ``prepare_cnv_calling_track()`` from ``cnv_analysis`` to build the
     track from absolute ploidy (``CNV.npy``), coarsened to at least 1 Mb bins.
 
+    When ``support_cnv_data`` / ``support_bin_width`` are provided (analysis-
+    resolution masked log2), arm and whole-chromosome calls also require that
+    each assessed arm has at least ``CNV_MAPPABILITY_MIN_FRACTION`` finite bins.
+
     Args:
         cnv_data: Per-chromosome log2 ratio arrays
         bin_width: Bin width in base pairs
         sex_estimate: Sex estimate
         cytobands_df: Cytobands dataframe
         gene_df: Optional gene dataframe
+        support_cnv_data: Optional analysis-resolution masked log2 track
+        support_bin_width: Bin width for ``support_cnv_data``
 
     Returns:
         List of CNVEvent objects
@@ -252,6 +321,35 @@ def detect_cnv_events(
         ) = analyze_chromosome_arms(
             cnv_data, chromosome, bin_width, sex_estimate, cytobands_df
         )
+
+        p_supported = _arm_has_mappable_support(
+            support_cnv_data,
+            support_bin_width,
+            chromosome,
+            "p",
+            cytobands_df,
+        )
+        q_supported = _arm_has_mappable_support(
+            support_cnv_data,
+            support_bin_width,
+            chromosome,
+            "q",
+            cytobands_df,
+        )
+        if not p_supported:
+            logger.debug(
+                "%s p-arm skipped: mappable fraction below %.0f%%",
+                chromosome,
+                100 * CNV_MAPPABILITY_MIN_FRACTION,
+            )
+            p_arm_mean = None
+        if not q_supported:
+            logger.debug(
+                "%s q-arm skipped: mappable fraction below %.0f%%",
+                chromosome,
+                100 * CNV_MAPPABILITY_MIN_FRACTION,
+            )
+            q_arm_mean = None
         
         # Check for whole chromosome events
         if p_arm_mean is not None and q_arm_mean is not None:
@@ -401,9 +499,63 @@ def detect_cnv_events(
             # Single arm chromosome - use stricter threshold
             # Only use this logic if we truly have only one arm (like chrY in some cases)
             # For chromosomes that should have both arms, this indicates a cytoband parsing issue
+            # Also reached when one arm lacks mappable support (acrocentric p-arms).
+            if p_arm_mean is not None or q_arm_mean is not None:
+                # One supported arm remains: allow arm-level calling on that arm only.
+                for arm, mean, prop_g, prop_l in (
+                    ("p", p_arm_mean, p_arm_proportion_gain, p_arm_proportion_loss),
+                    ("q", q_arm_mean, q_arm_proportion_gain, q_arm_proportion_loss),
+                ):
+                    if mean is None:
+                        continue
+                    is_evt, evt_type = is_arm_event(
+                        mean, prop_g, prop_l, gain_threshold, loss_threshold
+                    )
+                    if not is_evt:
+                        continue
+                    span = _arm_genomic_span(cytobands_df, chromosome, arm)
+                    if span is None:
+                        continue
+                    start_pos, end_pos = span
+                    length = end_pos - start_pos
+                    genes = []
+                    if gene_df is not None:
+                        genes = gene_df[
+                            (gene_df["chrom"] == chromosome)
+                            & (gene_df["start_pos"] <= end_pos)
+                            & (gene_df["end_pos"] >= start_pos)
+                        ]["gene"].astype(str).tolist()
+                    prop = prop_g if evt_type == "GAIN" else prop_l
+                    events.append(
+                        CNVEvent(
+                            chromosome=chromosome,
+                            event_type=evt_type,
+                            mean_cnv=mean,
+                            start_pos=start_pos,
+                            end_pos=end_pos,
+                            length=length,
+                            genes=genes,
+                            confidence="High" if prop > 0.8 else "Medium",
+                            arm=arm,
+                            proportion_affected=prop,
+                        )
+                    )
+                    logger.info(
+                        "Detected %s-arm %s for %s (other arm unsupported/absent)",
+                        arm,
+                        evt_type,
+                        chromosome,
+                    )
+                continue
+
             logger.warning(f"{chromosome}: Only one arm detected - this may indicate a cytoband parsing issue")
             
-            whole_chr_mean = float(np.mean(cnv_data[chromosome]))
+            arr = np.asarray(cnv_data[chromosome], dtype=float)
+            if not np.any(np.isfinite(arr)):
+                continue
+            whole_chr_mean = float(np.nanmean(arr))
+            if not np.isfinite(whole_chr_mean):
+                continue
             single_arm_multiplier = 1.5  # From CNV_EVENT_RULES
             
             if abs(whole_chr_mean) > abs(gain_threshold) * single_arm_multiplier:
@@ -614,8 +766,21 @@ def detect_cnv_events_for_sample(sample_dir: Path) -> List[CNVEvent]:
                 sex_estimate = _normalize_sex_label(loaded)
 
         analysis_binw = int(cnv_dict.get("bin_width", 1_000_000))
-        calling_cnv, calling_binw = prepare_cnv_calling_track(
-            cnv_map, analysis_binw, sex_estimate
+        ref_cnv_map = None
+        cnv2_npy = sample_dir / "CNV2.npy"
+        if cnv2_npy.exists():
+            try:
+                loaded_ref = np.load(cnv2_npy, allow_pickle=True).item()
+                if isinstance(loaded_ref, dict):
+                    ref_cnv_map = (
+                        loaded_ref["cnv"]
+                        if "cnv" in loaded_ref and isinstance(loaded_ref["cnv"], dict)
+                        else loaded_ref
+                    )
+            except Exception:
+                ref_cnv_map = None
+        calling_cnv, calling_binw, analysis_log2 = prepare_cnv_calling_track(
+            cnv_map, analysis_binw, sex_estimate, ref_cnv_map=ref_cnv_map
         )
         if not calling_cnv:
             return []
@@ -626,6 +791,8 @@ def detect_cnv_events_for_sample(sample_dir: Path) -> List[CNVEvent]:
             sex_estimate=sex_estimate,
             cytobands_df=load_cytobands_df(),
             gene_df=load_gene_bed_for_sample(sample_dir),
+            support_cnv_data=analysis_log2,
+            support_bin_width=analysis_binw,
         )
     except Exception as exc:
         logger.debug("CNV event detection failed for %s: %s", sample_dir, exc)
