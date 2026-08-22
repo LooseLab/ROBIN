@@ -50,7 +50,6 @@ Commands that start processing or change protected state usually show a **resear
 
 | Variable | Effect |
 |----------|--------|
-| `GITHUB_TOKEN` | Private GitHub assets for `robin utils update-models`. |
 | `ROBIN_PROCESS_LARGE_BAMS` | Warns that large-BAM mode must not run alongside live sequencing. |
 | `LJ_BAM_THREADS` | Optional BAM threading ([README — Performance](https://github.com/LooseLab/ROBIN/blob/main/README.md#performance)). |
 
