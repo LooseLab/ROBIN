@@ -36,7 +36,10 @@ def load_panel_gene_bed(output_dir: str) -> tuple[str | None, pd.DataFrame]:
             master_df = pd.read_csv(master_csv)
             if not master_df.empty and "analysis_panel" in master_df.columns:
                 panel_val = master_df.iloc[0]["analysis_panel"]
-                if panel_val is not None and str(panel_val).strip().lower() not in ("", "nan"):
+                if panel_val is not None and str(panel_val).strip().lower() not in (
+                    "",
+                    "nan",
+                ):
                     panel = str(panel_val).strip()
         except Exception as exc:
             logger.debug("Could not read analysis panel from master.csv: %s", exc)
@@ -50,7 +53,9 @@ def load_panel_gene_bed(output_dir: str) -> tuple[str | None, pd.DataFrame]:
         panel_bed_filename(panel),
     )
     if not os.path.exists(bed_path):
-        logger.warning("Target panel BED not found for panel '%s' at %s", panel, bed_path)
+        logger.warning(
+            "Target panel BED not found for panel '%s' at %s", panel, bed_path
+        )
         return panel, empty
 
     return panel, pd.read_csv(
@@ -190,7 +195,10 @@ def build_regional_cnv_events(
                 "mean_cnv": float(row["mean_cnv"]),
                 "state": str(row["cnv_state"]),
                 "panel_genes": panel_genes_in_region(
-                    panel_genes_df, chrom, start_pos, end_pos,
+                    panel_genes_df,
+                    chrom,
+                    start_pos,
+                    end_pos,
                 ),
             }
         )
@@ -346,9 +354,7 @@ def analyze_cytoband_cnv(
             current_group["name"] = (
                 f"{current_group['chrom']} {current_group['bands'][0]}-{current_group['bands'][-1]}"
             )
-            finite_means = [
-                v for v in current_group["mean_cnv"] if np.isfinite(v)
-            ]
+            finite_means = [v for v in current_group["mean_cnv"] if np.isfinite(v)]
             current_group["mean_cnv"] = (
                 float(np.mean(finite_means)) if finite_means else float("nan")
             )
@@ -388,9 +394,7 @@ def analyze_cytoband_cnv(
         current_group["mean_cnv"] = (
             float(np.mean(finite_means)) if finite_means else float("nan")
         )
-        current_group["length"] = (
-            current_group["end_pos"] - current_group["start_pos"]
-        )
+        current_group["length"] = current_group["end_pos"] - current_group["start_pos"]
 
         if current_group["cnv_state"] not in ("NORMAL", "NO_DATA"):
             merged_cytobands[merged_idx] = current_group

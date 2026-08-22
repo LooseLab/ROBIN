@@ -30,9 +30,7 @@ def _report(master_data):
 
 def _paragraph_text(elements):
     return " ".join(
-        element.getPlainText()
-        for element in elements
-        if isinstance(element, Paragraph)
+        element.getPlainText() for element in elements if isinstance(element, Paragraph)
     )
 
 
@@ -44,9 +42,7 @@ def test_report_includes_all_context_modbase_warning():
                 "devices": "p2soloTower",
                 "flowcell_ids": "PAW67899",
                 "basecall_models": "hac@v6.0.0",
-                "modbase_models": (
-                    "dna_r10.4.1_e8.2_400bps_hac@v6.0.0_5mC_5hmC@v1"
-                ),
+                "modbase_models": ("dna_r10.4.1_e8.2_400bps_hac@v6.0.0_5mC_5hmC@v1"),
                 "counter_bam_passed": 1,
                 "counter_bam_failed": 0,
                 "counter_bases_count": 100,

@@ -6,11 +6,12 @@ This module handles fetching and caching news from the ROBIN news API.
 
 import json
 import logging
-import requests
-from datetime import datetime, timedelta
-from typing import Dict, Any, List, Optional
 from dataclasses import dataclass
-from nicegui import ui, run
+from datetime import datetime, timedelta
+from typing import Any, Dict, List, Optional
+
+import requests
+from nicegui import run, ui
 
 from robin.gui.theme import client_timer, stop_timer, ui_element_exists
 
@@ -162,9 +163,7 @@ class NewsFeed:
                         ui.icon("update", color="gray").classes("text-sm")
                         ui.label(
                             f'Updated {self.last_update.strftime("%H:%M %d/%m/%Y")}'
-                        ).classes(
-                            "text-body-small text-slate-600 dark:text-slate-400"
-                        )
+                        ).classes("text-body-small text-slate-600 dark:text-slate-400")
 
             # Scrollable news container with elegant styling
             with ui.scroll_area().classes("w-full h-96"):
@@ -202,7 +201,9 @@ class NewsFeed:
                             ui.icon("wifi_off", color="negative")
                             ui.label(
                                 "News feed unavailable - please check your network connection"
-                            ).classes("text-body-medium text-[color:var(--md-on-error-container)]")
+                            ).classes(
+                                "text-body-medium text-[color:var(--md-on-error-container)]"
+                            )
                     return
 
                 if not self.news_items:

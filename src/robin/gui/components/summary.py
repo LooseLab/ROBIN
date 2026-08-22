@@ -1,42 +1,43 @@
 from __future__ import annotations
 
+import asyncio
+import csv
+import hashlib
+import json
+import logging
+import threading
+import time
+from collections import OrderedDict
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
-import asyncio
-import threading
-import json
-import csv
-import time
-from datetime import datetime
-import hashlib
-import logging
-from collections import OrderedDict
 
 try:
-    from nicegui import ui, background_tasks
+    from nicegui import background_tasks, ui
 except ImportError:  # pragma: no cover
     ui = None
     background_tasks = None
 
-from robin.classification_config import get_confidence_ui_tier
-from robin.analysis.cnv_classification import (
-    detect_cnv_events_for_sample,
-    format_cnv_events_card_lines,
-)
 from robin.analysis.bam_preprocessor import (
     _get_modbase_model_warning,
     _get_modbase_model_warning_level,
     _is_unresolved_modbase_model,
 )
-from robin.gui.config import (
-    get_confidence_level as get_classifier_confidence_level,
-    is_section_visible,
-    get_visible_classification_steps,
-    any_classification_visible,
-    launcher_visibility_context,
-    CLASSIFICATION_STEPS,
+from robin.analysis.cnv_classification import (
+    detect_cnv_events_for_sample,
+    format_cnv_events_card_lines,
 )
-
+from robin.classification_config import get_confidence_ui_tier
+from robin.gui.config import (
+    CLASSIFICATION_STEPS,
+    any_classification_visible,
+)
+from robin.gui.config import get_confidence_level as get_classifier_confidence_level
+from robin.gui.config import (
+    get_visible_classification_steps,
+    is_section_visible,
+    launcher_visibility_context,
+)
 
 _SUMMARY_CACHE: "OrderedDict[str, Dict[str, Any]]" = OrderedDict()
 _SUMMARY_CACHE_LOCK = threading.Lock()
@@ -49,7 +50,8 @@ def _evict_summary_cache_locked(now_ts: Optional[float] = None) -> None:
     stale_keys = [
         key
         for key, payload in _SUMMARY_CACHE.items()
-        if (now_ts - float(payload.get("_cached_at", 0.0))) > _SUMMARY_CACHE_MAX_AGE_SECONDS
+        if (now_ts - float(payload.get("_cached_at", 0.0)))
+        > _SUMMARY_CACHE_MAX_AGE_SECONDS
     ]
     for key in stale_keys:
         _SUMMARY_CACHE.pop(key, None)
@@ -64,7 +66,9 @@ def _get_summary_cache(sample_dir: Path) -> Dict[str, Any]:
         if not payload:
             return {}
         now_ts = time.time()
-        if (now_ts - float(payload.get("_cached_at", 0.0))) > _SUMMARY_CACHE_MAX_AGE_SECONDS:
+        if (
+            now_ts - float(payload.get("_cached_at", 0.0))
+        ) > _SUMMARY_CACHE_MAX_AGE_SECONDS:
             _SUMMARY_CACHE.pop(key, None)
             return {}
         _SUMMARY_CACHE.move_to_end(key)
@@ -134,9 +138,7 @@ def _run_info_section(sample_dir: Path, sample_id: str):
     model = run_info.get("model", "Missing")
     modbase_model = run_info.get("modbase_model", "Missing")
     modbase_display = (
-        "Unknown"
-        if _is_unresolved_modbase_model(modbase_model)
-        else modbase_model
+        "Unknown" if _is_unresolved_modbase_model(modbase_model) else modbase_model
     )
     device = run_info.get("device", "Not available")
     flow = run_info.get("flow_cell", "Not available")
@@ -185,9 +187,7 @@ def _run_info_section(sample_dir: Path, sample_id: str):
         with ui.element("div").classes("run-summary-grid"):
             for icn, lab, val, span in cells:
                 ht = hints.get(lab, "")
-                _run_summary_cell(
-                    icn, lab, val, col_class=span, hint=ht
-                )
+                _run_summary_cell(icn, lab, val, col_class=span, hint=ht)
         modbase_warning = _get_modbase_model_warning(
             None if modbase_model == "Missing" else modbase_model
         )
@@ -269,16 +269,18 @@ def _classification_section(sample_dir: Path, launcher: Any = None):
             },
         },
     )
-    
+
     # Get workflow steps from launcher if available
     workflow_steps, display_config, viewer_role = launcher_visibility_context(launcher)
     enabled_classification_steps = get_visible_classification_steps(
         workflow_steps, display_config, viewer_role=viewer_role
     )
-    
-    if not any_classification_visible(workflow_steps, display_config, viewer_role=viewer_role):
+
+    if not any_classification_visible(
+        workflow_steps, display_config, viewer_role=viewer_role
+    ):
         return
-    
+
     with ui.element("div").classes("classification-insight-shell w-full min-w-0"):
         ui.label("Classification details").classes(
             "classification-insight-heading text-headline-small"
@@ -390,18 +392,25 @@ def _analysis_section(sample_dir: Path, launcher: Any = None):
     workflow_steps, display_config, viewer_role = launcher_visibility_context(launcher)
     cache = _get_summary_cache(sample_dir)
     analysis_data = cache.get("analysis_data", {})
-    _vis = lambda sid: is_section_visible(sid, workflow_steps=workflow_steps, display_config=display_config, viewer_role=viewer_role)
+    _vis = lambda sid: is_section_visible(
+        sid,
+        workflow_steps=workflow_steps,
+        display_config=display_config,
+        viewer_role=viewer_role,
+    )
     coverage_data = analysis_data.get("coverage", {}) if _vis("target") else {}
     cnv_data = analysis_data.get("cnv", {}) if _vis("cnv") else {}
     mgmt_data = analysis_data.get("mgmt", {}) if _vis("mgmt") else {}
     fusion_data = analysis_data.get("fusion", {}) if _vis("fusion") else {}
-    
+
     should_show_target = _vis("target")
     should_show_cnv = _vis("cnv")
     should_show_mgmt = _vis("mgmt")
     should_show_fusion = _vis("fusion")
-    
-    if not any([should_show_target, should_show_cnv, should_show_mgmt, should_show_fusion]):
+
+    if not any(
+        [should_show_target, should_show_cnv, should_show_mgmt, should_show_fusion]
+    ):
         return
 
     with ui.element("div").classes("classification-insight-shell w-full min-w-0"):
@@ -505,6 +514,7 @@ def add_summary_section(sample_dir: Path, sample_id: str, launcher: Any = None) 
         30.0, _refresh_summary_cache_async, active=True, immediate=False
     )
     try:
+
         def _on_disconnect_cleanup() -> None:
             stop_timer(refresh_timer)
             _clear_summary_cache(sample_dir)
@@ -527,13 +537,33 @@ def _refresh_summary_cache_sync(
 
     # Analysis data (only compute enabled sections)
     analysis_data: Dict[str, Any] = {}
-    if is_section_visible("target", workflow_steps=workflow_steps, display_config=display_config, viewer_role=viewer_role):
+    if is_section_visible(
+        "target",
+        workflow_steps=workflow_steps,
+        display_config=display_config,
+        viewer_role=viewer_role,
+    ):
         analysis_data["coverage"] = _extract_coverage_data(sample_dir)
-    if is_section_visible("cnv", workflow_steps=workflow_steps, display_config=display_config, viewer_role=viewer_role):
+    if is_section_visible(
+        "cnv",
+        workflow_steps=workflow_steps,
+        display_config=display_config,
+        viewer_role=viewer_role,
+    ):
         analysis_data["cnv"] = _extract_cnv_data(sample_dir)
-    if is_section_visible("mgmt", workflow_steps=workflow_steps, display_config=display_config, viewer_role=viewer_role):
+    if is_section_visible(
+        "mgmt",
+        workflow_steps=workflow_steps,
+        display_config=display_config,
+        viewer_role=viewer_role,
+    ):
         analysis_data["mgmt"] = _extract_mgmt_data(sample_dir)
-    if is_section_visible("fusion", workflow_steps=workflow_steps, display_config=display_config, viewer_role=viewer_role):
+    if is_section_visible(
+        "fusion",
+        workflow_steps=workflow_steps,
+        display_config=display_config,
+        viewer_role=viewer_role,
+    ):
         analysis_data["fusion"] = _extract_fusion_data(sample_dir)
 
     data["analysis_data"] = analysis_data
@@ -620,36 +650,50 @@ def _create_classification_dashboard_card_with_data(
             ui.label(description).classes("classification-insight-foot")
 
 
-def _create_classification_dashboard_card(title: str, classification: str, icon: str, description: str) -> Dict[str, Any]:
+def _create_classification_dashboard_card(
+    title: str, classification: str, icon: str, description: str
+) -> Dict[str, Any]:
     """Create a compact classification dashboard card with detailed information. Returns labels for updating."""
-    with ui.card().classes("flex-1 bg-white rounded-lg shadow-sm border border-gray-200 p-4"):
+    with ui.card().classes(
+        "flex-1 bg-white rounded-lg shadow-sm border border-gray-200 p-4"
+    ):
         with ui.row().classes("flex items-center justify-between mb-2"):
             # Title
             ui.label(title).classes("text-sm font-medium text-gray-600")
-            
+
             # Icon in circular background
-            with ui.row().classes("w-7 h-7 bg-blue-100 rounded-full flex items-center justify-center"):
+            with ui.row().classes(
+                "w-7 h-7 bg-blue-100 rounded-full flex items-center justify-center"
+            ):
                 ui.icon(icon).classes("w-3.5 h-3.5 text-blue-600")
-        
+
         # Main classification result with confidence badge
         with ui.row().classes("flex items-center justify-between mb-1"):
-            classification_label = ui.label(classification).classes("text-xl font-bold text-gray-900")
+            classification_label = ui.label(classification).classes(
+                "text-xl font-bold text-gray-900"
+            )
             # Confidence level badge
-            confidence_badge = ui.label("Loading...").classes("px-2 py-1 text-xs font-medium rounded-full bg-gray-100 text-gray-600")
-        
+            confidence_badge = ui.label("Loading...").classes(
+                "px-2 py-1 text-xs font-medium rounded-full bg-gray-100 text-gray-600"
+            )
+
         # Compact details in a single row
         with ui.row().classes("flex items-center justify-between mb-1"):
-            confidence_label = ui.label("Confidence: Loading...").classes("text-xs font-medium text-gray-700")
-            features_label = ui.label("Features: Loading...").classes("text-xs text-gray-500")
-        
+            confidence_label = ui.label("Confidence: Loading...").classes(
+                "text-xs font-medium text-gray-700"
+            )
+            features_label = ui.label("Features: Loading...").classes(
+                "text-xs text-gray-500"
+            )
+
         # Description
         ui.label(description).classes("text-xs text-gray-500")
-        
+
         return {
             "classification": classification_label,
             "confidence": confidence_label,
             "confidence_badge": confidence_badge,
-            "features": features_label
+            "features": features_label,
         }
 
 
@@ -664,17 +708,27 @@ def _create_classification_card(
 ) -> Dict[str, Any]:
     """Create a classification summary card. Returns labels for updating."""
     labels = {}
-    with ui.card().classes("flex-1 elevation-4 rounded-xl bg-gradient-to-br from-blue-50 to-indigo-50 border-l-4 border-blue-500"):
+    with ui.card().classes(
+        "flex-1 elevation-4 rounded-xl bg-gradient-to-br from-blue-50 to-indigo-50 border-l-4 border-blue-500"
+    ):
         ui.label(f"{title}").classes("font-bold text-blue-800 mb-2")
         ui.separator().classes().style("border: 1px solid var(--md-primary)")
-        labels["classification"] = ui.label(f"Class: {classification}").classes("font-bold text-medium text-blue-600")
+        labels["classification"] = ui.label(f"Class: {classification}").classes(
+            "font-bold text-medium text-blue-600"
+        )
         confidence_color = _get_confidence_color(confidence_level)
-        labels["confidence"] = ui.label(f"Confidence: {confidence}%").classes(f"text-sm text-{confidence_color}-600")
-        labels["confidence_level"] = ui.label(confidence_level).classes(f"text-sm text-{confidence_color}-600")
+        labels["confidence"] = ui.label(f"Confidence: {confidence}%").classes(
+            f"text-sm text-{confidence_color}-600"
+        )
+        labels["confidence_level"] = ui.label(confidence_level).classes(
+            f"text-sm text-{confidence_color}-600"
+        )
         if model:
             ui.label(f"Model: {model}").classes("text-sm text-blue-600")
         if features and features_label:
-            labels["features"] = ui.label(f"Features: {features_label}").classes("text-sm text-blue-600")
+            labels["features"] = ui.label(f"Features: {features_label}").classes(
+                "text-sm text-blue-600"
+            )
 
     return labels
 
@@ -749,11 +803,15 @@ def _create_coverage_dashboard_card_with_data(
                 ui.label("≥30x").classes(
                     "analysis-insight-pill analysis-insight-pill--emerald"
                 )
-                ui.label("≥20x").classes("analysis-insight-pill analysis-insight-pill--sky")
+                ui.label("≥20x").classes(
+                    "analysis-insight-pill analysis-insight-pill--sky"
+                )
                 ui.label("≥10x").classes(
                     "analysis-insight-pill analysis-insight-pill--amber"
                 )
-                ui.label("<10x").classes("analysis-insight-pill analysis-insight-pill--rose")
+                ui.label("<10x").classes(
+                    "analysis-insight-pill analysis-insight-pill--rose"
+                )
             ui.label("Target panel coverage quality and depth").classes(
                 "classification-insight-foot"
             )
@@ -761,40 +819,62 @@ def _create_coverage_dashboard_card_with_data(
 
 def _create_coverage_dashboard_card() -> Dict[str, Any]:
     """Create a compact coverage analysis dashboard card. Returns labels for updating."""
-    with ui.card().classes("flex-1 bg-white rounded-lg shadow-sm border border-gray-200 p-4"):
+    with ui.card().classes(
+        "flex-1 bg-white rounded-lg shadow-sm border border-gray-200 p-4"
+    ):
         with ui.row().classes("flex items-center justify-between mb-2"):
             # Title
             ui.label("Coverage Analysis").classes("text-sm font-medium text-gray-600")
-            
+
             # Icon in circular background
-            with ui.row().classes("w-7 h-7 bg-blue-100 rounded-full flex items-center justify-center"):
+            with ui.row().classes(
+                "w-7 h-7 bg-blue-100 rounded-full flex items-center justify-center"
+            ):
                 ui.icon("analytics").classes("w-3.5 h-3.5 text-blue-600")
-        
+
         # Main quality result with badge
         with ui.row().classes("flex items-center justify-between mb-1"):
-            quality_label = ui.label("Loading...").classes("text-xl font-bold text-gray-900")
+            quality_label = ui.label("Loading...").classes(
+                "text-xl font-bold text-gray-900"
+            )
             # Coverage badge
-            coverage_badge = ui.label("--x").classes("px-2 py-1 text-xs font-medium rounded-full bg-gray-100 text-gray-600")
-        
+            coverage_badge = ui.label("--x").classes(
+                "px-2 py-1 text-xs font-medium rounded-full bg-gray-100 text-gray-600"
+            )
+
         # Coverage details in compact layout
         with ui.column().classes("mb-2"):
-            global_coverage_label = ui.label("Global: Loading...").classes("text-xs text-gray-600")
-            target_coverage_label = ui.label("Targets: Loading...").classes("text-xs text-gray-600")
-            enrichment_label = ui.label("Enrichment: Loading...").classes("text-xs text-gray-600")
-        
+            global_coverage_label = ui.label("Global: Loading...").classes(
+                "text-xs text-gray-600"
+            )
+            target_coverage_label = ui.label("Targets: Loading...").classes(
+                "text-xs text-gray-600"
+            )
+            enrichment_label = ui.label("Enrichment: Loading...").classes(
+                "text-xs text-gray-600"
+            )
+
         # Coverage thresholds as small badges
         with ui.row().classes("gap-1 flex-wrap"):
-            ui.label("≥30x").classes("px-1 py-0.5 text-xs bg-green-100 text-green-800 rounded")
-            ui.label("≥20x").classes("px-1 py-0.5 text-xs bg-blue-100 text-blue-800 rounded")
-            ui.label("≥10x").classes("px-1 py-0.5 text-xs bg-yellow-100 text-yellow-800 rounded")
-            ui.label("<10x").classes("px-1 py-0.5 text-xs bg-red-100 text-red-800 rounded")
-        
+            ui.label("≥30x").classes(
+                "px-1 py-0.5 text-xs bg-green-100 text-green-800 rounded"
+            )
+            ui.label("≥20x").classes(
+                "px-1 py-0.5 text-xs bg-blue-100 text-blue-800 rounded"
+            )
+            ui.label("≥10x").classes(
+                "px-1 py-0.5 text-xs bg-yellow-100 text-yellow-800 rounded"
+            )
+            ui.label("<10x").classes(
+                "px-1 py-0.5 text-xs bg-red-100 text-red-800 rounded"
+            )
+
         return {
             "quality": quality_label,
             "coverage_badge": coverage_badge,
             "global_coverage": global_coverage_label,
             "target_coverage": target_coverage_label,
-            "enrichment": enrichment_label
+            "enrichment": enrichment_label,
         }
 
 
@@ -809,6 +889,7 @@ def _create_cnv_dashboard_card_with_data(
     anchor_key: str = "cnv",
 ) -> None:
     """CNV insight card — design.md §9."""
+
     def _on_click() -> None:
         _scroll_to_analysis_detail(anchor_key)
 
@@ -839,7 +920,9 @@ def _create_cnv_dashboard_card_with_data(
                 "classification-insight-meta w-full truncate"
             ).props(f'title="{_arm}"')
             with ui.column().classes("w-full gap-1"):
-                ui.label(f"Bin width: {bin_width}").classes("classification-insight-meta")
+                ui.label(f"Bin width: {bin_width}").classes(
+                    "classification-insight-meta"
+                )
                 ui.label(f"Variance: {variance}").classes("classification-insight-meta")
             with ui.row().classes("gap-1 flex-wrap"):
                 ui.label(f"Whole chr: {whole_chromosome_count}").classes(
@@ -848,44 +931,62 @@ def _create_cnv_dashboard_card_with_data(
                 ui.label(f"Arm: {arm_count}").classes(
                     "analysis-insight-pill analysis-insight-pill--sky"
                 )
-            ui.label(
-                "Copy number across the genome with breakpoint detection"
-            ).classes("classification-insight-foot")
+            ui.label("Copy number across the genome with breakpoint detection").classes(
+                "classification-insight-foot"
+            )
 
 
 def _create_cnv_dashboard_card() -> Dict[str, Any]:
     """Create a compact CNV analysis dashboard card. Returns labels for updating."""
-    with ui.card().classes("flex-1 bg-white rounded-lg shadow-sm border border-gray-200 p-4"):
+    with ui.card().classes(
+        "flex-1 bg-white rounded-lg shadow-sm border border-gray-200 p-4"
+    ):
         with ui.row().classes("flex items-center justify-between mb-2"):
             # Title
-            ui.label("Copy Number Analysis").classes("text-sm font-medium text-gray-600")
-            
+            ui.label("Copy Number Analysis").classes(
+                "text-sm font-medium text-gray-600"
+            )
+
             # Icon in circular background
-            with ui.row().classes("w-7 h-7 bg-purple-100 rounded-full flex items-center justify-center"):
+            with ui.row().classes(
+                "w-7 h-7 bg-purple-100 rounded-full flex items-center justify-center"
+            ):
                 ui.icon("person").classes("w-3.5 h-3.5 text-purple-600")
-        
+
         # Main genetic sex result
-        genetic_sex_label = ui.label("Loading...").classes("text-xl font-bold text-gray-900 mb-1")
-        
+        genetic_sex_label = ui.label("Loading...").classes(
+            "text-xl font-bold text-gray-900 mb-1"
+        )
+
         # Analysis details in compact layout
         with ui.column().classes("mb-2"):
-            bin_width_label = ui.label("Bin Width: Loading...").classes("text-xs text-gray-600")
-            variance_label = ui.label("Variance: Loading...").classes("text-xs text-gray-600")
-        
+            bin_width_label = ui.label("Bin Width: Loading...").classes(
+                "text-xs text-gray-600"
+            )
+            variance_label = ui.label("Variance: Loading...").classes(
+                "text-xs text-gray-600"
+            )
+
         # CNV counts as badges
         with ui.row().classes("gap-2 mb-1"):
-            gained_badge = ui.label("Gained: --").classes("px-2 py-1 text-xs font-medium rounded-full bg-green-100 text-green-800")
-            lost_badge = ui.label("Lost: --").classes("px-2 py-1 text-xs font-medium rounded-full bg-red-100 text-red-800")
-        
+            gained_badge = ui.label("Gained: --").classes(
+                "px-2 py-1 text-xs font-medium rounded-full bg-green-100 text-green-800"
+            )
+            lost_badge = ui.label("Lost: --").classes(
+                "px-2 py-1 text-xs font-medium rounded-full bg-red-100 text-red-800"
+            )
+
         # Description
-        ui.label("Copy number analysis across genome with breakpoint detection").classes("text-xs text-gray-500")
-        
+        ui.label(
+            "Copy number analysis across genome with breakpoint detection"
+        ).classes("text-xs text-gray-500")
+
         return {
             "genetic_sex": genetic_sex_label,
             "bin_width": bin_width_label,
             "variance": variance_label,
             "gained": gained_badge,
-            "lost": lost_badge
+            "lost": lost_badge,
         }
 
 
@@ -948,42 +1049,56 @@ def _create_mgmt_dashboard_card_with_data(
                 ui.label(f"Score: {prediction_score}").classes(
                     "classification-insight-meta"
                 )
-            ui.label(
-                f"Status from methylation at {cpg_sites} CpG sites"
-            ).classes("classification-insight-foot")
+            ui.label(f"Status from methylation at {cpg_sites} CpG sites").classes(
+                "classification-insight-foot"
+            )
 
 
 def _create_mgmt_dashboard_card() -> Dict[str, Any]:
     """Create a compact MGMT analysis dashboard card. Returns labels for updating."""
-    with ui.card().classes("flex-1 bg-white rounded-lg shadow-sm border border-gray-200 p-4"):
+    with ui.card().classes(
+        "flex-1 bg-white rounded-lg shadow-sm border border-gray-200 p-4"
+    ):
         with ui.row().classes("flex items-center justify-between mb-2"):
             # Title
             ui.label("MGMT Analysis").classes("text-sm font-medium text-gray-600")
-            
+
             # Icon in circular background
-            with ui.row().classes("w-7 h-7 bg-orange-100 rounded-full flex items-center justify-center"):
+            with ui.row().classes(
+                "w-7 h-7 bg-orange-100 rounded-full flex items-center justify-center"
+            ):
                 ui.icon("science").classes("w-3.5 h-3.5 text-orange-600")
-        
+
         # Main status result with badge
         with ui.row().classes("flex items-center justify-between mb-1"):
-            status_label = ui.label("Loading...").classes("text-xl font-bold text-gray-900")
+            status_label = ui.label("Loading...").classes(
+                "text-xl font-bold text-gray-900"
+            )
             # Methylation badge
-            methylation_badge = ui.label("--%").classes("px-2 py-1 text-xs font-medium rounded-full bg-gray-100 text-gray-600")
-        
+            methylation_badge = ui.label("--%").classes(
+                "px-2 py-1 text-xs font-medium rounded-full bg-gray-100 text-gray-600"
+            )
+
         # Analysis details in compact layout
         with ui.column().classes("mb-2"):
-            average_methylation_label = ui.label("Average: Loading...").classes("text-xs text-gray-600")
-            prediction_score_label = ui.label("Score: Loading...").classes("text-xs text-gray-600")
-        
+            average_methylation_label = ui.label("Average: Loading...").classes(
+                "text-xs text-gray-600"
+            )
+            prediction_score_label = ui.label("Score: Loading...").classes(
+                "text-xs text-gray-600"
+            )
+
         # Description
-        cpg_sites_label = ui.label("MGMT status determined from methylation analysis of -- CpG sites").classes("text-xs text-gray-500")
-        
+        cpg_sites_label = ui.label(
+            "MGMT status determined from methylation analysis of -- CpG sites"
+        ).classes("text-xs text-gray-500")
+
         return {
             "status": status_label,
             "methylation_badge": methylation_badge,
             "average_methylation": average_methylation_label,
             "prediction_score": prediction_score_label,
-            "cpg_sites": cpg_sites_label
+            "cpg_sites": cpg_sites_label,
         }
 
 
@@ -1031,51 +1146,57 @@ def _create_fusion_dashboard_card_with_data(
             ui.label(main_line).classes("classification-insight-result w-full").props(
                 f'title="{_panel}"'
             )
-            with ui.row().classes(
-                "w-full justify-between items-start gap-2 flex-wrap"
-            ):
+            with ui.row().classes("w-full justify-between items-start gap-2 flex-wrap"):
                 ui.label(target_badge).classes(
                     "analysis-insight-pill analysis-insight-pill--sky"
                 )
             with ui.column().classes("w-full gap-1"):
                 ui.label(genome_line).classes("classification-insight-meta")
-            ui.label(
-                "Candidates from reads with supplementary alignments"
-            ).classes("classification-insight-foot")
+            ui.label("Candidates from reads with supplementary alignments").classes(
+                "classification-insight-foot"
+            )
 
 
 def _create_fusion_dashboard_card() -> Dict[str, Any]:
     """Create a compact fusion analysis dashboard card. Returns labels for updating."""
-    with ui.card().classes("flex-1 bg-white rounded-lg shadow-sm border border-gray-200 p-4"):
+    with ui.card().classes(
+        "flex-1 bg-white rounded-lg shadow-sm border border-gray-200 p-4"
+    ):
         with ui.row().classes("flex items-center justify-between mb-2"):
             # Title
             ui.label("Fusion Analysis").classes("text-sm font-medium text-gray-600")
-            
+
             # Icon in circular background
-            with ui.row().classes("w-7 h-7 bg-green-100 rounded-full flex items-center justify-center"):
+            with ui.row().classes(
+                "w-7 h-7 bg-green-100 rounded-full flex items-center justify-center"
+            ):
                 ui.icon("merge").classes("w-3.5 h-3.5 text-green-600")
-        
+
         # Panel info and main result
         with ui.row().classes("flex items-center justify-between mb-1"):
-            panel_label = ui.label("Panel: --").classes("text-sm font-medium text-gray-700")
-            target_fusions_badge = ui.label("-- target fusions").classes("px-2 py-1 text-xs font-medium rounded-full bg-blue-100 text-blue-800")
-        
+            panel_label = ui.label("Panel: --").classes(
+                "text-sm font-medium text-gray-700"
+            )
+            target_fusions_badge = ui.label("-- target fusions").classes(
+                "px-2 py-1 text-xs font-medium rounded-full bg-blue-100 text-blue-800"
+            )
+
         # Analysis details in compact layout
         with ui.column().classes("mb-2"):
-            genome_fusions_label = ui.label("-- genome wide fusions").classes("text-xs text-gray-600")
-        
+            genome_fusions_label = ui.label("-- genome wide fusions").classes(
+                "text-xs text-gray-600"
+            )
+
         # Description
-        ui.label("Fusion candidates identified from reads with supplementary alignments").classes("text-xs text-gray-500")
-        
+        ui.label(
+            "Fusion candidates identified from reads with supplementary alignments"
+        ).classes("text-xs text-gray-500")
+
         return {
             "panel": panel_label,
             "target_fusions": target_fusions_badge,
-            "genome_fusions": genome_fusions_label
+            "genome_fusions": genome_fusions_label,
         }
-
-
-
-
 
 
 def _fmt_master_csv_integer(v: Optional[str]) -> Optional[str]:
@@ -1159,9 +1280,7 @@ def _apply_master_csv_to_run_info(sample_dir: Path, run_info: Dict[str, str]) ->
         if device_val and str(device_val).strip():
             run_info["device"] = str(device_val).strip()
 
-        flowcell_val = get_ci(row, "run_info_flow_cell") or get_ci(
-            row, "flowcell_ids"
-        )
+        flowcell_val = get_ci(row, "run_info_flow_cell") or get_ci(row, "flowcell_ids")
         if flowcell_val and str(flowcell_val).strip():
             run_info["flow_cell"] = str(flowcell_val).strip()
 
@@ -1633,7 +1752,9 @@ def _extract_classification_data(sample_dir: Path) -> Dict[str, Any]:
                         classification_data["sturgeon"] = {
                             "classification": best_class,
                             "confidence": max_score * 100,
-                            "confidence_level": _get_confidence_level(max_score * 100, "sturgeon"),
+                            "confidence_level": _get_confidence_level(
+                                max_score * 100, "sturgeon"
+                            ),
                             "features": features,
                         }
             except Exception as e:
@@ -1666,7 +1787,9 @@ def _extract_classification_data(sample_dir: Path) -> Dict[str, Any]:
                         classification_data["nanodx"] = {
                             "classification": best_class,
                             "confidence": max_score * 100,
-                            "confidence_level": _get_confidence_level(max_score * 100, "nanodx"),
+                            "confidence_level": _get_confidence_level(
+                                max_score * 100, "nanodx"
+                            ),
                             "features": features,
                         }
             except Exception as e:
@@ -1699,7 +1822,9 @@ def _extract_classification_data(sample_dir: Path) -> Dict[str, Any]:
                         classification_data["pannanodx"] = {
                             "classification": best_class,
                             "confidence": max_score * 100,
-                            "confidence_level": _get_confidence_level(max_score * 100, "pannanodx"),
+                            "confidence_level": _get_confidence_level(
+                                max_score * 100, "pannanodx"
+                            ),
                             "features": features,
                         }
             except Exception as e:
@@ -1726,7 +1851,9 @@ def _extract_classification_data(sample_dir: Path) -> Dict[str, Any]:
                                         max_score = score
                                         best_class = col
                                 except Exception as e:
-                                    logging.debug(f"   Random Forest: <access denied>: {e}")
+                                    logging.debug(
+                                        f"   Random Forest: <access denied>: {e}"
+                                    )
                                     pass
 
                         # Some random forest outputs are already in percent (0-100),
@@ -1755,9 +1882,7 @@ def _extract_classification_data(sample_dir: Path) -> Dict[str, Any]:
                     for row in reader:
                         features = int(
                             float(
-                                row.get("covered_cpgs")
-                                or row.get("number_probes")
-                                or 0
+                                row.get("covered_cpgs") or row.get("number_probes") or 0
                             )
                         )
                         max_score = 0.0
@@ -1801,9 +1926,7 @@ def _extract_classification_data(sample_dir: Path) -> Dict[str, Any]:
                     for row in reader:
                         features = int(
                             float(
-                                row.get("covered_cpgs")
-                                or row.get("number_probes")
-                                or 0
+                                row.get("covered_cpgs") or row.get("number_probes") or 0
                             )
                         )
                         max_score = 0.0
@@ -1899,108 +2022,143 @@ def _extract_classification_data(sample_dir: Path) -> Dict[str, Any]:
 def _extract_fusion_data(sample_dir: Path) -> Dict[str, Any]:
     """Extract fusion analysis data from generated summary files."""
     fusion_data = {
-        "target_fusions": 0, 
+        "target_fusions": 0,
         "genome_fusions": 0,
         "target_pairs": 0,
         "target_groups": 0,
         "genome_pairs": 0,
-        "genome_groups": 0
+        "genome_groups": 0,
     }
-    
-    logging.info(f"[Summary] _extract_fusion_data() called with sample_dir: {sample_dir}")
+
+    logging.info(
+        f"[Summary] _extract_fusion_data() called with sample_dir: {sample_dir}"
+    )
 
     try:
         # Debug: List all fusion-related files
         fusion_files = list(sample_dir.glob("*fusion*"))
         logging.info(f"[Summary] Found fusion files: {[f.name for f in fusion_files]}")
-        
+
         # Debug: Check if genome-wide processed file exists
         genome_file = sample_dir / "fusion_candidates_all_processed.pkl"
-        logging.info(f"[Summary] Genome-wide processed file exists: {genome_file.exists()}")
+        logging.info(
+            f"[Summary] Genome-wide processed file exists: {genome_file.exists()}"
+        )
         if genome_file.exists():
-            logging.info(f"[Summary] Genome-wide processed file size: {genome_file.stat().st_size} bytes")
+            logging.info(
+                f"[Summary] Genome-wide processed file size: {genome_file.stat().st_size} bytes"
+            )
         # First try to read from the new fusion_summary.csv file
         summary_file = sample_dir / "fusion_summary.csv"
         if summary_file.exists():
             try:
                 with open(summary_file, "r") as f:
                     content = f.read()
-                    
+
                 with open(summary_file, "r") as f:
                     reader = csv.DictReader(f)
                     for row in reader:
-                        fusion_data["target_fusions"] = int(row.get("target_fusions", 0))
-                        fusion_data["genome_fusions"] = int(row.get("genome_fusions", 0))
+                        fusion_data["target_fusions"] = int(
+                            row.get("target_fusions", 0)
+                        )
+                        fusion_data["genome_fusions"] = int(
+                            row.get("genome_fusions", 0)
+                        )
                         break
-                
+
                 # Check if the summary file has incorrect genome-wide count (0)
                 if fusion_data["genome_fusions"] == 0:
                     # Try to regenerate the summary file with correct data
                     try:
-                        from robin.gui.components.fusion import _generate_summary_files_from_pickle
-                        if _generate_summary_files_from_pickle(sample_dir, force_regenerate=True):
+                        from robin.gui.components.fusion import (
+                            _generate_summary_files_from_pickle,
+                        )
+
+                        if _generate_summary_files_from_pickle(
+                            sample_dir, force_regenerate=True
+                        ):
                             # Re-read the regenerated summary file
                             with open(summary_file, "r") as f:
                                 reader = csv.DictReader(f)
                                 for row in reader:
-                                    fusion_data["target_fusions"] = int(row.get("target_fusions", 0))
-                                    fusion_data["genome_fusions"] = int(row.get("genome_fusions", 0))
+                                    fusion_data["target_fusions"] = int(
+                                        row.get("target_fusions", 0)
+                                    )
+                                    fusion_data["genome_fusions"] = int(
+                                        row.get("genome_fusions", 0)
+                                    )
                                     break
                             return fusion_data
                     except Exception as e:
                         pass  # Don't return early, continue to pickle file loading
                 else:
-                    logging.info(f"[Summary] Fusion data extracted from summary file - target: {fusion_data['target_fusions']}, genome: {fusion_data['genome_fusions']}")
+                    logging.info(
+                        f"[Summary] Fusion data extracted from summary file - target: {fusion_data['target_fusions']}, genome: {fusion_data['genome_fusions']}"
+                    )
                     logging.info(f"[Summary] Summary file path: {summary_file}")
                     return fusion_data
             except Exception as e:
                 logging.debug(f"   Fusion: Failed to read summary file: {e}")
-        
+
         # If summary files don't exist, try to generate them from pickle files
         try:
             from robin.gui.components.fusion import _generate_summary_files_from_pickle
+
             if _generate_summary_files_from_pickle(sample_dir, force_regenerate=False):
                 # Try reading the newly generated summary file
                 if summary_file.exists():
                     with open(summary_file, "r") as f:
                         reader = csv.DictReader(f)
                         for row in reader:
-                            fusion_data["target_fusions"] = int(row.get("target_fusions", 0))
-                            fusion_data["genome_fusions"] = int(row.get("genome_fusions", 0))
+                            fusion_data["target_fusions"] = int(
+                                row.get("target_fusions", 0)
+                            )
+                            fusion_data["genome_fusions"] = int(
+                                row.get("genome_fusions", 0)
+                            )
                             break
-                    logging.info(f"[Summary] Fusion data extracted from generated summary file - target: {fusion_data['target_fusions']}, genome: {fusion_data['genome_fusions']}")
+                    logging.info(
+                        f"[Summary] Fusion data extracted from generated summary file - target: {fusion_data['target_fusions']}, genome: {fusion_data['genome_fusions']}"
+                    )
                     return fusion_data
         except Exception as e:
-            logging.debug(f"   Fusion: Failed to generate summary files from pickle: {e}")
-        
+            logging.debug(
+                f"   Fusion: Failed to generate summary files from pickle: {e}"
+            )
+
         # If still no data, try to load directly from pickle files and count gene_pairs
         try:
-            from robin.gui.components.fusion import _load_processed_pickle, _count_unique_fusion_pairs, _count_unique_fusion_groups
+            from robin.gui.components.fusion import (
+                _count_unique_fusion_groups,
+                _count_unique_fusion_pairs,
+                _load_processed_pickle,
+            )
+
             target_file = sample_dir / "fusion_candidates_master_processed.pkl"
             genome_file = sample_dir / "fusion_candidates_all_processed.pkl"
-            
-            
+
             target_data = _load_processed_pickle(target_file)
             genome_data = _load_processed_pickle(genome_file)
-            
-            
+
             if target_data and isinstance(target_data, dict):
                 # Use filtered counts to match what's displayed in fusion section
                 fusion_data["target_fusions"] = _count_unique_fusion_pairs(target_data)
                 fusion_data["target_pairs"] = _count_unique_fusion_pairs(target_data)
                 fusion_data["target_groups"] = _count_unique_fusion_groups(target_data)
-            
+
             if genome_data and isinstance(genome_data, dict):
                 # Use filtered counts to match what's displayed in fusion section
                 fusion_data["genome_fusions"] = _count_unique_fusion_pairs(genome_data)
                 fusion_data["genome_pairs"] = _count_unique_fusion_pairs(genome_data)
                 fusion_data["genome_groups"] = _count_unique_fusion_groups(genome_data)
-            
-            logging.info(f"[Summary] Fusion data loaded directly from pickle files - target: {fusion_data['target_fusions']} fusions, {fusion_data['target_pairs']} pairs, {fusion_data['target_groups']} groups; genome: {fusion_data['genome_fusions']} fusions, {fusion_data['genome_pairs']} pairs, {fusion_data['genome_groups']} groups")
+
+            logging.info(
+                f"[Summary] Fusion data loaded directly from pickle files - target: {fusion_data['target_fusions']} fusions, {fusion_data['target_pairs']} pairs, {fusion_data['target_groups']} groups; genome: {fusion_data['genome_fusions']} fusions, {fusion_data['genome_pairs']} pairs, {fusion_data['genome_groups']} groups"
+            )
             return fusion_data
         except Exception as e:
             logging.debug(f"   Fusion: Failed to load directly from pickle files: {e}")
-        
+
         # Fallback to individual fusion_results.csv file
         fusion_results_file = sample_dir / "fusion_results.csv"
         if fusion_results_file.exists():
@@ -2008,14 +2166,20 @@ def _extract_fusion_data(sample_dir: Path) -> Dict[str, Any]:
                 with open(fusion_results_file, "r") as f:
                     reader = csv.DictReader(f)
                     for row in reader:
-                        fusion_data["target_fusions"] = int(row.get("target_fusions", 0))
-                        fusion_data["genome_fusions"] = int(row.get("genome_fusions", 0))
+                        fusion_data["target_fusions"] = int(
+                            row.get("target_fusions", 0)
+                        )
+                        fusion_data["genome_fusions"] = int(
+                            row.get("genome_fusions", 0)
+                        )
                         break
-                logging.debug(f"[Summary] Fusion data extracted from results file - target: {fusion_data['target_fusions']}, genome: {fusion_data['genome_fusions']}")
+                logging.debug(
+                    f"[Summary] Fusion data extracted from results file - target: {fusion_data['target_fusions']}, genome: {fusion_data['genome_fusions']}"
+                )
                 return fusion_data
             except Exception as e:
                 logging.debug(f"   Fusion: Failed to read results file: {e}")
-        
+
         # Final fallback to legacy sv_count.txt file
         sv_count_file = sample_dir / "sv_count.txt"
         if sv_count_file.exists():
@@ -2026,7 +2190,9 @@ def _extract_fusion_data(sample_dir: Path) -> Dict[str, Any]:
                         # Legacy behavior - assume this is genome-wide count
                         fusion_data["genome_fusions"] = int(content)
                         fusion_data["target_fusions"] = 0
-                logging.debug(f"[Summary] Fusion data extracted from legacy sv_count file - target: {fusion_data['target_fusions']}, genome: {fusion_data['genome_fusions']}")
+                logging.debug(
+                    f"[Summary] Fusion data extracted from legacy sv_count file - target: {fusion_data['target_fusions']}, genome: {fusion_data['genome_fusions']}"
+                )
             except Exception as e:
                 logging.debug(f"   Fusion: Failed to read legacy sv_count file: {e}")
 
@@ -2099,7 +2265,9 @@ def _get_confidence_badge_classes(confidence: float) -> str:
     if confidence >= 80:
         return "px-2 py-1 text-xs font-medium rounded-full bg-green-100 text-green-800"
     elif confidence >= 50:
-        return "px-2 py-1 text-xs font-medium rounded-full bg-yellow-100 text-yellow-800"
+        return (
+            "px-2 py-1 text-xs font-medium rounded-full bg-yellow-100 text-yellow-800"
+        )
     else:
         return "px-2 py-1 text-xs font-medium rounded-full bg-red-100 text-red-800"
 

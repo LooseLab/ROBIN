@@ -9,9 +9,9 @@ import pytest
 
 from robin.analysis.tucan_analysis import (
     SCORE_META_COLUMNS,
+    _top_prediction,
     append_tucan_scores,
     binarize_methylation_calls,
-    _top_prediction,
 )
 from robin.reporting.sections.classification import drop_classifier_score_meta_columns
 from robin.utils.tucan_manager import (

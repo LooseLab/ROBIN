@@ -242,9 +242,7 @@ def resolve_cnv_report_scale(scale: Optional[str]) -> str:
 
 def cnv_summary_normalized_from_scale(scale: Optional[str]) -> bool:
     """Return True when the configured CNV report scale is log2 ratio mode."""
-    return (
-        resolve_cnv_report_scale(scale) == CNV_REPORT_SCALE_NORMALIZED_DIFFERENCE
-    )
+    return resolve_cnv_report_scale(scale) == CNV_REPORT_SCALE_NORMALIZED_DIFFERENCE
 
 
 def load_plotting_preferences(store=None) -> PlottingPreferencesConfig:

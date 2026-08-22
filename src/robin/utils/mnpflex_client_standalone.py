@@ -1,10 +1,10 @@
 import json
+import logging
 import os
 import time
 from dataclasses import dataclass
 from typing import Optional
 
-import logging
 import requests
 
 
@@ -213,7 +213,11 @@ class MNPFlexClient:
             except Exception:
                 text_snippet = ""
 
-            log_fn = logging.warning if status is not None and status >= 500 else logging.error
+            log_fn = (
+                logging.warning
+                if status is not None and status >= 500
+                else logging.error
+            )
             # Avoid exc_info on every transient 5xx; the bulk runner will capture the final traceback.
             log_kwargs = {}
             if not (status is not None and status >= 500):
@@ -307,7 +311,11 @@ class MNPFlexClient:
                     workflow_run_id = runs[0].get("id")
                 else:
                     workflow_run_id = next(
-                        (r.get("id") for r in runs if r.get("workflow_id") == workflow_id),
+                        (
+                            r.get("id")
+                            for r in runs
+                            if r.get("workflow_id") == workflow_id
+                        ),
                         None,
                     )
             if workflow_run_id:

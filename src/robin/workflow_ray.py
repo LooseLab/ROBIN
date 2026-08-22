@@ -35,23 +35,23 @@ warnings.filterwarnings(
     "ignore", message="The figure layout has changed to tight", category=UserWarning
 )
 
-import os
+import argparse
+import asyncio
 import copy
+import inspect
+import itertools
+import os
+import pickle
 import shutil
+import tempfile
 import threading
 import time
-import tempfile
-import pickle
 import uuid
-import asyncio
-import argparse
 from collections import deque
-from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Set, Tuple, Callable
-import inspect
-from pathlib import Path
-import itertools
 from contextlib import nullcontext
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 import ray
 from tqdm import tqdm
@@ -59,6 +59,7 @@ from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
 
 try:
+    from rich.console import Console
     from rich.progress import (
         BarColumn,
         Progress,
@@ -68,7 +69,6 @@ try:
         TimeElapsedColumn,
         TimeRemainingColumn,
     )
-    from rich.console import Console
 
     _RICH_AVAILABLE = True
 except Exception:
@@ -125,12 +125,11 @@ _HANDLER_IMPORT_ERRORS: Dict[str, str] = {}
 
 # Optional GUI hook integration
 try:
-    from robin.gui_launcher import (
-        send_gui_update as _gui_send_update,
-        UpdateType as _GUIUpdateType,
-        launch_gui as _gui_launch,
-    )
+    from robin.gui_launcher import UpdateType as _GUIUpdateType
+    from robin.gui_launcher import launch_gui as _gui_launch
+    from robin.gui_launcher import send_gui_update as _gui_send_update
 except Exception:
+
     def _gui_send_update(*args, **kwargs):
         return None
 
@@ -162,10 +161,12 @@ except Exception:
 
 try:
     from robin.analysis.cnv_analysis import (
-        cnv_handler as _cnv_handler,
-        clear_sample_cache,
-        get_sample_cache_stats,
         cleanup_sample_cache_on_completion,
+        clear_sample_cache,
+    )
+    from robin.analysis.cnv_analysis import cnv_handler as _cnv_handler
+    from robin.analysis.cnv_analysis import (
+        get_sample_cache_stats,
     )
 except Exception as exc:
     _cnv_handler = None
@@ -175,12 +176,14 @@ except Exception as exc:
     _HANDLER_IMPORT_ERRORS["cnv"] = str(exc)
 
 try:
+    from robin.analysis.target_analysis import igv_bam_handler as _igv_bam_handler
     from robin.analysis.target_analysis import (
-        target_handler as _target_handler,
-        igv_bam_handler as _igv_bam_handler,
         snp_analysis_handler as _snp_analysis_handler,
+    )
+    from robin.analysis.target_analysis import (
         target_bam_finalize_handler as _target_bam_finalize_handler,
     )
+    from robin.analysis.target_analysis import target_handler as _target_handler
 except Exception:
     _target_handler = None
     _igv_bam_handler = None
@@ -194,9 +197,7 @@ except Exception as exc:
     _HANDLER_IMPORT_ERRORS["fusion"] = str(exc)
 
 try:
-    from robin.analysis.sturgeon_analysis import (
-        sturgeon_handler as _sturgeon_handler,
-    )
+    from robin.analysis.sturgeon_analysis import sturgeon_handler as _sturgeon_handler
 except Exception:
     _sturgeon_handler = None
 
@@ -206,9 +207,7 @@ except Exception:
     _nanodx_handler = None
 
 try:
-    from robin.analysis.nanodx_analysis import (
-        pannanodx_handler as _pannanodx_handler,
-    )
+    from robin.analysis.nanodx_analysis import pannanodx_handler as _pannanodx_handler
 except Exception:
     _pannanodx_handler = None
 
@@ -242,10 +241,8 @@ except Exception as exc:
 
 # Optional logging helper
 try:
-    from robin.logging_config import (
-        get_job_logger as _get_job_logger,
-        configure_logging as _configure_logging,
-    )
+    from robin.logging_config import configure_logging as _configure_logging
+    from robin.logging_config import get_job_logger as _get_job_logger
 except Exception:
 
     def _get_job_logger(job_id: str, job_type: str, filepath: str):
@@ -502,14 +499,30 @@ QUEUE_TO_TYPES: Dict[str, Set[str]] = {
     "fusion": {"fusion"},
     "itd": {"itd"},
     "classification": {"sturgeon", "nanodx", "pannanodx"},
-    "slow": {"random_forest", "marlin", "lamprey", "tucan", "igv_bam", "snp_analysis", "target_bam_finalize"},
+    "slow": {
+        "random_forest",
+        "marlin",
+        "lamprey",
+        "tucan",
+        "igv_bam",
+        "snp_analysis",
+        "target_bam_finalize",
+    },
 }
 
 TRIGGERS: Dict[str, List[str]] = {
     # preprocessing -> analyses
     "preprocessing": ["bed_conversion", "mgmt", "cnv", "target", "fusion", "itd"],
     # bed_conversion -> classifiers
-    "bed_conversion": ["sturgeon", "nanodx", "pannanodx", "random_forest", "marlin", "lamprey", "tucan"],
+    "bed_conversion": [
+        "sturgeon",
+        "nanodx",
+        "pannanodx",
+        "random_forest",
+        "marlin",
+        "lamprey",
+        "tucan",
+    ],
     # Build IGV-ready BAM after target analysis
     "target": ["igv_bam"],
 }
@@ -988,9 +1001,13 @@ def _wrap_real_handler(
         if MemoryManager is not None and not DISABLE_MEMORY_MANAGER:
             try:
                 # Configure memory management based on job type
-                gc_every = 10 if job_type in {"mgmt", "cnv", "target", "fusion", "itd"} else 25
+                gc_every = (
+                    10 if job_type in {"mgmt", "cnv", "target", "fusion", "itd"} else 25
+                )
                 rss_trigger = (
-                    1024 if job_type in {"mgmt", "cnv", "target", "fusion", "itd"} else 1024
+                    1024
+                    if job_type in {"mgmt", "cnv", "target", "fusion", "itd"}
+                    else 1024
                 )
                 memory_manager = MemoryManager(
                     gc_every=gc_every,
@@ -1108,7 +1125,12 @@ def _wrap_real_handler(
                     py_handler(job, reference=reference, target_panel=target_panel)
                 elif accepts_reference and reference and job_type in ["mgmt", "target"]:
                     py_handler(job, reference=reference)
-                elif accepts_target_panel and job_type in ["fusion", "target", "cnv", "itd"]:
+                elif accepts_target_panel and job_type in [
+                    "fusion",
+                    "target",
+                    "cnv",
+                    "itd",
+                ]:
                     py_handler(job, target_panel=target_panel)
                 else:
                     py_handler(job)
@@ -1282,15 +1304,23 @@ class TypeProcessor:
         if MemoryManager is not None and not DISABLE_MEMORY_MANAGER:
             try:
                 # Configure memory management based on job type
-                gc_every = 25 if job_type in {"mgmt", "cnv", "target", "fusion", "itd"} else 50
+                gc_every = (
+                    25 if job_type in {"mgmt", "cnv", "target", "fusion", "itd"} else 50
+                )
                 rss_trigger = (
-                    1024 if job_type in {"mgmt", "cnv", "target", "fusion", "itd"} else 2048
+                    1024
+                    if job_type in {"mgmt", "cnv", "target", "fusion", "itd"}
+                    else 2048
                 )
                 restart_every = (
-                    5000 if job_type in {"mgmt", "cnv", "target", "fusion", "itd"} else 10000
+                    5000
+                    if job_type in {"mgmt", "cnv", "target", "fusion", "itd"}
+                    else 10000
                 )
                 restart_rss_trigger = (
-                    2048 if job_type in {"mgmt", "cnv", "target", "fusion", "itd"} else 4096
+                    2048
+                    if job_type in {"mgmt", "cnv", "target", "fusion", "itd"}
+                    else 4096
                 )
                 self.memory_manager = MemoryManager(
                     gc_every=gc_every,
@@ -2035,15 +2065,9 @@ class Coordinator:
                 "rf": [
                     "random_forest"
                 ],  # Random forest needs its own actor (slow/blocking)
-                "marlin": [
-                    "marlin"
-                ],  # MARLIN (TensorFlow) needs its own actor
-                "lamprey": [
-                    "lamprey"
-                ],  # Lamprey ONNX model is large; dedicated actor
-                "tucan": [
-                    "tucan"
-                ],  # Tucan PyTorch ensemble; dedicated actor
+                "marlin": ["marlin"],  # MARLIN (TensorFlow) needs its own actor
+                "lamprey": ["lamprey"],  # Lamprey ONNX model is large; dedicated actor
+                "tucan": ["tucan"],  # Tucan PyTorch ensemble; dedicated actor
                 "slow": [
                     "igv_bam",
                     "snp_analysis",
@@ -5488,6 +5512,7 @@ class RayFileWatcher(FileSystemEventHandler):
         # enqueue and flush under rate limiter
         self._pending_jobs.extend(jobs)
         self._flush_if_needed()
+
     def on_created(self, event):
         if not event.is_directory:
             self._handle(event.src_path)
@@ -5674,7 +5699,9 @@ def _scan_watch_folder_for_sample_dirs(
 
     # Import lazily so workflow can run even if analysis deps aren't present.
     try:
-        from robin.analysis.bam_preprocessor import _extract_sample_id_from_bam  # type: ignore
+        from robin.analysis.bam_preprocessor import (
+            _extract_sample_id_from_bam,  # type: ignore
+        )
     except Exception:
         return [], [], None
 
@@ -6293,7 +6320,9 @@ async def run(
                             priority=1,
                         )
 
-                        for notification in await coord.drain_gui_notifications.remote():
+                        for (
+                            notification
+                        ) in await coord.drain_gui_notifications.remote():
                             _gui_send_update(
                                 _GUIUpdateType.WARNING_NOTIFICATION,
                                 notification,

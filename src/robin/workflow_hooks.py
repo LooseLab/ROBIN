@@ -7,9 +7,9 @@ without blocking workflow execution.
 
 import logging
 import time
-from typing import Any, List, Dict
+from typing import Any, Dict, List
 
-from .gui_launcher import send_gui_update, UpdateType
+from .gui_launcher import UpdateType, send_gui_update
 
 
 def install_workflow_hooks(
@@ -137,7 +137,7 @@ def _install_manager_hooks(workflow_runner: Any) -> None:
 
 def _start_polling_updates(manager: Any, interval_seconds: float = 15.0) -> None:
     """Start a background thread that polls `manager.get_stats()` and sends GUI updates.
-    
+
     Reduced default interval from 10s to 15s to reduce update frequency and prevent queue buildup.
     """
     import threading

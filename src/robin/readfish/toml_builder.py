@@ -24,7 +24,9 @@ def build_readfish_toml_document(
     if config.dorado_config:
         dorado_model = dorado_config_name(config.dorado_config, prefer_fast=False)
     else:
-        dorado_model = dorado_config_name(preset.basecall_simplex_model, prefer_fast=True)
+        dorado_model = dorado_config_name(
+            preset.basecall_simplex_model, prefer_fast=True
+        )
     region = _region_for_filter(
         name=config.live_region_name,
         filter_mode=preset.read_until_filter,

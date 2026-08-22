@@ -144,9 +144,7 @@ def chown_tree_to_host_user(path: Path, *, timeout_s: int = 600) -> bool:
         return False
 
     parent = target.parent
-    logger.info(
-        "Normalizing ownership of %s to %s via Docker", target, user_spec
-    )
+    logger.info("Normalizing ownership of %s to %s via Docker", target, user_spec)
     result = subprocess.run(
         [
             "docker",

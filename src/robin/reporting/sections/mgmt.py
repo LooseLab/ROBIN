@@ -5,16 +5,17 @@ This module handles the MGMT (O6-methylguanine-DNA methyltransferase) promoter m
 """
 
 import io
+import logging
 import os
-import pandas as pd
+
 import natsort
-from reportlab.lib.units import inch
-from reportlab.platypus import PageBreak, Paragraph, Image, Spacer, Table, TableStyle
+import pandas as pd
 from reportlab.lib.colors import HexColor
 from reportlab.lib.styles import ParagraphStyle
-from ..sections.base import ReportSection
+from reportlab.lib.units import inch
+from reportlab.platypus import Image, PageBreak, Paragraph, Spacer, Table, TableStyle
 
-import logging
+from ..sections.base import ReportSection
 
 logger = logging.getLogger(__name__)
 
@@ -37,25 +38,25 @@ def _load_image_buffer(path: str) -> io.BytesIO | None:
 def _extract_mgmt_specific_sites_from_bed(bed_path: str) -> pd.DataFrame:
     """
     Extract MGMT-specific CpG site methylation data from a BED file.
-    
+
     This function mirrors the logic from the GUI component to extract
     strand-specific methylation data for key CpG sites.
-    
+
     Args:
         bed_path: Path to the BED file
-        
+
     Returns:
         DataFrame with CpG site methylation data, or empty DataFrame if extraction fails
     """
     try:
         df = pd.read_csv(bed_path, sep="\t", header=None)
-        
+
         # Check if column 10 contains space-separated values (old format)
         has_space_separated_col10 = False
         if df.shape[1] > 10 and len(df) > 0:
             sample_val = str(df.iloc[0, 9])
-            has_space_separated_col10 = ' ' in sample_val or '\t' in sample_val
-        
+            has_space_separated_col10 = " " in sample_val or "\t" in sample_val
+
         # Check if this is the new bedmethyl format (separate columns) or old format
         if df.shape[1] >= 12 and not has_space_separated_col10:
             # New bedmethyl format with separate columns
@@ -76,14 +77,14 @@ def _extract_mgmt_specific_sites_from_bed(bed_path: str) -> pd.DataFrame:
             num_cols_to_read = min(len(cols), df.shape[1])
             df = df.iloc[:, :num_cols_to_read]
             df.columns = cols[:num_cols_to_read]
-            
+
             df["Nvalid_cov"] = df["Nvalid_cov"].astype(float)
             df["Fraction_Modified"] = df["Fraction_Modified"].astype(float)
             if "Nmod" in df.columns:
                 df["Nmod"] = df["Nmod"].astype(float)
             else:
                 df["Nmod"] = df["Nvalid_cov"] * df["Fraction_Modified"]
-            
+
             df["Start"] = df["Start"].astype(int)
             df["Coverage"] = df["Nvalid_cov"]
             df["Modified_Fraction"] = df["Fraction_Modified"] * 100.0
@@ -101,27 +102,29 @@ def _extract_mgmt_specific_sites_from_bed(bed_path: str) -> pd.DataFrame:
                 "RGB",
                 "Coverage_Info",
             ]
-            df = df.iloc[:, :len(cols)]
+            df = df.iloc[:, : len(cols)]
             df.columns = cols
-            
+
             cov_split = df["Coverage_Info"].astype(str).str.split()
             df["Coverage"] = cov_split.str[0].astype(float)
             fraction_val = cov_split.str[1].astype(float).fillna(0.0)
-            is_percentage = (fraction_val > 1.0).any() if len(fraction_val) > 0 else False
-            
+            is_percentage = (
+                (fraction_val > 1.0).any() if len(fraction_val) > 0 else False
+            )
+
             if is_percentage:
                 df["Modified_Fraction"] = fraction_val
                 df["Fraction_Modified"] = df["Modified_Fraction"] / 100.0
             else:
                 df["Fraction_Modified"] = fraction_val
                 df["Modified_Fraction"] = df["Fraction_Modified"] * 100.0
-            
+
             df["Nvalid_cov"] = df["Coverage"]
             df["Nmod"] = df["Coverage"] * df["Fraction_Modified"]
             df["Start"] = df["Start"].astype(int)
         else:
             return pd.DataFrame()
-        
+
         # Define CpG pairs and labels
         cpg_pairs = [
             (129467255, 129467256),
@@ -135,26 +138,26 @@ def _extract_mgmt_specific_sites_from_bed(bed_path: str) -> pd.DataFrame:
             "129467262/129467263": "3",
             "129467272/129467273": "4",
         }
-        
+
         rows = []
         for p1, p2 in cpg_pairs:
             pos_key = f"{p1}/{p2}"
             site_label = label_map.get(pos_key, "Unknown")
-            
+
             # Check forward strand reads at position p1
             fwd_p1 = df[
                 (df["Chromosome"] == "chr10")
                 & (df["Start"] == p1 - 1)
                 & (df["Strand"] == "+")
             ]
-            
+
             # Check reverse strand reads at position p2
             rev_p2 = df[
                 (df["Chromosome"] == "chr10")
                 & (df["Start"] == p2 - 1)
                 & (df["Strand"] == "-")
             ]
-            
+
             # Get forward strand data
             if not fwd_p1.empty:
                 cov_f = float(fwd_p1["Nvalid_cov"].iloc[0])
@@ -167,7 +170,7 @@ def _extract_mgmt_specific_sites_from_bed(bed_path: str) -> pd.DataFrame:
                 mf = 0.0
                 meth_fwd_count = 0
                 meth_fwd_pct = 0.0
-            
+
             # Get reverse strand data
             if not rev_p2.empty:
                 cov_r = float(rev_p2["Nvalid_cov"].iloc[0])
@@ -180,26 +183,28 @@ def _extract_mgmt_specific_sites_from_bed(bed_path: str) -> pd.DataFrame:
                 mr = 0.0
                 meth_rev_count = 0
                 meth_rev_pct = 0.0
-            
+
             # Only add row if we have data
             if cov_f > 0 or cov_r > 0:
                 tot = cov_f + cov_r
                 weighted = ((cov_f * mf) + (cov_r * mr)) / tot if tot > 0 else 0.0
                 weighted_pct = weighted * 100.0
-                
-                rows.append({
-                    "Site_Label": f"Site {site_label}",
-                    "Position": pos_key,
-                    "Coverage_Forward": int(cov_f),
-                    "Coverage_Reverse": int(cov_r),
-                    "Total_Coverage": int(tot),
-                    "Methylation_Percentage": weighted_pct,
-                    "Forward_Methylation": meth_fwd_pct,
-                    "Reverse_Methylation": meth_rev_pct,
-                    "Forward_Methylated_Count": meth_fwd_count,
-                    "Reverse_Methylated_Count": meth_rev_count,
-                })
-        
+
+                rows.append(
+                    {
+                        "Site_Label": f"Site {site_label}",
+                        "Position": pos_key,
+                        "Coverage_Forward": int(cov_f),
+                        "Coverage_Reverse": int(cov_r),
+                        "Total_Coverage": int(tot),
+                        "Methylation_Percentage": weighted_pct,
+                        "Forward_Methylation": meth_fwd_pct,
+                        "Reverse_Methylation": meth_rev_pct,
+                        "Forward_Methylated_Count": meth_fwd_count,
+                        "Reverse_Methylated_Count": meth_rev_count,
+                    }
+                )
+
         return pd.DataFrame(rows)
     except Exception as e:
         logger.warning(f"Failed to extract CpG sites from BED file {bed_path}: {e}")
@@ -220,12 +225,16 @@ class MGMTSection(ReportSection):
         specific_sites = None
 
         # First, look for "final_mgmt.csv" files (highest priority)
-        final_files = [f for f in os.listdir(self.report.output) if f == "final_mgmt.csv"]
+        final_files = [
+            f for f in os.listdir(self.report.output) if f == "final_mgmt.csv"
+        ]
         if final_files:
             file = final_files[0]
             mgmt_results = pd.read_csv(os.path.join(self.report.output, file))
             plot_out = os.path.join(self.report.output, file.replace(".csv", ".png"))
-            specific_sites_file = os.path.join(self.report.output, "final_specific_sites.csv")
+            specific_sites_file = os.path.join(
+                self.report.output, "final_specific_sites.csv"
+            )
             last_seen = 999999  # High number to indicate final result
         else:
             # Fallback to numeric-prefixed files
@@ -236,7 +245,9 @@ class MGMTSection(ReportSection):
                         prefix = file.split("_")[0]
                         count = int(prefix)
                         if count > last_seen:
-                            mgmt_results = pd.read_csv(os.path.join(self.report.output, file))
+                            mgmt_results = pd.read_csv(
+                                os.path.join(self.report.output, file)
+                            )
                             plot_out = os.path.join(
                                 self.report.output, file.replace(".csv", ".png")
                             )
@@ -378,7 +389,7 @@ class MGMTSection(ReportSection):
                     logger.debug(f"Loaded CpG sites from CSV: {specific_sites_file}")
                 except Exception as e:
                     logger.warning(f"Failed to load CpG sites CSV: {e}")
-            
+
             # If CSV doesn't exist or is empty, try to extract from BED file
             if specific_sites is None or specific_sites.empty:
                 # Determine BED file path
@@ -392,13 +403,13 @@ class MGMTSection(ReportSection):
                         os.path.join(self.report.output, f"{last_seen}_mgmt.bed"),
                         os.path.join(self.report.output, f"{last_seen}_mgmt_mgmt.bed"),
                     ]
-                
+
                 bed_path = None
                 for candidate in bed_candidates:
                     if os.path.exists(candidate):
                         bed_path = candidate
                         break
-                
+
                 if bed_path:
                     try:
                         specific_sites = _extract_mgmt_specific_sites_from_bed(bed_path)
@@ -407,7 +418,7 @@ class MGMTSection(ReportSection):
                     except Exception as e:
                         logger.warning(f"Failed to extract CpG sites from BED: {e}")
                         specific_sites = None
-            
+
             # Add specific CpG sites table if we have data
             if specific_sites is not None and not specific_sites.empty:
                 self.elements.append(
@@ -431,7 +442,7 @@ class MGMTSection(ReportSection):
                         "Rev\nMeth %",
                     ]
                 ]
-                
+
                 # Add methylation count columns if available
                 if has_meth_counts:
                     cpg_data[0].extend(["Fwd\nMeth\nCount", "Rev\nMeth\nCount"])
@@ -440,12 +451,16 @@ class MGMTSection(ReportSection):
                 for _, row in specific_sites.iterrows():
                     # Extract site number from Site_Label
                     site_label = str(row.get("Site_Label", ""))
-                    site_num = site_label.split(" ")[-1] if " " in site_label else site_label
-                    
+                    site_num = (
+                        site_label.split(" ")[-1] if " " in site_label else site_label
+                    )
+
                     # Extract position
                     position = str(row.get("Position", ""))
-                    pos_display = position.split("/")[0] if "/" in position else position
-                    
+                    pos_display = (
+                        position.split("/")[0] if "/" in position else position
+                    )
+
                     row_data = [
                         f"Site {site_num}",
                         pos_display,
@@ -456,14 +471,16 @@ class MGMTSection(ReportSection):
                         f"{row.get('Forward_Methylation', 0.0):.1f}",
                         f"{row.get('Reverse_Methylation', 0.0):.1f}",
                     ]
-                    
+
                     # Add methylation counts if available
                     if has_meth_counts:
-                        row_data.extend([
-                            str(int(row.get("Forward_Methylated_Count", 0))),
-                            str(int(row.get("Reverse_Methylated_Count", 0))),
-                        ])
-                    
+                        row_data.extend(
+                            [
+                                str(int(row.get("Forward_Methylated_Count", 0))),
+                                str(int(row.get("Reverse_Methylated_Count", 0))),
+                            ]
+                        )
+
                     cpg_data.append(row_data)
 
                 # Create the table with more compact column widths
@@ -492,7 +509,7 @@ class MGMTSection(ReportSection):
                         0.6 * inch,  # Forward Methylation %
                         0.6 * inch,  # Reverse Methylation %
                     ]
-                
+
                 cpg_table = Table(
                     cpg_data,
                     colWidths=col_widths,
@@ -570,7 +587,7 @@ class MGMTSection(ReportSection):
             else:
                 results_file = f"{last_seen}_mgmt.csv"
                 plot_file = f"{last_seen}_mgmt.png"
-            
+
             file_sources = [
                 ["Source", "Location"],  # Shorter headers
                 [
@@ -628,13 +645,15 @@ class MGMTSection(ReportSection):
 
             # Try to add the methylation plot
             plot_added = False
-            
+
             # First, try to load from existing PNG file (e.g. final_mgmt.png)
             if plot_out:
                 plot_buf = _load_image_buffer(plot_out)
                 if plot_buf is not None:
                     try:
-                        self.elements.append(Image(plot_buf, width=6 * inch, height=4 * inch))
+                        self.elements.append(
+                            Image(plot_buf, width=6 * inch, height=4 * inch)
+                        )
                         self.elements.append(
                             Paragraph(
                                 "MGMT promoter methylation plot showing methylation levels across CpG sites",
@@ -644,7 +663,7 @@ class MGMTSection(ReportSection):
                         plot_added = True
                     except Exception as e:
                         logger.warning(f"Failed to load MGMT plot from file: {e}")
-            
+
             # If not found, try to generate from BAM file using locus_figure
             if not plot_added:
                 # Try sorted BAM first, then fall back to unsorted
@@ -652,38 +671,46 @@ class MGMTSection(ReportSection):
                     os.path.join(self.report.output, "mgmt_sorted.bam"),
                     os.path.join(self.report.output, "mgmt.bam"),
                 ]
-                
+
                 bam_path = None
                 for candidate in bam_candidates:
                     if os.path.exists(candidate):
                         bam_path = candidate
                         break
-                
+
                 if bam_path:
                     try:
-                        from robin.analysis.methylation_wrapper import locus_figure
                         import warnings
+
                         import matplotlib.pyplot as plt
-                        
-                        logger.info(f"Generating MGMT plot from BAM file for report: {os.path.basename(bam_path)}")
+
+                        from robin.analysis.methylation_wrapper import locus_figure
+
+                        logger.info(
+                            f"Generating MGMT plot from BAM file for report: {os.path.basename(bam_path)}"
+                        )
                         fig = locus_figure(
                             interval="chr10:129466536-129467536",
                             bam_path=bam_path,
                             motif="CG",
                             mods="m",
                         )
-                        
+
                         # Embed in memory (same pattern as CNV/coverage sections).
                         # Avoids ReportLab failing later if path casing differs on disk.
                         plot_buf = io.BytesIO()
                         with warnings.catch_warnings():
                             warnings.simplefilter("ignore", UserWarning)
-                            fig.savefig(plot_buf, format="png", dpi=150, bbox_inches="tight")
+                            fig.savefig(
+                                plot_buf, format="png", dpi=150, bbox_inches="tight"
+                            )
                         plot_buf.seek(0)
                         plt.close(fig)
 
                         if plot_buf.getbuffer().nbytes > 0:
-                            self.elements.append(Image(plot_buf, width=6 * inch, height=4 * inch))
+                            self.elements.append(
+                                Image(plot_buf, width=6 * inch, height=4 * inch)
+                            )
                             self.elements.append(
                                 Paragraph(
                                     "MGMT promoter methylation plot showing methylation levels across CpG sites",
@@ -692,11 +719,13 @@ class MGMTSection(ReportSection):
                             )
                             plot_added = True
                         else:
-                            logger.warning("MGMT plot generation produced empty image data")
-                            
+                            logger.warning(
+                                "MGMT plot generation produced empty image data"
+                            )
+
                     except Exception as e:
                         logger.warning(f"Failed to generate MGMT plot from BAM: {e}")
-            
+
             # If still not added, show error message
             if not plot_added:
                 self.elements.append(
@@ -745,10 +774,20 @@ class MGMTSection(ReportSection):
                     else None
                 ),
                 "PredictionScorePercent": (
-                    round(float(prediction_score), 2) if prediction_score is not None else None
+                    round(float(prediction_score), 2)
+                    if prediction_score is not None
+                    else None
                 ),
-                "ResultsFile": "final_mgmt.csv" if last_seen == 999999 else (f"{last_seen}_mgmt.csv" if last_seen else None),
-                "PlotFile": "final_mgmt.png" if last_seen == 999999 else (f"{last_seen}_mgmt.png" if last_seen else None),
+                "ResultsFile": (
+                    "final_mgmt.csv"
+                    if last_seen == 999999
+                    else (f"{last_seen}_mgmt.csv" if last_seen else None)
+                ),
+                "PlotFile": (
+                    "final_mgmt.png"
+                    if last_seen == 999999
+                    else (f"{last_seen}_mgmt.png" if last_seen else None)
+                ),
                 "CpGSitesFile": (
                     os.path.basename(specific_sites_file)
                     if specific_sites_file and os.path.exists(specific_sites_file)

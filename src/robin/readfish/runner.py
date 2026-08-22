@@ -78,7 +78,9 @@ def prepare_readfish_toml(
     When ``work_directory`` is set, files go under ``{work_directory}/{sample_id}/``.
     """
     if not preset.readfish_adaptive_sampling_enabled():
-        raise ReadfishStartError("Preset is not configured for readfish adaptive sampling")
+        raise ReadfishStartError(
+            "Preset is not configured for readfish adaptive sampling"
+        )
 
     targets_bed = preset.effective_read_until_bed_file()
     reference = preset.effective_read_until_reference()
@@ -206,7 +208,9 @@ def start_readfish_targets(
 ) -> ReadfishStartResult:
     """Generate readfish TOML and start ``readfish targets`` in the background."""
     if not preset.readfish_adaptive_sampling_enabled():
-        raise ReadfishStartError("Preset is not configured for readfish adaptive sampling")
+        raise ReadfishStartError(
+            "Preset is not configured for readfish adaptive sampling"
+        )
 
     _announce("Adaptive sampling backend is readfish — preparing launch")
 
@@ -268,8 +272,7 @@ def start_readfish_targets(
     _announce(f"Experiment:     {experiment_group}")
     _announce(f"Log file:       {log_file}")
     _announce(
-        "Live updates:   "
-        + ("enabled" if config.live_updates_enabled else "disabled")
+        "Live updates:   " + ("enabled" if config.live_updates_enabled else "disabled")
     )
 
     if config.validate_on_start:
@@ -310,7 +313,10 @@ def start_readfish_targets(
     _announce(f"Process pid={process.pid} is still running after startup check")
 
     if config.live_updates_enabled:
-        from robin.readfish.live_updater import ReadfishLiveRegistry, ReadfishLiveSession
+        from robin.readfish.live_updater import (
+            ReadfishLiveRegistry,
+            ReadfishLiveSession,
+        )
 
         ReadfishLiveRegistry.register(
             ReadfishLiveSession(
@@ -324,9 +330,7 @@ def start_readfish_targets(
             f"(region={config.live_region_name!r})"
         )
 
-    _announce(
-        f"Ready — follow logs with: tail -f {log_file}"
-    )
+    _announce(f"Ready — follow logs with: tail -f {log_file}")
     return ReadfishStartResult(
         pid=process.pid,
         toml_path=str(toml_path),
@@ -393,8 +397,7 @@ def _validate_readfish_toml(
     if completed.returncode != 0:
         detail = (completed.stderr or completed.stdout or "").strip()
         raise ReadfishStartError(
-            "readfish validate failed"
-            + (f": {detail}" if detail else "")
+            "readfish validate failed" + (f": {detail}" if detail else "")
         )
 
 

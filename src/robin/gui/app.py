@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from typing import Any, Optional, Dict
 from pathlib import Path
+from typing import Any, Dict, Optional
 
 try:
     from nicegui import ui

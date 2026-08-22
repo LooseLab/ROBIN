@@ -214,7 +214,9 @@ def _resolve_hierarchy_predictions(
         except ValueError:
             logger.warning("[MNPFlex] Falling back from LIMS layout in %s", lims_path)
 
-    matches = sorted(docker_dir.glob(f"{prefix}_*_missing_sites.mnp-flex_all_preds.csv"))
+    matches = sorted(
+        docker_dir.glob(f"{prefix}_*_missing_sites.mnp-flex_all_preds.csv")
+    )
     if not matches:
         matches = sorted(docker_dir.glob(f"{prefix}_*.mnp-flex_all_preds.csv"))
     if matches:
@@ -358,7 +360,9 @@ def build_bundle_summary_from_docker_dir(
     description = (annotation_row.get("Description") or "").strip()
     classifier = _parse_classifier_label(lims_row.get("Classifier", ""))
 
-    hierarchy_predictions = _resolve_hierarchy_predictions(docker_dir, prefix, lims_path)
+    hierarchy_predictions = _resolve_hierarchy_predictions(
+        docker_dir, prefix, lims_path
+    )
     hierarchy = _build_hierarchy_tree(hierarchy_predictions, description)
     scores = _build_scores_from_cal(scores_path) if scores_path.exists() else []
     scores = _enrich_scores_with_hierarchy(scores, hierarchy_predictions)

@@ -107,15 +107,9 @@ def workflow_context_from_runner(runner: Any) -> tuple[Optional[str], Optional[s
         target_panel = getattr(runner, "target_panel", None)
 
     ref_text = (
-        str(Path(reference).expanduser())
-        if reference not in (None, "")
-        else None
+        str(Path(reference).expanduser()) if reference not in (None, "") else None
     )
-    panel_text = (
-        str(target_panel).strip()
-        if target_panel not in (None, "")
-        else None
-    )
+    panel_text = str(target_panel).strip() if target_panel not in (None, "") else None
     return ref_text, panel_text
 
 

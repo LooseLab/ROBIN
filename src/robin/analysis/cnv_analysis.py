@@ -74,24 +74,24 @@ Authors
 Matt Loose
 """
 
-import os
-import logging
-import time
-import pickle
 import gc
+import logging
+import os
+import pickle
 import subprocess
 import sys
-from functools import lru_cache
-from typing import Any, Dict, Optional, List, Tuple
+import time
 from dataclasses import dataclass
+from functools import lru_cache
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 import pysam
+import ruptures as rpt
 from scipy.ndimage import uniform_filter1d
 
-import ruptures as rpt
-from robin.logging_config import get_job_logger
 import robin.resources as resources
+from robin.logging_config import get_job_logger
 
 os.environ["CI"] = "1"
 
@@ -123,31 +123,36 @@ _current_sample_id = None
 def get_cached_ref_cnv_dict(ref_cnv_dict_path: str, logger) -> dict:
     """
     Get reference CNV dictionary with caching to avoid reloading for every sample.
-    
+
     Args:
         ref_cnv_dict_path: Path to reference CNV pickle file
         logger: Logger instance
-        
+
     Returns:
         Reference CNV dictionary
     """
     global _ref_cnv_dict_cache, _ref_cnv_dict_path_cache
-    
+
     # Check if we need to load the reference dict
     if _ref_cnv_dict_cache is None or _ref_cnv_dict_path_cache != ref_cnv_dict_path:
-        logger.info(f"Loading reference CNV dict from {ref_cnv_dict_path} (first time or path changed)")
+        logger.info(
+            f"Loading reference CNV dict from {ref_cnv_dict_path} (first time or path changed)"
+        )
         load_start = time.time()
-        
+
         with open(ref_cnv_dict_path, "rb") as f:
             _ref_cnv_dict_cache = pickle.load(f)
         _ref_cnv_dict_path_cache = ref_cnv_dict_path
-        
+
         load_time = time.time() - load_start
-        logger.info(f"Reference CNV dict loaded in {load_time:.3f}s (cached for subsequent samples)")
+        logger.info(
+            f"Reference CNV dict loaded in {load_time:.3f}s (cached for subsequent samples)"
+        )
     else:
         logger.debug("Using cached reference CNV dict")
-    
+
     return _ref_cnv_dict_cache
+
 
 def clear_ref_cnv_dict_cache():
     """Clear the reference CNV dict cache (useful when switching reference files)"""
@@ -155,32 +160,34 @@ def clear_ref_cnv_dict_cache():
     _ref_cnv_dict_cache = None
     _ref_cnv_dict_path_cache = None
 
+
 def get_sample_cache(sample_id: str) -> dict:
     """
     Get the cache for a specific sample, creating it if it doesn't exist.
-    
+
     Args:
         sample_id: Sample identifier
-        
+
     Returns:
         Dictionary containing cached data for the sample
     """
     global _sample_cache
     if sample_id not in _sample_cache:
         _sample_cache[sample_id] = {
-            'copy_numbers': None,
-            'copy_numbers_path': None,
-            'analysis_counter': None,
-            'last_accessed': time.time(),
-            'bam_count': 0
+            "copy_numbers": None,
+            "copy_numbers_path": None,
+            "analysis_counter": None,
+            "last_accessed": time.time(),
+            "bam_count": 0,
         }
-    _sample_cache[sample_id]['last_accessed'] = time.time()
+    _sample_cache[sample_id]["last_accessed"] = time.time()
     return _sample_cache[sample_id]
+
 
 def update_sample_cache(sample_id: str, **kwargs):
     """
     Update the cache for a specific sample.
-    
+
     Args:
         sample_id: Sample identifier
         **kwargs: Key-value pairs to update in the cache
@@ -188,10 +195,11 @@ def update_sample_cache(sample_id: str, **kwargs):
     cache = get_sample_cache(sample_id)
     cache.update(kwargs)
 
+
 def clear_sample_cache(sample_id: str = None):
     """
     Clear the cache for a specific sample or all samples.
-    
+
     Args:
         sample_id: Sample identifier to clear, or None to clear all
     """
@@ -204,73 +212,83 @@ def clear_sample_cache(sample_id: str = None):
         if _current_sample_id == sample_id:
             _current_sample_id = None
 
+
 def set_current_sample(sample_id: str, logger) -> bool:
     """
     Set the current sample being processed and manage cache transitions.
-    
+
     Args:
         sample_id: Sample identifier
         logger: Logger instance
-        
+
     Returns:
         True if this is a new sample (cache was cleared), False if same sample
     """
     global _current_sample_id
-    
+
     if _current_sample_id != sample_id:
-        logger.info(f"Switching from sample '{_current_sample_id}' to '{sample_id}' - managing cache")
+        logger.info(
+            f"Switching from sample '{_current_sample_id}' to '{sample_id}' - managing cache"
+        )
         _current_sample_id = sample_id
-        
+
         # Update BAM count for the new sample
         cache = get_sample_cache(sample_id)
-        cache['bam_count'] += 1
-        
+        cache["bam_count"] += 1
+
         return True  # New sample
     else:
         # Same sample, just increment BAM count
         cache = get_sample_cache(sample_id)
-        cache['bam_count'] += 1
-        logger.debug(f"Processing BAM file {cache['bam_count']} for sample '{sample_id}'")
+        cache["bam_count"] += 1
+        logger.debug(
+            f"Processing BAM file {cache['bam_count']} for sample '{sample_id}'"
+        )
         return False  # Same sample
+
 
 def cleanup_sample_cache_on_completion(sample_id: str, logger) -> None:
     """
     Clean up sample cache when all BAM files for a sample are complete.
     This should be called by the workflow system when a sample is fully processed.
-    
+
     Args:
         sample_id: Sample identifier
         logger: Logger instance
     """
     cache = get_sample_cache(sample_id)
-    bam_count = cache.get('bam_count', 0)
-    logger.info(f"Sample '{sample_id}' completed processing {bam_count} BAM files - cache can be cleaned up")
-    
+    bam_count = cache.get("bam_count", 0)
+    logger.info(
+        f"Sample '{sample_id}' completed processing {bam_count} BAM files - cache can be cleaned up"
+    )
+
     # Note: We don't actually clear the cache here as it might be needed for other operations
     # The workflow system should call clear_sample_cache() when appropriate
+
 
 def get_sample_cache_stats() -> dict:
     """
     Get statistics about the current sample cache for monitoring purposes.
-    
+
     Returns:
         Dictionary with cache statistics
     """
     global _sample_cache, _current_sample_id
     return {
-        'current_sample': _current_sample_id,
-        'cached_samples': list(_sample_cache.keys()),
-        'cache_size': len(_sample_cache),
-        'sample_details': {
+        "current_sample": _current_sample_id,
+        "cached_samples": list(_sample_cache.keys()),
+        "cache_size": len(_sample_cache),
+        "sample_details": {
             sid: {
-                'bam_count': cache.get('bam_count', 0),
-                'last_accessed': cache.get('last_accessed', 0),
-                'has_copy_numbers': cache.get('copy_numbers') is not None,
-                'analysis_counter': cache.get('analysis_counter')
+                "bam_count": cache.get("bam_count", 0),
+                "last_accessed": cache.get("last_accessed", 0),
+                "has_copy_numbers": cache.get("copy_numbers") is not None,
+                "analysis_counter": cache.get("analysis_counter"),
             }
             for sid, cache in _sample_cache.items()
-        }
+        },
     }
+
 
 def run_cnv_analysis_direct(
     bam_path,
@@ -298,7 +316,7 @@ def run_cnv_analysis_direct(
         Dictionary with analysis results or None if failed
     """
     import cnv_from_bam
-    
+
     try:
         # Use provided copy_numbers dict directly (no file I/O)
         if copy_numbers is None:
@@ -322,7 +340,9 @@ def run_cnv_analysis_direct(
             log_level=int(logging.ERROR),
         )
         pass1_time = time.time() - pass1_start
-        logger.info(f"Pass 1 completed in {pass1_time:.2f}s (bin_width: {result.bin_width}, variance: {result.variance:.6f})")
+        logger.info(
+            f"Pass 1 completed in {pass1_time:.2f}s (bin_width: {result.bin_width}, variance: {result.variance:.6f})"
+        )
 
         # Reference track from packaged control counts only (no sample BAM).
         # Re-reading the sample BAM onto the control previously contaminated CNV2.
@@ -351,7 +371,7 @@ def run_cnv_analysis_direct(
                 "pass1_time": pass1_time,
                 "pass2_time": pass2_time,
                 "total_time": pass1_time + pass2_time,
-            }
+            },
         }
 
         logger.debug("CNV analysis completed successfully (direct mode)")
@@ -360,12 +380,14 @@ def run_cnv_analysis_direct(
     except Exception as e:
         logger.error(f"Error in direct CNV analysis: {e}")
         import traceback
+
         logger.error(traceback.format_exc())
         return {
             "success": False,
             "error": str(e),
             "error_type": type(e).__name__,
         }
+
 
 def run_cnv_analysis_subprocess(
     bam_path,
@@ -432,7 +454,7 @@ def run_cnv_analysis_subprocess(
         "--mapq-filter",
         str(mapq_filter),
     ]
-    
+
     # Use per-sample copy_numbers file if provided (OPTIMIZED APPROACH)
     if copy_numbers_path:
         cmd.extend(["--copy-numbers-path", copy_numbers_path])
@@ -446,12 +468,12 @@ def run_cnv_analysis_subprocess(
         logger.debug("Using temporary copy_numbers file (fallback)")
 
     logger.debug(f"Running CNV analysis in subprocess: {' '.join(cmd)}")
-    
+
     # Log file size for performance monitoring
     try:
         bam_size_mb = os.path.getsize(bam_path) / (1024 * 1024)
         logger.info(f"Processing BAM file: {bam_size_mb:.1f} MB")
-        
+
         # Warn about very large files that might take a long time
         if bam_size_mb > 500:
             logger.warning(
@@ -464,7 +486,7 @@ def run_cnv_analysis_subprocess(
     # Run subprocess with stdout/stderr redirected to files to avoid capture overhead
     stdout_log_path = os.path.join(temp_dir, "cnv_subprocess.stdout.log")
     stderr_log_path = os.path.join(temp_dir, "cnv_subprocess.stderr.log")
-    
+
     try:
         with open(stdout_log_path, "w") as _out, open(stderr_log_path, "w") as _err:
             result = subprocess.run(
@@ -501,7 +523,7 @@ def run_cnv_analysis_subprocess(
         else:
             logger.error("Results file not found")
             return None
-    
+
     except subprocess.TimeoutExpired:
         logger.error(
             f"CNV analysis subprocess timed out after {timeout}s for {os.path.basename(bam_path)}. "
@@ -513,13 +535,16 @@ def run_cnv_analysis_subprocess(
             with open(stderr_log_path, "r") as f:
                 stderr_content = f.read()
             if stderr_content.strip():
-                logger.error(f"subprocess stderr before timeout:\n{stderr_content[-1000:]}")  # Last 1000 chars
+                logger.error(
+                    f"subprocess stderr before timeout:\n{stderr_content[-1000:]}"
+                )  # Last 1000 chars
         except Exception:
             pass
         return None
     except Exception as e:
         logger.error(f"Error running CNV analysis subprocess: {e}")
         import traceback
+
         logger.error(traceback.format_exc())
         return None
 
@@ -958,7 +983,9 @@ def prepare_cnv_calling_track(
         ref_cnv_map,
         ref_mappability_eps=ref_mappability_eps,
     )
-    calling_bw = resolve_cnv_calling_bin_width(analysis_bin_width, min_calling_bin_width)
+    calling_bw = resolve_cnv_calling_bin_width(
+        analysis_bin_width, min_calling_bin_width
+    )
     return (
         coarsen_cnv_track(log2_track, analysis_bin_width, calling_bw),
         calling_bw,
@@ -1016,7 +1043,9 @@ def downsample_cnv_for_plot(
         where=finite_counts > 0,
     )
     # Centre each display bin in analysis-bin coordinates (not nominal plot_bin_width).
-    x_bp = (np.arange(len(values_out)) * group_size + (group_size / 2.0)) * analysis_bin_width
+    x_bp = (
+        np.arange(len(values_out)) * group_size + (group_size / 2.0)
+    ) * analysis_bin_width
     return x_bp, values_out
 
 
@@ -1032,7 +1061,9 @@ def downsample_cnv_chromosome_track(
     """
     values = np.asarray(values_1d, dtype=float)
     resolved_plot_bw = resolve_cnv_plot_bin_width(analysis_bin_width, plot_bin_width)
-    x_bp, plot_values = downsample_cnv_for_plot(values, analysis_bin_width, resolved_plot_bw)
+    x_bp, plot_values = downsample_cnv_for_plot(
+        values, analysis_bin_width, resolved_plot_bw
+    )
     x_max_mb = len(values) * analysis_bin_width / 1_000_000.0
     return x_bp / 1_000_000.0, plot_values, x_max_mb
 
@@ -1320,15 +1351,17 @@ def load_analysis_counter(sample_id: str, work_dir: str, logger) -> int:
     """Load the analysis counter for a sample from disk with caching"""
     # Check cache first
     cache = get_sample_cache(sample_id)
-    if cache['analysis_counter'] is not None:
-        logger.debug(f"Using cached analysis counter for {sample_id}: {cache['analysis_counter']}")
-        return cache['analysis_counter']
-    
+    if cache["analysis_counter"] is not None:
+        logger.debug(
+            f"Using cached analysis counter for {sample_id}: {cache['analysis_counter']}"
+        )
+        return cache["analysis_counter"]
+
     # Load from disk
     result = _read_analysis_counter_from_disk(sample_id, work_dir)
-    
+
     # Cache the result
-    cache['analysis_counter'] = result
+    cache["analysis_counter"] = result
     logger.debug(f"Loaded and cached analysis counter for {sample_id}: {result}")
     return result
 
@@ -1341,7 +1374,7 @@ def save_analysis_counter(sample_id: str, counter: int, work_dir: str, logger) -
         os.makedirs(os.path.dirname(counter_file), exist_ok=True)
         with open(counter_file, "w") as f:
             f.write(str(counter))
-        
+
         # Update cache
         update_sample_cache(sample_id, analysis_counter=counter)
         logger.debug(f"Saved and cached analysis counter for {sample_id}: {counter}")
@@ -1349,9 +1382,7 @@ def save_analysis_counter(sample_id: str, counter: int, work_dir: str, logger) -
         logger.error(f"Error saving counter for {sample_id}: {e}")
 
 
-def allocate_next_analysis_counter(
-    sample_id: str, work_dir: str, logger=None
-) -> int:
+def allocate_next_analysis_counter(sample_id: str, work_dir: str, logger=None) -> int:
     """
     Atomically increment the shared BED/CNV analysis counter and return the new value.
 
@@ -1630,15 +1661,15 @@ def save_cnv_files(
         if generate_master_bed:
             try:
                 from robin.analysis.master_bed_generator import (
-                    generate_master_bed_async,
                     _try_get_target_panel_from_fusion_metadata,
+                    generate_master_bed_async,
                 )
-                
+
                 # Extract sample_id from sample_dir
                 sample_id = os.path.basename(sample_dir)
                 # work_dir is the parent of sample_dir
                 work_dir = os.path.dirname(sample_dir)
-                
+
                 # Prefer the workflow panel passed from cnv_handler; fall back to
                 # fusion metadata only when the caller did not supply one.
                 resolved_panel = target_panel
@@ -1652,7 +1683,7 @@ def save_cnv_files(
                         "(neither workflow target_panel nor fusion metadata available)",
                         sample_id,
                     )
-                
+
                 # Generate asynchronously (non-blocking)
                 generate_master_bed_async(
                     sample_id=sample_id,
@@ -1669,8 +1700,6 @@ def save_cnv_files(
 
     except Exception as e:
         logger.error(f"Error saving CNV files: {e}")
-
-
 
 
 def process_single_bam(
@@ -1698,10 +1727,10 @@ def process_single_bam(
         Dictionary with CNV analysis results
     """
     sample_id = metadata.extracted_data.get("sample_id", "unknown")
-    
+
     # Set current sample and check if this is a new sample
     is_new_sample = set_current_sample(sample_id, logger)
-    
+
     if is_new_sample:
         logger.info(f"🧬 Starting CNV analysis for NEW sample: {sample_id}")
     else:
@@ -1749,7 +1778,7 @@ def process_single_bam(
         # Check file size and adjust timeout accordingly
         bam_size_mb = os.path.getsize(bam_path) / (1024 * 1024)
         logger.debug(f"BAM file size: {bam_size_mb:.1f} MB")
-        
+
         # Adaptive timeout based on file size
         # Base: 1 hour for files up to 100 MB
         # Add 1 minute per additional 10 MB for large files
@@ -1765,35 +1794,50 @@ def process_single_bam(
 
         # Use per-sample copy_numbers file (OPTIMIZED APPROACH)
         # This eliminates the multi-sample dictionary bottleneck
-        copy_numbers_path = os.path.join(sample_output_dir, f"{sample_id}_copy_numbers.pkl")
-        
+        copy_numbers_path = os.path.join(
+            sample_output_dir, f"{sample_id}_copy_numbers.pkl"
+        )
+
         # Check cache first for copy_numbers
         cache = get_sample_cache(sample_id)
-        if cache['copy_numbers'] is not None and cache['copy_numbers_path'] == copy_numbers_path:
+        if (
+            cache["copy_numbers"] is not None
+            and cache["copy_numbers_path"] == copy_numbers_path
+        ):
             logger.debug(f"Using cached copy_numbers for {sample_id}")
-            copy_numbers = cache['copy_numbers']
+            copy_numbers = cache["copy_numbers"]
         else:
             # Load from disk or start fresh
             copy_numbers = None
-            
+
             # Backward compatibility: Migrate from old multi-sample dict to per-sample file
             legacy_dict_path = os.path.join(sample_output_dir, "update_cnv_dict.pkl")
-            if not os.path.exists(copy_numbers_path) and os.path.exists(legacy_dict_path):
-                logger.info("Migrating from legacy multi-sample dict to per-sample file...")
+            if not os.path.exists(copy_numbers_path) and os.path.exists(
+                legacy_dict_path
+            ):
+                logger.info(
+                    "Migrating from legacy multi-sample dict to per-sample file..."
+                )
                 try:
                     with open(legacy_dict_path, "rb") as f:
                         update_cnv_dict = pickle.load(f)
                     if sample_id in update_cnv_dict:
                         # Extract this sample's data and save to per-sample file
                         with open(copy_numbers_path, "wb") as f:
-                            pickle.dump(update_cnv_dict[sample_id], f, protocol=pickle.HIGHEST_PROTOCOL)
-                        logger.info(f"Migrated copy_numbers for {sample_id} to per-sample file")
-                        
+                            pickle.dump(
+                                update_cnv_dict[sample_id],
+                                f,
+                                protocol=pickle.HIGHEST_PROTOCOL,
+                            )
+                        logger.info(
+                            f"Migrated copy_numbers for {sample_id} to per-sample file"
+                        )
+
                         # Optionally remove legacy file after migration (commented out for safety)
                         # os.remove(legacy_dict_path)
                 except Exception as e:
                     logger.warning(f"Could not migrate legacy copy_numbers: {e}")
-            
+
             if os.path.exists(copy_numbers_path):
                 logger.debug(f"Loading copy_numbers from disk: {copy_numbers_path}")
                 try:
@@ -1806,9 +1850,13 @@ def process_single_bam(
             else:
                 logger.debug("No previous copy_numbers found, starting fresh")
                 copy_numbers = {}
-            
+
             # Cache the loaded copy_numbers
-            update_sample_cache(sample_id, copy_numbers=copy_numbers, copy_numbers_path=copy_numbers_path)
+            update_sample_cache(
+                sample_id,
+                copy_numbers=copy_numbers,
+                copy_numbers_path=copy_numbers_path,
+            )
 
         # Load reference CNV dict once (cached for subsequent samples)
         ref_cnv_path = os.path.join(
@@ -1819,7 +1867,9 @@ def process_single_bam(
 
         # Process BAM file with cnv_from_bam using configurable execution mode
         execution_mode = "subprocess" if USE_CNV_SUBPROCESS else "direct"
-        logger.debug(f"Processing BAM file with cnv_from_bam ({execution_mode}, {threads} threads)")
+        logger.debug(
+            f"Processing BAM file with cnv_from_bam ({execution_mode}, {threads} threads)"
+        )
         analysis_start = time.time()
         try:
             # Run CNV analysis using configurable execution mode
@@ -1864,25 +1914,31 @@ def process_single_bam(
             genome_length = subprocess_result["genome_length"]
             r2_cnv = subprocess_result["r2_cnv"]
             updated_copy_numbers = subprocess_result["updated_copy_numbers"]
-            
+
             # Log timing information from analysis
             if "timing" in subprocess_result:
                 timing = subprocess_result["timing"]
-                logger.info(f"CNV analysis timing: Pass1={timing['pass1_time']:.2f}s, Pass2={timing['pass2_time']:.2f}s, Total={timing['total_time']:.2f}s")
-            
+                logger.info(
+                    f"CNV analysis timing: Pass1={timing['pass1_time']:.2f}s, Pass2={timing['pass2_time']:.2f}s, Total={timing['total_time']:.2f}s"
+                )
+
             analysis_elapsed = time.time() - analysis_start
-            logger.info(f"CNV analysis ({execution_mode}) completed in {analysis_elapsed:.2f}s (total with overhead)")
+            logger.info(
+                f"CNV analysis ({execution_mode}) completed in {analysis_elapsed:.2f}s (total with overhead)"
+            )
 
             # Save updated copy_numbers back to per-sample file (OPTIMIZED)
             save_start = time.time()
             with open(copy_numbers_path, "wb") as f:
                 pickle.dump(updated_copy_numbers, f, protocol=pickle.HIGHEST_PROTOCOL)
             save_time = time.time() - save_start
-            logger.debug(f"Saved updated copy_numbers to {copy_numbers_path} in {save_time:.3f}s")
-            
+            logger.debug(
+                f"Saved updated copy_numbers to {copy_numbers_path} in {save_time:.3f}s"
+            )
+
             # Update cache with the saved copy_numbers
             update_sample_cache(sample_id, copy_numbers=updated_copy_numbers)
-            
+
             # Update the local copy_numbers variable for subsequent processing
             copy_numbers = updated_copy_numbers
 
@@ -1898,10 +1954,9 @@ def process_single_bam(
             analysis_result["processing_steps"].append("cnv_extraction_failed")
             return analysis_result
 
-
         # Calculate normalized CNV data (difference between sample and reference)
         logger.debug("Calculating normalized CNV data")
-        
+
         result3_cnv = {}
         for key in r_cnv.keys():
             if key != "chrM" and key in r2_cnv:
@@ -1913,7 +1968,7 @@ def process_single_bam(
                 result3_cnv[key] = moving_avg_data1 - moving_avg_data2
 
         analysis_result["processing_steps"].append("normalized_cnv_calculated")
-        
+
         # Estimate sex from CNV data
         sex_estimate = estimate_sex_from_cnv(result3_cnv, logger)
         analysis_result["sex_estimate"] = sex_estimate
@@ -1984,7 +2039,7 @@ def process_single_bam(
         logger.info(f"CNV analysis complete for {sample_id}")
         logger.info(f"Sex Estimate: {analysis_result['sex_estimate']}")
         logger.info(f"Breakpoints: {len(analysis_result['breakpoints'])} detected")
-        
+
         return analysis_result
 
     except Exception as e:
@@ -2006,7 +2061,7 @@ def process_multiple_bams(
 ):
     """
     Process multiple BAM files for CNV analysis using aggregated CNV data.
-    
+
     This function processes multiple BAM files for the same sample, accumulating
     CNV data across all files before performing downstream analysis. This is
     more efficient than processing each BAM file individually and then trying
@@ -2027,27 +2082,29 @@ def process_multiple_bams(
     """
     if not bam_paths or not metadata_list:
         raise ValueError("bam_paths and metadata_list must not be empty")
-    
+
     if len(bam_paths) != len(metadata_list):
         raise ValueError("bam_paths and metadata_list must have the same length")
-    
+
     # Get sample ID from first metadata (assuming all BAMs are from same sample)
     sample_id = metadata_list[0].extracted_data.get("sample_id", "unknown")
-    
+
     # Set current sample and check if this is a new sample
     is_new_sample = set_current_sample(sample_id, logger)
-    
+
     if is_new_sample:
         logger.info(f"🧬 Starting multi-BAM CNV analysis for NEW sample: {sample_id}")
     else:
         logger.info(f"🧬 Continuing multi-BAM CNV analysis for sample: {sample_id}")
 
     logger.info(f"Processing {len(bam_paths)} BAM files for sample {sample_id}")
-    
+
     # Log essential metadata only
     for i, (bam_path, metadata) in enumerate(zip(bam_paths, metadata_list)):
-        logger.debug(f"BAM file {i+1}: {metadata.file_path} ({metadata.file_size:,} bytes)")
-    
+        logger.debug(
+            f"BAM file {i+1}: {metadata.file_path} ({metadata.file_size:,} bytes)"
+        )
+
     logger.debug(f"Sample ID: {sample_id}")
     logger.debug(f"Threads: {threads}")
 
@@ -2081,51 +2138,68 @@ def process_multiple_bams(
         # Check if any BAM has reads
         valid_bam_paths = []
         valid_metadata_list = []
-        
+
         for bam_path, metadata in zip(bam_paths, metadata_list):
             if has_reads(bam_path):
                 valid_bam_paths.append(bam_path)
                 valid_metadata_list.append(metadata)
             else:
                 logger.warning(f"No reads found in BAM file: {bam_path}")
-        
+
         if not valid_bam_paths:
             logger.warning(f"No valid BAM files found for {sample_id}")
             analysis_result["error_message"] = "No reads found in any BAM files"
             analysis_result["processing_steps"].append("no_reads_found")
             return analysis_result
 
-        logger.info(f"Processing {len(valid_bam_paths)} valid BAM files out of {len(bam_paths)} total")
+        logger.info(
+            f"Processing {len(valid_bam_paths)} valid BAM files out of {len(bam_paths)} total"
+        )
         analysis_result["files_processed"] = len(valid_bam_paths)
         analysis_result["processing_steps"].append("reads_found")
 
         # Use per-sample copy_numbers file (OPTIMIZED APPROACH)
-        copy_numbers_path = os.path.join(sample_output_dir, f"{sample_id}_copy_numbers.pkl")
-        
+        copy_numbers_path = os.path.join(
+            sample_output_dir, f"{sample_id}_copy_numbers.pkl"
+        )
+
         # Check cache first for copy_numbers
         cache = get_sample_cache(sample_id)
-        if cache['copy_numbers'] is not None and cache['copy_numbers_path'] == copy_numbers_path:
+        if (
+            cache["copy_numbers"] is not None
+            and cache["copy_numbers_path"] == copy_numbers_path
+        ):
             logger.debug(f"Using cached copy_numbers for {sample_id}")
-            copy_numbers = cache['copy_numbers']
+            copy_numbers = cache["copy_numbers"]
         else:
             # Load from disk or start fresh
             copy_numbers = None
-            
+
             # Backward compatibility: Migrate from old multi-sample dict to per-sample file
             legacy_dict_path = os.path.join(sample_output_dir, "update_cnv_dict.pkl")
-            if not os.path.exists(copy_numbers_path) and os.path.exists(legacy_dict_path):
-                logger.info("Migrating from legacy multi-sample dict to per-sample file...")
+            if not os.path.exists(copy_numbers_path) and os.path.exists(
+                legacy_dict_path
+            ):
+                logger.info(
+                    "Migrating from legacy multi-sample dict to per-sample file..."
+                )
                 try:
                     with open(legacy_dict_path, "rb") as f:
                         update_cnv_dict = pickle.load(f)
                     if sample_id in update_cnv_dict:
                         # Extract this sample's data and save to per-sample file
                         with open(copy_numbers_path, "wb") as f:
-                            pickle.dump(update_cnv_dict[sample_id], f, protocol=pickle.HIGHEST_PROTOCOL)
-                        logger.info(f"Migrated copy_numbers for {sample_id} to per-sample file")
+                            pickle.dump(
+                                update_cnv_dict[sample_id],
+                                f,
+                                protocol=pickle.HIGHEST_PROTOCOL,
+                            )
+                        logger.info(
+                            f"Migrated copy_numbers for {sample_id} to per-sample file"
+                        )
                 except Exception as e:
                     logger.warning(f"Could not migrate legacy copy_numbers: {e}")
-            
+
             if os.path.exists(copy_numbers_path):
                 logger.debug(f"Loading copy_numbers from disk: {copy_numbers_path}")
                 try:
@@ -2138,9 +2212,13 @@ def process_multiple_bams(
             else:
                 logger.debug("No previous copy_numbers found, starting fresh")
                 copy_numbers = {}
-            
+
             # Cache the loaded copy_numbers
-            update_sample_cache(sample_id, copy_numbers=copy_numbers, copy_numbers_path=copy_numbers_path)
+            update_sample_cache(
+                sample_id,
+                copy_numbers=copy_numbers,
+                copy_numbers_path=copy_numbers_path,
+            )
 
         # Load reference CNV dict once (cached for subsequent samples)
         ref_cnv_path = os.path.join(
@@ -2151,12 +2229,16 @@ def process_multiple_bams(
 
         # Process all BAM files with cnv_from_bam using configurable execution mode
         execution_mode = "subprocess" if USE_CNV_SUBPROCESS else "direct"
-        logger.debug(f"Processing {len(valid_bam_paths)} BAM files with cnv_from_bam ({execution_mode}, {threads} threads)")
-        
+        logger.debug(
+            f"Processing {len(valid_bam_paths)} BAM files with cnv_from_bam ({execution_mode}, {threads} threads)"
+        )
+
         # Calculate adaptive timeout based on total file sizes
-        total_bam_size_mb = sum(os.path.getsize(bam_path) for bam_path in valid_bam_paths) / (1024 * 1024)
+        total_bam_size_mb = sum(
+            os.path.getsize(bam_path) for bam_path in valid_bam_paths
+        ) / (1024 * 1024)
         logger.debug(f"Total BAM file size: {total_bam_size_mb:.1f} MB")
-        
+
         # Adaptive timeout based on total file size
         base_timeout = 3600  # 1 hour
         if total_bam_size_mb > 100:
@@ -2171,9 +2253,13 @@ def process_multiple_bams(
         analysis_start = time.time()
         try:
             # Process each BAM file, accumulating CNV data in copy_numbers
-            for i, (bam_path, metadata) in enumerate(zip(valid_bam_paths, valid_metadata_list)):
-                logger.info(f"Processing BAM file {i+1}/{len(valid_bam_paths)}: {os.path.basename(bam_path)}")
-                
+            for i, (bam_path, metadata) in enumerate(
+                zip(valid_bam_paths, valid_metadata_list)
+            ):
+                logger.info(
+                    f"Processing BAM file {i+1}/{len(valid_bam_paths)}: {os.path.basename(bam_path)}"
+                )
+
                 # Run CNV analysis using configurable execution mode
                 if USE_CNV_SUBPROCESS:
                     # Use subprocess execution (original approach)
@@ -2201,29 +2287,39 @@ def process_multiple_bams(
                         sample_id=sample_id,
                     )
 
-                if subprocess_result is None or not subprocess_result.get("success", False):
+                if subprocess_result is None or not subprocess_result.get(
+                    "success", False
+                ):
                     error_msg = (
                         subprocess_result.get("error", "Unknown error")
                         if subprocess_result
                         else "Subprocess failed"
                     )
-                    raise RuntimeError(f"CNV analysis subprocess failed for {os.path.basename(bam_path)}: {error_msg}")
+                    raise RuntimeError(
+                        f"CNV analysis subprocess failed for {os.path.basename(bam_path)}: {error_msg}"
+                    )
 
                 # Extract results from subprocess (only need the final accumulated copy_numbers)
                 updated_copy_numbers = subprocess_result["updated_copy_numbers"]
-                
+
                 # Log timing information from analysis
                 if "timing" in subprocess_result:
                     timing = subprocess_result["timing"]
-                    logger.debug(f"BAM {i+1} CNV analysis timing: Pass1={timing['pass1_time']:.2f}s, Pass2={timing['pass2_time']:.2f}s, Total={timing['total_time']:.2f}s")
-                
+                    logger.debug(
+                        f"BAM {i+1} CNV analysis timing: Pass1={timing['pass1_time']:.2f}s, Pass2={timing['pass2_time']:.2f}s, Total={timing['total_time']:.2f}s"
+                    )
+
                 # Update copy_numbers for next iteration
                 copy_numbers = updated_copy_numbers
-                
-                logger.info(f"Completed BAM file {i+1}/{len(valid_bam_paths)}: {os.path.basename(bam_path)}")
+
+                logger.info(
+                    f"Completed BAM file {i+1}/{len(valid_bam_paths)}: {os.path.basename(bam_path)}"
+                )
                 if job_id is not None:
                     try:
-                        from robin.workflow_ray import notify_coordinator_files_completed
+                        from robin.workflow_ray import (
+                            notify_coordinator_files_completed,
+                        )
 
                         notify_coordinator_files_completed("cnv", 1, job_id=job_id)
                     except Exception:
@@ -2250,9 +2346,11 @@ def process_multiple_bams(
             genome_length = final_result["genome_length"]
             r2_cnv = final_result["r2_cnv"]
             final_copy_numbers = final_result["updated_copy_numbers"]
-            
+
             analysis_elapsed = time.time() - analysis_start
-            logger.info(f"Multi-BAM CNV analysis ({execution_mode}) completed in {analysis_elapsed:.2f}s (total with overhead)")
+            logger.info(
+                f"Multi-BAM CNV analysis ({execution_mode}) completed in {analysis_elapsed:.2f}s (total with overhead)"
+            )
 
             # Save updated copy_numbers back to per-sample file (OPTIMIZED)
             save_start = time.time()
@@ -2288,7 +2386,9 @@ def process_multiple_bams(
                     moving_avg_data1, moving_avg_data2
                 )
                 result3_cnv[key] = moving_avg_data1 - moving_avg_data2
-        logger.info(f"[cnv] Normalized CNV (moving avg + diff) completed in {time.time() - t0:.2f}s")
+        logger.info(
+            f"[cnv] Normalized CNV (moving avg + diff) completed in {time.time() - t0:.2f}s"
+        )
 
         analysis_result["processing_steps"].append("normalized_cnv_calculated")
 
@@ -2351,7 +2451,9 @@ def process_multiple_bams(
             min_contiguous_bins=min_contiguous_bins,
             target_panel=target_panel,
         )
-        logger.info(f"[cnv] save_cnv_files (incl. master BED) completed in {time.time() - t0:.2f}s")
+        logger.info(
+            f"[cnv] save_cnv_files (incl. master BED) completed in {time.time() - t0:.2f}s"
+        )
 
         analysis_result["cnv_data_path"] = os.path.join(
             sample_output_dir, f"{analysis_counter}_cnv_data.json"
@@ -2368,10 +2470,12 @@ def process_multiple_bams(
         # Replace print with logging
         logger.debug(f"Analysis result: {analysis_result}")
         logger.info(f"Multi-BAM CNV analysis complete for {sample_id}")
-        logger.info(f"Files processed: {analysis_result['files_processed']}/{analysis_result['total_files']}")
+        logger.info(
+            f"Files processed: {analysis_result['files_processed']}/{analysis_result['total_files']}"
+        )
         logger.info(f"Sex Estimate: {analysis_result['sex_estimate']}")
         logger.info(f"Breakpoints: {len(analysis_result['breakpoints'])} detected")
-        
+
         return analysis_result
 
     except Exception as e:
@@ -2395,53 +2499,59 @@ def cnv_handler(job, work_dir=None, target_panel=None, threads=2):
     # Validate required parameters
     if not target_panel:
         raise ValueError("target_panel is required for CNV analysis")
-    
+
     # Get job-specific logger
     logger = get_job_logger(str(job.job_id), job.job_type, job.context.filepath)
-    
+
     # Check if this is a batched job
     batched_job = job.context.metadata.get("_batched_job")
     if batched_job:
         batch_size = batched_job.get_file_count()
         sample_id = batched_job.get_sample_id()
         batch_id = batched_job.batch_id
-        logger.info(f"Processing CNV batch: {batch_size} files for sample '{sample_id}' (batch_id: {batch_id})")
-        
+        logger.info(
+            f"Processing CNV batch: {batch_size} files for sample '{sample_id}' (batch_id: {batch_id})"
+        )
+
         # Get all filepaths in the batch
         filepaths = batched_job.get_filepaths()
-        
+
         # Log individual files in the batch
         for i, filepath in enumerate(filepaths):
-            logger.info(f"  Batch file {i+1}/{batch_size}: {os.path.basename(filepath)}")
-        
+            logger.info(
+                f"  Batch file {i+1}/{batch_size}: {os.path.basename(filepath)}"
+            )
+
         # Prepare metadata list for all BAM files in the batch
         metadata_list = []
         for i, bam_path in enumerate(filepaths):
             # Get metadata from preprocessing for this specific file
             # Note: Each file in the batch should have its own metadata
             file_metadata = batched_job.contexts[i].metadata.get("bam_metadata", {})
-            
+
             # Get sample ID from preprocessing results for this specific file
             file_context = batched_job.contexts[i]
             file_sample_id = file_context.get_sample_id()
-            
+
             # Use the sample ID from the file's context (which should have preprocessing results)
             if file_sample_id != "unknown":
                 file_metadata["sample_id"] = file_sample_id
             else:
                 file_metadata["sample_id"] = sample_id
-            
+
             # Create BamMetadata object for compatibility
             from robin.analysis.bam_preprocessor import BamMetadata
-            
+
             metadata = BamMetadata(
                 file_path=bam_path,
                 file_size=batched_job.contexts[i].metadata.get("file_size", 0),
-                creation_time=batched_job.contexts[i].metadata.get("creation_time", time.time()),
+                creation_time=batched_job.contexts[i].metadata.get(
+                    "creation_time", time.time()
+                ),
                 extracted_data=file_metadata,
             )
             metadata_list.append(metadata)
-        
+
         # Determine work directory for the batch
         if work_dir is None:
             # Default to first BAM file directory
@@ -2451,17 +2561,19 @@ def cnv_handler(job, work_dir=None, target_panel=None, threads=2):
             os.makedirs(work_dir, exist_ok=True)
             batch_work_dir = work_dir
             logger.debug(f"Using specified work directory: {batch_work_dir}")
-        
+
         # Get reference from job metadata
         reference = job.context.metadata.get("reference")
         if reference:
             # Expand user home directory if present
             reference = os.path.expanduser(reference)
             logger.debug(f"Using reference genome from job metadata: {reference}")
-        
+
         # Process all BAM files in the batch using the new aggregated function
-        logger.info(f"Processing {batch_size} BAM files as aggregated batch for sample '{sample_id}'")
-        
+        logger.info(
+            f"Processing {batch_size} BAM files as aggregated batch for sample '{sample_id}'"
+        )
+
         batch_result = process_multiple_bams(
             bam_paths=filepaths,
             metadata_list=metadata_list,
@@ -2472,25 +2584,36 @@ def cnv_handler(job, work_dir=None, target_panel=None, threads=2):
             job_id=job.job_id,
             target_panel=target_panel,
         )
-        
+
         # Store batch results in job context (maintain compatibility with existing structure)
-        job.context.add_metadata("cnv_analysis", {
-            "batch_result": batch_result,  # Single aggregated result
-            "batch_size": batch_size,
-            "sample_id": sample_id,
-            "batch_id": batch_id,
-            "files_processed": batch_result.get("files_processed", batch_size),
-            "total_files": batch_result.get("total_files", batch_size)
-        })
-        
-        logger.info(f"Completed CNV batch processing: {batch_size} files for sample '{sample_id}'")
-        logger.info(f"Files successfully processed: {batch_result.get('files_processed', batch_size)}/{batch_result.get('total_files', batch_size)}")
-        
+        job.context.add_metadata(
+            "cnv_analysis",
+            {
+                "batch_result": batch_result,  # Single aggregated result
+                "batch_size": batch_size,
+                "sample_id": sample_id,
+                "batch_id": batch_id,
+                "files_processed": batch_result.get("files_processed", batch_size),
+                "total_files": batch_result.get("total_files", batch_size),
+            },
+        )
+
+        logger.info(
+            f"Completed CNV batch processing: {batch_size} files for sample '{sample_id}'"
+        )
+        logger.info(
+            f"Files successfully processed: {batch_result.get('files_processed', batch_size)}/{batch_result.get('total_files', batch_size)}"
+        )
+
         if batch_result.get("error_message"):
-            logger.error(f"Batch processing completed with errors: {batch_result['error_message']}")
+            logger.error(
+                f"Batch processing completed with errors: {batch_result['error_message']}"
+            )
             job.context.add_error("cnv_analysis", batch_result["error_message"])
         else:
-            logger.info("Batch processing completed successfully with aggregated CNV analysis")
+            logger.info(
+                "Batch processing completed successfully with aggregated CNV analysis"
+            )
             job.context.add_result(
                 "cnv_analysis",
                 {
@@ -2503,9 +2626,9 @@ def cnv_handler(job, work_dir=None, target_panel=None, threads=2):
                     "cnv_data_path": batch_result.get("cnv_data_path", ""),
                 },
             )
-        
+
         return
-        
+
     else:
         # CNV jobs should always be batched - raise an error if not
         error_msg = f"CNV job received without batching metadata. Expected batched job but got single file: {os.path.basename(job.context.filepath)}"

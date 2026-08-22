@@ -6,9 +6,9 @@ import time
 from pathlib import Path
 from typing import List, Optional
 
-from watchdog.events import FileSystemEventHandler, FileSystemEvent
-from watchdog.observers import Observer
 from tqdm import tqdm
+from watchdog.events import FileSystemEvent, FileSystemEventHandler
+from watchdog.observers import Observer
 
 
 class FileChangeHandler(FileSystemEventHandler):
@@ -188,7 +188,7 @@ class FileWatcher:
             print(f"Ignore patterns: {self.ignore_patterns}")
 
         existing_files = []
-        
+
         # Find all existing files that match patterns
         for pattern in self.patterns:
             if pattern == "*":

@@ -12,9 +12,9 @@ This module provides a configurable logging system that supports:
 import logging
 import os
 import sys
-from typing import Any, Dict, Optional
-from dataclasses import dataclass, field
 from contextlib import contextmanager
+from dataclasses import dataclass, field
+from typing import Any, Dict, Optional
 
 
 @dataclass

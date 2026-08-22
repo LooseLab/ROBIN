@@ -121,7 +121,13 @@ DISPLAY_SECTIONS: Dict[str, DisplaySection] = {
     ),
 }
 
-DISPLAY_GROUP_ORDER = ("classification", "v12_classifier", "analysis", "sample_details", "other")
+DISPLAY_GROUP_ORDER = (
+    "classification",
+    "v12_classifier",
+    "analysis",
+    "sample_details",
+    "other",
+)
 DISPLAY_GROUP_LABELS = {
     "classification": "Classification",
     "v12_classifier": "V12 Classifier",
@@ -145,8 +151,7 @@ class SampleDisplayConfig:
 
     def to_dict(self) -> Dict[str, Any]:
         role_sections = {
-            role: dict(self.role_sections.get(role) or {})
-            for role in DISPLAY_ROLES
+            role: dict(self.role_sections.get(role) or {}) for role in DISPLAY_ROLES
         }
         out: Dict[str, Any] = {
             "schema_version": self.schema_version,
@@ -197,7 +202,9 @@ class SampleDisplayConfig:
                     role_sections[str(role)] = {
                         str(k): bool(v) for k, v in mapping.items()
                     }
-        legacy_sections = {str(k): bool(v) for k, v in (data.get("sections") or {}).items()}
+        legacy_sections = {
+            str(k): bool(v) for k, v in (data.get("sections") or {}).items()
+        }
         if legacy_sections and not role_sections.get("user"):
             role_sections["user"] = dict(legacy_sections)
         if "admin" not in role_sections:
@@ -265,16 +272,12 @@ class SampleDisplayConfig:
         updated_by: Optional[str] = None,
     ) -> "SampleDisplayConfig":
         role_key = role if role in DISPLAY_ROLES else DEFAULT_VIEWER_ROLE
-        merged_roles = {
-            r: dict(self.role_sections.get(r) or {}) for r in DISPLAY_ROLES
-        }
+        merged_roles = {r: dict(self.role_sections.get(r) or {}) for r in DISPLAY_ROLES}
         role_map = dict(merged_roles.get(role_key) or {})
         role_map.update(sections)
         merged_roles[role_key] = role_map
         legacy_sections = (
-            dict(merged_roles["user"])
-            if role_key == "user"
-            else dict(self.sections)
+            dict(merged_roles["user"]) if role_key == "user" else dict(self.sections)
         )
         return SampleDisplayConfig(
             schema_version=self.schema_version,
@@ -495,12 +498,9 @@ def effective_section_map(
 
 def sections_for_group(group: str) -> List[DisplaySection]:
     return [
-        s
-        for s in DISPLAY_SECTIONS.values()
-        if s.group == group and s.parent_id is None
+        s for s in DISPLAY_SECTIONS.values() if s.group == group and s.parent_id is None
     ] + [
         s
         for s in DISPLAY_SECTIONS.values()
         if s.group == group and s.parent_id is not None
     ]
-

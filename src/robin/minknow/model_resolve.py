@@ -44,9 +44,7 @@ def score_simplex_model(
     elif "fast" in lower:
         score += 10
 
-    version = requested_version or (
-        _simplex_version(requested) if requested else None
-    )
+    version = requested_version or (_simplex_version(requested) if requested else None)
     if version and name.endswith(f"@{version}"):
         score += 5
 
@@ -139,9 +137,7 @@ def pick_modified_model(
 
     if "5mcg" in base.lower() or "5hmc" in base.lower():
         cpg_models = sorted(
-            m
-            for m in available
-            if "5mcg" in m.lower() and "5hmc" in m.lower()
+            m for m in available if "5mcg" in m.lower() and "5hmc" in m.lower()
         )
         if cpg_models:
             return _prefer_simplex_prefixed(cpg_models, simplex_model)
@@ -193,9 +189,7 @@ def pick_methylation_simplex(
 
 def methylation_capable_simplex_models(available: list[str]) -> list[str]:
     """Simplex models that include CpG 5mC/5hmC calling (integrated modbases)."""
-    return sorted(
-        name for name in available if score_simplex_model(name) >= 140
-    )
+    return sorted(name for name in available if score_simplex_model(name) >= 140)
 
 
 def _requests_cpg_methylation(
@@ -299,9 +293,7 @@ def resolve_preset_simplex_model(
 
         available_modified: set[str] = set()
         if simplex is not None:
-            available_modified = {
-                model.name for model in simplex.modified_models
-            }
+            available_modified = {model.name for model in simplex.modified_models}
 
         resolved_modified: list[str] = []
         unresolved: list[str] = []
@@ -356,9 +348,7 @@ def resolve_preset_simplex_model(
                         f"to list installed models."
                     )
         elif tuple(resolved_modified) != updated.modified_models:
-            updated = updated.with_overrides(
-                modified_models=tuple(resolved_modified)
-            )
+            updated = updated.with_overrides(modified_models=tuple(resolved_modified))
 
     return updated, warnings, errors
 
@@ -372,9 +362,7 @@ def query_basecall_models(
 ) -> tuple[list[SimplexModelInfo], Optional[str]]:
     """Query MinKNOW for basecall models; return (models, error_message)."""
     try:
-        configs = manager.find_basecall_configurations(
-            product_code, kit, sample_rate
-        )
+        configs = manager.find_basecall_configurations(product_code, kit, sample_rate)
     except Exception as exc:
         return [], f"Could not query basecall configurations: {exc}"
 

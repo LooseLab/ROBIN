@@ -60,7 +60,6 @@ def test_cli_bootstrap_admin(security_db: Path) -> None:
     assert store.user_has_role(user.id, "admin")
 
 
-
 def test_cli_password_set_creates_admin(security_db: Path) -> None:
     runner = CliRunner()
     result = runner.invoke(main, ["password", "set"], input="s3cret\ns3cret\n")

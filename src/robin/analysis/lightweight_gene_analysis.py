@@ -1,4 +1,4 @@
-q#!/usr/bin/env python3
+q  #!/usr/bin/env python3
 """
 Lightweight Gene Analysis Module for robin
 
@@ -56,16 +56,18 @@ This module is designed to be much faster than full variant calling pipelines
 while still providing valuable insights into genes of interest.
 """
 
-import os
 import logging
-from typing import Dict, Any, Optional, List, Tuple
+import os
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
+
 import numpy as np
 import pandas as pd
 import pysam
-from robin.logging_config import get_job_logger
+
 from robin.analysis.variant_classification import is_clinvar_significant_from_mapping
+from robin.logging_config import get_job_logger
 
 
 @dataclass
@@ -775,9 +777,7 @@ class LightweightGeneAnalysis:
             start_pos = gene_coords["start"]
             end_pos = gene_coords["end"]
 
-            print(
-                f"         Analyzing region: {chrom_name}:{start_pos:,}-{end_pos:,}"
-            )
+            print(f"         Analyzing region: {chrom_name}:{start_pos:,}-{end_pos:,}")
             self.logger.debug(
                 f"Analyzing pileup for {chrom_name}:{start_pos}-{end_pos}"
             )
@@ -927,7 +927,7 @@ class LightweightGeneAnalysis:
 
         # For indels, we need to check if the reference sequence matches what we expect
         if is_indel:
-            
+
             # NOTE: Indel analysis is complex and requires:
             # 1. Reference genome sequence validation
             # 2. Multi-position pileup analysis
@@ -966,7 +966,7 @@ class LightweightGeneAnalysis:
                         alt_support = 0
                         vaf = 0.0
                     else:
-                        
+
                         # For insertions, we need to look at the actual sequence context
                         # This requires more sophisticated pileup analysis
                         # For now, mark as requiring manual review

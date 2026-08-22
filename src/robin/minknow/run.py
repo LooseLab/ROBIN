@@ -100,10 +100,9 @@ def fetch_basecall_models_for_position(
         if not getattr(flow_cell, "has_flow_cell", False):
             raise MinKnowStartError(f"No flow cell present in position {position}")
 
-        product_code = (
-            getattr(flow_cell, "user_specified_product_code", None)
-            or getattr(flow_cell, "product_code", None)
-        )
+        product_code = getattr(
+            flow_cell, "user_specified_product_code", None
+        ) or getattr(flow_cell, "product_code", None)
         if not product_code:
             raise MinKnowStartError("Could not determine flow cell product code")
 
@@ -243,7 +242,9 @@ def start_protocol_run(
                 stereo_model=None,
                 barcoding=None,
                 alignment=alignment_args,
-                min_qscore=_default_min_qscore(manager, preset, sample_rate, product_code),
+                min_qscore=_default_min_qscore(
+                    manager, preset, sample_rate, product_code
+                ),
             )
 
         read_until_args = None
@@ -327,9 +328,7 @@ def start_protocol_run(
                     sample_id=request.sample_id,
                     experiment_group=experiment_group,
                     work_directory=(
-                        Path(request.work_directory)
-                        if request.work_directory
-                        else None
+                        Path(request.work_directory) if request.work_directory else None
                     ),
                 )
             except ReadfishStartError as exc:
@@ -411,9 +410,7 @@ def stop_protocol_run(
 
     protocol_state: Optional[str] = None
     try:
-        position = _find_position(
-            manager, request.position, error_cls=MinKnowStopError
-        )
+        position = _find_position(manager, request.position, error_cls=MinKnowStopError)
         connection = position.connect()
         protocol_run_id = (request.protocol_run_id or "").strip()
 
@@ -526,7 +523,9 @@ def _current_protocol_state(connection: Any) -> Optional[str]:
             return None
         raise MinKnowStartError(_format_grpc_error(exc)) from exc
     except Exception as exc:
-        raise MinKnowStartError(f"Could not read current protocol state: {exc}") from exc
+        raise MinKnowStartError(
+            f"Could not read current protocol state: {exc}"
+        ) from exc
 
     return _enum_name(
         getattr(getattr(connection.protocol, "_pb", None), "ProtocolState", None),
@@ -635,9 +634,7 @@ def _find_position(
         if position.name == name:
             return position
     available = ", ".join(pos.name for pos in manager.flow_cell_positions())
-    raise error_cls(
-        f"Position {name!r} not found. Available: {available or 'none'}"
-    )
+    raise error_cls(f"Position {name!r} not found. Available: {available or 'none'}")
 
 
 def _default_min_qscore(
@@ -652,9 +649,7 @@ def _default_min_qscore(
         configs = manager.find_basecall_configurations(
             product_code, preset.kit, sample_rate
         )
-        simplex = protocols.find_simplex_model(
-            configs, preset.basecall_simplex_model
-        )
+        simplex = protocols.find_simplex_model(configs, preset.basecall_simplex_model)
         return int(simplex.default_q_score_cutoff)
     except Exception:
         LOGGER.debug("Could not resolve default q-score cutoff", exc_info=True)

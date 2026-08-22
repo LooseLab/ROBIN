@@ -5,8 +5,10 @@ This module handles font registration for the PDF report generation.
 """
 
 import os
-from reportlab.pdfbase.ttfonts import TTFont
+
 from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
+
 from robin.gui import fonts
 
 

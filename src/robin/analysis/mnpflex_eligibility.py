@@ -42,22 +42,13 @@ def _float_field(data: Mapping[str, Any], *keys: str, default: float = 0.0) -> f
 
 
 def sample_workflow_jobs_complete(overview: Mapping[str, Any]) -> bool:
-    active = _int_field(
-        overview, "active_jobs", "samples_overview_active_jobs"
-    )
-    pending = _int_field(
-        overview, "pending_jobs", "samples_overview_pending_jobs"
-    )
+    active = _int_field(overview, "active_jobs", "samples_overview_active_jobs")
+    pending = _int_field(overview, "pending_jobs", "samples_overview_pending_jobs")
     total = _int_field(overview, "total_jobs", "samples_overview_total_jobs")
     completed = _int_field(
         overview, "completed_jobs", "samples_overview_completed_jobs"
     )
-    return (
-        total > 0
-        and completed >= total
-        and active == 0
-        and pending == 0
-    )
+    return total > 0 and completed >= total and active == 0 and pending == 0
 
 
 def sample_data_last_seen(overview: Mapping[str, Any]) -> float:
@@ -119,6 +110,4 @@ def sample_ready_for_mnpflex_auto_run_from_dir(
     row = read_master_csv_overview_row(sample_dir)
     if not row:
         return False
-    return sample_ready_for_mnpflex_auto_run(
-        row, idle_seconds=idle_seconds, now=now
-    )
+    return sample_ready_for_mnpflex_auto_run(row, idle_seconds=idle_seconds, now=now)

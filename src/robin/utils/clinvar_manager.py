@@ -14,6 +14,7 @@ from datetime import datetime, timezone
 from email.utils import format_datetime, parsedate_to_datetime
 from pathlib import Path
 from typing import Any, Optional
+
 import pysam
 
 logger = logging.getLogger("robin.clinvar")
@@ -250,10 +251,9 @@ def load_sample_clinvar_provenance(
 def sample_snp_reannotation_inputs_ready(sample_dir: Path | str) -> bool:
     """Return True when Clair3 outputs exist for annotation-only reruns."""
     clair_dir = Path(sample_dir) / "clair3"
-    return (
-        (clair_dir / "output_done.vcf.gz").is_file()
-        and (clair_dir / "output_indel_done.vcf.gz").is_file()
-    )
+    return (clair_dir / "output_done.vcf.gz").is_file() and (
+        clair_dir / "output_indel_done.vcf.gz"
+    ).is_file()
 
 
 def compare_sample_clinvar_to_installed(
@@ -317,7 +317,11 @@ def _download_url_to_file(url: str, target_path: Path, *, timeout_s: int = 600) 
 
     # Use a temp file in the same directory so rename is atomic.
     with tempfile.NamedTemporaryFile(
-        mode="wb", suffix=".part", prefix=target_path.name + ".", dir=str(target_path.parent), delete=False
+        mode="wb",
+        suffix=".part",
+        prefix=target_path.name + ".",
+        dir=str(target_path.parent),
+        delete=False,
     ) as tmp:
         tmp_path = Path(tmp.name)
     try:
@@ -372,7 +376,9 @@ def _download_url_to_file(url: str, target_path: Path, *, timeout_s: int = 600) 
                             mb = downloaded // (1024 * 1024)
                             if mb // 16 != last_reported_mb // 16:
                                 last_reported_mb = mb
-                                click.echo(f"Downloading ClinVar: {mb} MiB downloaded...")
+                                click.echo(
+                                    f"Downloading ClinVar: {mb} MiB downloaded..."
+                                )
 
         tmp_path.replace(target_path)
         print(f"ClinVar download complete: {target_path}")
@@ -495,7 +501,9 @@ def _ensure_tabix_index(gz_path: Path, tbi_path: Path) -> None:
         try:
             tbi_path.unlink()
         except OSError as exc:
-            logger.warning("Could not remove stale ClinVar tabix index %s: %s", tbi_path, exc)
+            logger.warning(
+                "Could not remove stale ClinVar tabix index %s: %s", tbi_path, exc
+            )
 
     _build_tabix_index(gz_path, tbi_path)
 
@@ -625,7 +633,11 @@ def update_clinvar_if_newer(
 
     # Add a small tolerance to avoid re-downloading due to timestamp rounding.
     if remote_mtime <= local_mtime + 1:
-        logger.info("ClinVar already up to date (local=%s, remote=%s).", local_mtime, remote_mtime)
+        logger.info(
+            "ClinVar already up to date (local=%s, remote=%s).",
+            local_mtime,
+            remote_mtime,
+        )
         print("ClinVar already up to date.")
         refresh_clinvar_metadata(
             resources_dir=resources_dir,
@@ -654,4 +666,3 @@ def update_clinvar_if_newer(
         compute_checksum=True,
     )
     return True
-

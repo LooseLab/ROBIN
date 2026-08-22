@@ -1,19 +1,20 @@
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
-import logging
 
 import numpy as np
 import pandas as pd
 
 from robin.analysis.variant_classification import classify_clinvar_significance
 
-
 logger = logging.getLogger(__name__)
 
 
-def _process_annotations(record: Dict[str, Any]) -> Tuple[Dict[int, Dict[str, Any]], Dict[str, Any]]:
+def _process_annotations(
+    record: Dict[str, Any],
+) -> Tuple[Dict[int, Dict[str, Any]], Dict[str, Any]]:
     """
     Expand annotation information from a VCF record.
 
@@ -123,12 +124,19 @@ def parse_vcf(vcf_path: Path) -> Optional[pd.DataFrame]:
         if "Allele" in vcf_df.columns:
             shared_columns.append("Allele")
 
-        non_shared_columns = [col for col in vcf_df.columns if col not in shared_columns]
+        non_shared_columns = [
+            col for col in vcf_df.columns if col not in shared_columns
+        ]
         vcf_df = vcf_df.replace({np.nan: None})
 
         aggregated = (
             vcf_df.groupby(shared_columns)[non_shared_columns]
-            .agg(lambda series: ", ".join(sorted({str(item) for item in series.dropna()})) or None)
+            .agg(
+                lambda series: ", ".join(
+                    sorted({str(item) for item in series.dropna()})
+                )
+                or None
+            )
             .reset_index()
         )
         return aggregated
@@ -217,9 +225,7 @@ def build_snp_display_data(vcf_path: Path) -> Optional[Dict[str, Any]]:
             add_column(col)
 
     remaining_columns = [
-        col
-        for col in vcf_df.columns
-        if col not in added_fields and col != "INFO"
+        col for col in vcf_df.columns if col not in added_fields and col != "INFO"
     ]
     for col in remaining_columns:
         add_column(col)
@@ -300,4 +306,3 @@ def build_snp_display_data(vcf_path: Path) -> Optional[Dict[str, Any]]:
         "summary": summary,
         "snp_regions_map": snp_regions_map,
     }
-

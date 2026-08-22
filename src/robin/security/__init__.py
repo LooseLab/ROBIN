@@ -6,13 +6,7 @@ from .constants import (
     get_consent_version,
     get_security_db_path,
 )
-from .user_metadata import (
-    CLINICAL_ROLE_KEY,
-    EMAIL_KEY,
-    USER_METADATA_FIELDS,
-    metadata_field_labels,
-    normalize_metadata,
-)
+from .store import SecurityStore
 from .user_approvals import (
     ADMIN_USER_APPROVALS_UPDATED_EVENT,
     MINKNOW_REMOTE_CONTROL_KEY,
@@ -26,7 +20,13 @@ from .user_approvals import (
     normalize_approvals,
     user_has_approval,
 )
-from .store import SecurityStore
+from .user_metadata import (
+    CLINICAL_ROLE_KEY,
+    EMAIL_KEY,
+    USER_METADATA_FIELDS,
+    metadata_field_labels,
+    normalize_metadata,
+)
 
 __all__ = [
     "AuditService",

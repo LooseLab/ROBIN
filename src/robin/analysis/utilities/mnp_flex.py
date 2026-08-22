@@ -1,7 +1,8 @@
-import requests
-from typing import Any, Dict, Tuple, List
 import logging
 import os
+from typing import Any, Dict, List, Tuple
+
+import requests
 
 
 class APIClient:

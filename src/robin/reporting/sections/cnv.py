@@ -4,51 +4,41 @@ CNV Analysis Section for ROBIN Reports.
 This module handles the Copy Number Variation (CNV) analysis section of the report.
 """
 
-import os
-import re
-import pickle
 import logging
+import os
+import pickle
+import re
 from pathlib import Path
 
+import natsort
 import numpy as np
 import pandas as pd
-import natsort
+from reportlab.lib.styles import ParagraphStyle
 from reportlab.lib.units import inch
 from reportlab.platypus import (
+    Image,
+    NextPageTemplate,
     PageBreak,
     Paragraph,
-    Image,
     Spacer,
     Table,
     TableStyle,
-    NextPageTemplate,
-)
-from reportlab.lib.styles import ParagraphStyle
-from ..sections.base import ReportSection
-from ..plotting import (
-    create_CNV_plot,
-    create_CNV_plot_per_chromosome,
-    cnv_chromosome_fig_height_for_page,
-    cnv_chromosome_fig_width_for_page,
-    cnv_genome_landscape_image_size_pt,
-    CNV_CHROMOSOME_PLOT_SPACER_PT,
-    CNV_CHROMOSOME_PLOTS_PER_PAGE,
-    CNV_REPORT_FRAME_PADDING_PT,
 )
 
-# from robin.subpages.CNVObjectClass import (
-#    CNVAnalysis
-# )
-
+from robin import resources
 from robin.analysis.cnv_analysis import (
-    Result,
-    moving_average,
     CNV_Difference,
+    Result,
     compute_cnv_log2_from_ploidy,
+    moving_average,
     prepare_cnv_calling_track,
     resolve_cnv_calling_bin_width,
 )
-from robin.analysis.cnv_classification import detect_cnv_events, get_cnv_summary, CNVEvent
+from robin.analysis.cnv_classification import (
+    CNVEvent,
+    detect_cnv_events,
+    get_cnv_summary,
+)
 from robin.analysis.cnv_regional import (
     SIGNIFICANT_CNV_STATES,
     analyze_cytoband_cnv,
@@ -61,11 +51,26 @@ from robin.analysis.cnv_regional import (
     load_target_coverage_df,
     panel_genes_in_region,
 )
-from robin.reference_contigs import is_visible_contig
 from robin.classification_config import get_cnv_thresholds, is_resolution_sufficient
+from robin.reference_contigs import is_visible_contig
 from robin.workflow_config import get_cnv_genes, load_workflow_toml
 
-from robin import resources
+from ..plotting import (
+    CNV_CHROMOSOME_PLOT_SPACER_PT,
+    CNV_CHROMOSOME_PLOTS_PER_PAGE,
+    CNV_REPORT_FRAME_PADDING_PT,
+    cnv_chromosome_fig_height_for_page,
+    cnv_chromosome_fig_width_for_page,
+    cnv_genome_landscape_image_size_pt,
+    create_CNV_plot,
+    create_CNV_plot_per_chromosome,
+)
+from ..sections.base import ReportSection
+
+# from robin.subpages.CNVObjectClass import (
+#    CNVAnalysis
+# )
+
 
 logger = logging.getLogger(__name__)
 
@@ -322,7 +327,9 @@ class CNVSection(ReportSection):
             # Add gain/loss thresholds to chromosome stats using centralized rules
             for chrom, stats in chromosome_stats.items():
                 if chrom != "global":
-                    gain_threshold, loss_threshold = get_cnv_thresholds(chrom, XYestimate)
+                    gain_threshold, loss_threshold = get_cnv_thresholds(
+                        chrom, XYestimate
+                    )
                     stats["gain_threshold"] = gain_threshold
                     stats["loss_threshold"] = loss_threshold
 
@@ -390,8 +397,12 @@ class CNVSection(ReportSection):
                     cnv_dict,
                     cytobands_bed,
                     centromere_bed,
-                    gene_bed if gene_bed is not None else pd.DataFrame(
-                        columns=["chrom", "start_pos", "end_pos", "gene"]
+                    (
+                        gene_bed
+                        if gene_bed is not None
+                        else pd.DataFrame(
+                            columns=["chrom", "start_pos", "end_pos", "gene"]
+                        )
                     ),
                     XYestimate,
                 )
@@ -413,8 +424,12 @@ class CNVSection(ReportSection):
                             cnv_dict,
                             cytobands_bed,
                             centromere_bed,
-                            gene_bed if gene_bed is not None else pd.DataFrame(
-                                columns=["chrom", "start_pos", "end_pos", "gene"]
+                            (
+                                gene_bed
+                                if gene_bed is not None
+                                else pd.DataFrame(
+                                    columns=["chrom", "start_pos", "end_pos", "gene"]
+                                )
                             ),
                             XYestimate,
                         )
@@ -510,7 +525,7 @@ class CNVSection(ReportSection):
             # Detect CNV events using centralized classification rules
             logger.info("Detecting CNV events using centralized rules")
             events = []
-            
+
             # Check if resolution is sufficient
             analysis_binw = int(cnv_dict.get("bin_width", 1000000))
             calling_binw = resolve_cnv_calling_bin_width(analysis_binw)
@@ -536,28 +551,34 @@ class CNVSection(ReportSection):
                     support_cnv_data=analysis_log2,
                     support_bin_width=analysis_binw,
                 )
-                
+
                 # Convert events to summary format
                 summary_whole_chr_events = []
                 summary_arm_events = []
-                
+
                 for event in events:
                     if event.event_type.startswith("WHOLE_CHR_"):
                         event_type = event.event_type.replace("WHOLE_CHR_", "")
                         summary_whole_chr_events.append(
                             f"Chromosome {event.chromosome[3:]}: {event_type} (mean={event.mean_cnv:.2f})"
                         )
-                        logger.info(f"Detected whole chromosome {event_type} for {event.chromosome}")
+                        logger.info(
+                            f"Detected whole chromosome {event_type} for {event.chromosome}"
+                        )
                     else:
                         arm_label = f"{event.arm}-arm" if event.arm else "arm"
                         summary_arm_events.append(
                             f"Chromosome {event.chromosome[3:]} {arm_label}: {event.event_type} (mean={event.mean_cnv:.2f}, {event.proportion_affected:.0%} of arm)"
                         )
-                        logger.info(f"Detected arm event: {event.chromosome} {arm_label} {event.event_type}")
-                
+                        logger.info(
+                            f"Detected arm event: {event.chromosome} {arm_label} {event.event_type}"
+                        )
+
                 # Log the final counts
                 logger.info(f"Found {len(summary_arm_events)} arm events")
-                logger.info(f"Found {len(summary_whole_chr_events)} whole chromosome events")
+                logger.info(
+                    f"Found {len(summary_whole_chr_events)} whole chromosome events"
+                )
 
             self.summary_elements.append(
                 Paragraph(
@@ -675,20 +696,24 @@ class CNVSection(ReportSection):
             for event in events:
                 if event.event_type.startswith("WHOLE_CHR_"):
                     event_type = event.event_type.replace("WHOLE_CHR_", "")
-                    whole_chr_events.append([
-                        event.chromosome.replace("chr", ""),
-                        event_type,
-                        f"{event.mean_cnv:.2f}",
-                    ])
+                    whole_chr_events.append(
+                        [
+                            event.chromosome.replace("chr", ""),
+                            event_type,
+                            f"{event.mean_cnv:.2f}",
+                        ]
+                    )
                 else:
                     arm_label = f"{event.arm}-arm" if event.arm else "arm"
-                    arm_events.append([
-                        event.chromosome.replace("chr", ""),
-                        arm_label,
-                        event.event_type,
-                        f"{event.mean_cnv:.2f}",
-                        f"{event.proportion_affected:.1%}",
-                    ])
+                    arm_events.append(
+                        [
+                            event.chromosome.replace("chr", ""),
+                            arm_label,
+                            event.event_type,
+                            f"{event.mean_cnv:.2f}",
+                            f"{event.proportion_affected:.1%}",
+                        ]
+                    )
 
             # Add whole chromosome events summary if any exist
             if whole_chr_events:
@@ -741,28 +766,32 @@ class CNVSection(ReportSection):
             regional_table = None
 
             if regional_cnv_events:
-                regional_data = [[
-                    "Chr",
-                    "Region",
-                    "Start (Mb)",
-                    "End (Mb)",
-                    "Length (Mb)",
-                    "Mean CNV",
-                    "State",
-                    "Panel genes",
-                ]]
+                regional_data = [
+                    [
+                        "Chr",
+                        "Region",
+                        "Start (Mb)",
+                        "End (Mb)",
+                        "Length (Mb)",
+                        "Mean CNV",
+                        "State",
+                        "Panel genes",
+                    ]
+                ]
                 for event in regional_cnv_events:
                     panel_gene_text = format_panel_genes_for_table(event["panel_genes"])
-                    regional_data.append([
-                        event["chrom"],
-                        event["region"],
-                        f"{event['start_mb']:.2f}",
-                        f"{event['end_mb']:.2f}",
-                        f"{event['length_mb']:.2f}",
-                        f"{event['mean_cnv']:.2f}",
-                        event["state"],
-                        panel_gene_text,
-                    ])
+                    regional_data.append(
+                        [
+                            event["chrom"],
+                            event["region"],
+                            f"{event['start_mb']:.2f}",
+                            f"{event['end_mb']:.2f}",
+                            f"{event['length_mb']:.2f}",
+                            f"{event['mean_cnv']:.2f}",
+                            event["state"],
+                            panel_gene_text,
+                        ]
+                    )
                 regional_table = self.create_table(
                     regional_data,
                     repeat_rows=1,
@@ -958,29 +987,26 @@ class CNVSection(ReportSection):
                             height=chromosome_plot_height,
                         )
                     )
-                    last_on_page = (
-                        (plot_idx + 1) % self.CHROMOSOME_PLOTS_PER_PAGE == 0
-                    )
-                    if (
-                        plot_idx < len(plotted_chromosomes) - 1
-                        and not last_on_page
-                    ):
+                    last_on_page = (plot_idx + 1) % self.CHROMOSOME_PLOTS_PER_PAGE == 0
+                    if plot_idx < len(plotted_chromosomes) - 1 and not last_on_page:
                         self.elements.append(Spacer(1, self.CHROMOSOME_PLOT_SPACER))
 
                 # Combined event list for CSV export only (tables above already
                 # show whole-chromosome, regional, and arm events separately).
                 all_cnv_events = []
                 for event in regional_cnv_events:
-                    all_cnv_events.append([
-                        event["chrom"],
-                        event["region"],
-                        f"{event['start_mb']:.2f}",
-                        f"{event['end_mb']:.2f}",
-                        f"{event['length_mb']:.2f}",
-                        f"{event['mean_cnv']:.2f}",
-                        event["state"],
-                        format_panel_genes_for_table(event["panel_genes"]),
-                    ])
+                    all_cnv_events.append(
+                        [
+                            event["chrom"],
+                            event["region"],
+                            f"{event['start_mb']:.2f}",
+                            f"{event['end_mb']:.2f}",
+                            f"{event['length_mb']:.2f}",
+                            f"{event['mean_cnv']:.2f}",
+                            event["state"],
+                            format_panel_genes_for_table(event["panel_genes"]),
+                        ]
+                    )
                 for event in events:
                     region_name = (
                         f"{event.chromosome} {event.arm}-arm"
@@ -993,16 +1019,18 @@ class CNVSection(ReportSection):
                         event.start_pos,
                         event.end_pos,
                     )
-                    all_cnv_events.append([
-                        event.chromosome.replace("chr", ""),
-                        region_name.replace(f"{event.chromosome} ", ""),
-                        f"{event.start_pos/1e6:.2f}",
-                        f"{event.end_pos/1e6:.2f}",
-                        f"{event.length/1e6:.2f}",
-                        f"{event.mean_cnv:.2f}",
-                        event.event_type.replace("WHOLE_CHR_", ""),
-                        format_panel_genes_for_table(panel_genes),
-                    ])
+                    all_cnv_events.append(
+                        [
+                            event.chromosome.replace("chr", ""),
+                            region_name.replace(f"{event.chromosome} ", ""),
+                            f"{event.start_pos/1e6:.2f}",
+                            f"{event.end_pos/1e6:.2f}",
+                            f"{event.length/1e6:.2f}",
+                            f"{event.mean_cnv:.2f}",
+                            event.event_type.replace("WHOLE_CHR_", ""),
+                            format_panel_genes_for_table(panel_genes),
+                        ]
+                    )
 
                 try:
                     # Whole chromosome events

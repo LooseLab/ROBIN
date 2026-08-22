@@ -36,26 +36,23 @@ External Dependencies:
 - platform
 """
 
-from contextlib import contextmanager
-from signal import siginterrupt
-from packaging import version
-import requests
 import asyncio
+import importlib.metadata
+import json
 import logging
 import subprocess
-import importlib.metadata
 import time
-import json
-from typing import Callable, Optional, Any, Dict, List
+from contextlib import contextmanager
+from pathlib import Path
+from signal import siginterrupt
+from typing import Any, Callable, Dict, List, Optional
 
-
-from nicegui import ui, app, events, run
-
-from robin.minknow.toml_config import minknow_gui_accessible
+import requests
+from nicegui import app, events, run, ui
+from packaging import version
 
 from robin.gui.session import current_session_is_admin, current_session_username
-
-from pathlib import Path
+from robin.minknow.toml_config import minknow_gui_accessible
 
 # These will be set by the get_imagefile() and get_version() functions
 IMAGEFILE = None
@@ -63,14 +60,22 @@ __about__ = None
 
 
 import os
-import psutil
 import platform
 
+import psutil
+
 # Check if we're in development mode
-is_development_mode = os.environ.get("ROBIN_DEV_MODE", "").lower() in ("1", "true", "yes", "on")
+is_development_mode = os.environ.get("ROBIN_DEV_MODE", "").lower() in (
+    "1",
+    "true",
+    "yes",
+    "on",
+)
 
 # Process large BAMs individually (do not use alongside live runs)
-_process_large_bams_enabled = os.environ.get("ROBIN_PROCESS_LARGE_BAMS", "0").strip().lower() in ("1", "true", "yes", "on")
+_process_large_bams_enabled = os.environ.get(
+    "ROBIN_PROCESS_LARGE_BAMS", "0"
+).strip().lower() in ("1", "true", "yes", "on")
 
 # Per-client theme sync interval lower bound
 _THEME_SYNC_MIN_INTERVAL_SECONDS = 0.1
@@ -189,9 +194,7 @@ def client_timer(
                 return None
             raise
 
-    timer = app.timer(
-        interval, _wrapped, once=once, immediate=immediate, active=active
-    )
+    timer = app.timer(interval, _wrapped, once=once, immediate=immediate, active=active)
     timer_box["timer"] = timer
 
     if client is not None:
@@ -342,13 +345,17 @@ def get_imagefile():
     if IMAGEFILE is None:
         try:
             from robin.gui import images
+
             IMAGEFILE = os.path.join(
-                os.path.dirname(os.path.abspath(images.__file__)), "ROBIN_logo_small.png"
+                os.path.dirname(os.path.abspath(images.__file__)),
+                "ROBIN_logo_small.png",
             )
         except (ImportError, AttributeError):
             # Fallback path when running standalone
             IMAGEFILE = os.path.join(
-                os.path.dirname(os.path.abspath(__file__)), "images", "ROBIN_logo_small.png"
+                os.path.dirname(os.path.abspath(__file__)),
+                "images",
+                "ROBIN_logo_small.png",
             )
     return IMAGEFILE
 
@@ -363,6 +370,7 @@ def get_about():
             # Fallback when running standalone - create a minimal __about__ object
             class MockAbout:
                 __version__ = "standalone-test"
+
             __about__ = MockAbout()
     return __about__
 
@@ -394,7 +402,7 @@ def styled_table(*, columns, rows=None, pagination=20, class_size="table-xs", **
         Tuple of (container, table) where container is the overflow wrapper column and table is the ui.table instance.
     """
     # Add CSS to hide pagination for tables with no-pagination class (only once)
-    if not hasattr(styled_table, '_pagination_css_added'):
+    if not hasattr(styled_table, "_pagination_css_added"):
         ui.add_head_html("""
             <style>
                 .no-pagination .q-table__bottom {
@@ -521,6 +529,7 @@ def wire_qtable_server_pagination_handlers(
     NiceGUI's ``update:pagination`` event; some QTable setups also emit ``request``.
     Listening to **both** keeps rows-per-page and page navigation in sync with Python.
     """
+
     def _on_request(e: Any) -> None:
         pag = unpack_qtable_request_pagination(getattr(e, "args", None))
         if pag is not None:
@@ -619,8 +628,11 @@ async def check_version():
         remote_version_str = await run.io_bound(get_version_from_github)
 
         if not remote_version_str:
-            with ui.dialog() as dialog, ui.card().classes(
-                "robin-dialog-surface p-4 md:p-5 min-w-[18rem] max-w-md"
+            with (
+                ui.dialog() as dialog,
+                ui.card().classes(
+                    "robin-dialog-surface p-4 md:p-5 min-w-[18rem] max-w-md"
+                ),
             ):
                 ui.label("Version check").classes(
                     "classification-insight-heading text-headline-small q-mb-sm"
@@ -638,8 +650,11 @@ async def check_version():
         if local_version == remote_version:
             ui.notify("Your ROBIN installation is up to date!", type="positive")
         elif local_version < remote_version:
-            with ui.dialog() as dialog, ui.card().classes(
-                "robin-dialog-surface p-4 md:p-5 min-w-[18rem] max-w-md"
+            with (
+                ui.dialog() as dialog,
+                ui.card().classes(
+                    "robin-dialog-surface p-4 md:p-5 min-w-[18rem] max-w-md"
+                ),
             ):
                 ui.label("Update available").classes(
                     "classification-insight-heading text-headline-small q-mb-sm"
@@ -665,8 +680,11 @@ async def check_version():
                     ).props("color=primary no-caps")
             dialog.open()
         else:
-            with ui.dialog() as dialog, ui.card().classes(
-                "robin-dialog-surface p-4 md:p-5 min-w-[18rem] max-w-md"
+            with (
+                ui.dialog() as dialog,
+                ui.card().classes(
+                    "robin-dialog-surface p-4 md:p-5 min-w-[18rem] max-w-md"
+                ),
             ):
                 ui.label("Development version").classes(
                     "classification-insight-heading text-headline-small q-mb-sm"
@@ -681,20 +699,23 @@ async def check_version():
                     "This version may be unstable and is only for testing. "
                     "It is not recommended for production use."
                 ).classes("classification-insight-foot q-mb-md")
-                ui.label(
-                    "Please consider using the latest release instead."
-                ).classes("classification-insight-foot q-mb-md")
+                ui.label("Please consider using the latest release instead.").classes(
+                    "classification-insight-foot q-mb-md"
+                )
                 ui.button("OK", on_click=dialog.close).props("color=primary no-caps")
             dialog.open()
 
     except requests.RequestException:
-        with ui.dialog() as dialog, ui.card().classes(
-            "robin-dialog-surface p-4 md:p-5 min-w-[18rem] max-w-md"
+        with (
+            ui.dialog() as dialog,
+            ui.card().classes("robin-dialog-surface p-4 md:p-5 min-w-[18rem] max-w-md"),
         ):
             ui.label("Connection error").classes(
                 "classification-insight-heading text-headline-small q-mb-sm"
             )
-            ui.label("Could not check for updates.").classes("classification-insight-foot")
+            ui.label("Could not check for updates.").classes(
+                "classification-insight-foot"
+            )
             ui.label(
                 "Either you are not connected to the internet or you cannot access "
                 "https://www.github.com/looselab/robin."
@@ -705,8 +726,9 @@ async def check_version():
             ui.button("OK", on_click=dialog.close).props("color=primary no-caps")
         dialog.open()
     except Exception as e:
-        with ui.dialog() as dialog, ui.card().classes(
-            "robin-dialog-surface p-4 md:p-5 min-w-[18rem] max-w-md"
+        with (
+            ui.dialog() as dialog,
+            ui.card().classes("robin-dialog-surface p-4 md:p-5 min-w-[18rem] max-w-md"),
         ):
             ui.label("Error").classes(
                 "classification-insight-heading text-headline-small q-mb-sm"
@@ -730,6 +752,7 @@ async def check_version():
 # Module-level variables
 quitdialog = None
 _logout_callback: Optional[Callable[[], None]] = None
+
 
 def _is_local_client() -> bool:
     """Return True if the current request is from localhost or 127.0.0.1 (same device as the server)."""
@@ -811,7 +834,9 @@ HEADER_HTML = (Path(__file__).parent / "static" / "header.html").read_text()
 # Read the CSS styles for the application
 STYLE_CSS = (Path(__file__).parent / "static" / "styles.css").read_text()
 M3_COMPONENTS_CSS = (Path(__file__).parent / "static" / "m3-components.css").read_text()
-MOSAIC_COMPONENTS_CSS = (Path(__file__).parent / "static" / "mosaic-components.css").read_text()
+MOSAIC_COMPONENTS_CSS = (
+    Path(__file__).parent / "static" / "mosaic-components.css"
+).read_text()
 
 # Google Fonts: Manrope (headlines), Inter (UI/data labels), JetBrains Mono (technical strings)
 EDITORIAL_FONTS_HTML = """
@@ -881,7 +906,8 @@ def frame(
     )
     ui.add_head_html(EDITORIAL_FONTS_HTML)
     ui.add_head_html(
-        HEADER_HTML + f"<style>{STYLE_CSS}</style><style>{M3_COMPONENTS_CSS}</style><style>{MOSAIC_COMPONENTS_CSS}</style>"
+        HEADER_HTML
+        + f"<style>{STYLE_CSS}</style><style>{M3_COMPONENTS_CSS}</style><style>{MOSAIC_COMPONENTS_CSS}</style>"
     )
     # Add mobile-specific responsive CSS
     ui.add_head_html("""
@@ -1176,8 +1202,7 @@ def frame(
         }
         </style>
     """)
-    ui.add_head_html(
-        """
+    ui.add_head_html("""
         <script>
         function emitSize() {
             emitEvent('resize', {
@@ -1188,8 +1213,7 @@ def frame(
         window.onload = emitSize;
         window.onresize = emitSize;
         </script>
-    """
-    )
+    """)
 
     # Research-use consent is collected per user at login (see gui_launcher login flow).
     async def show_disclaimer():
@@ -1235,15 +1259,16 @@ def frame(
             pass
         ui.navigate.to("/login")
 
-    with quitdialog, ui.card().classes(
-        "robin-dialog-surface p-4 md:p-5 min-w-[18rem] max-w-md"
+    with (
+        quitdialog,
+        ui.card().classes("robin-dialog-surface p-4 md:p-5 min-w-[18rem] max-w-md"),
     ):
         ui.label("Quit R.O.B.I.N?").classes(
             "classification-insight-heading text-headline-small q-mb-sm"
         )
-        ui.label(
-            "Quitting the app will stop running methylation analysis."
-        ).classes("classification-insight-foot")
+        ui.label("Quitting the app will stop running methylation analysis.").classes(
+            "classification-insight-foot"
+        )
         ui.label("If you want to keep analysis running, click Cancel.").classes(
             "classification-insight-foot"
         )
@@ -1297,7 +1322,9 @@ def frame(
 
     with ui.header(elevated=True).classes(header_classes):
         # Use flexbox layout instead of grid to prevent overlap
-        with ui.row().classes("w-full items-center justify-between px-1 py-0.5 sm:px-3 sm:py-1.5"):
+        with ui.row().classes(
+            "w-full items-center justify-between px-1 py-0.5 sm:px-3 sm:py-1.5"
+        ):
             # Left: Hamburger, then title (responsive)
             with ui.row().classes("items-center gap-1 sm:gap-2 min-w-0 flex-1"):
                 with ui.button(icon="menu").classes("rounded-md flex-shrink-0"):
@@ -1327,9 +1354,7 @@ def frame(
                         ).classes("text-body-medium")
                         ui.menu_item(
                             "Documentation",
-                            lambda: ui.navigate.to(
-                                "https://looselab.github.io/ROBIN/"
-                            ),
+                            lambda: ui.navigate.to("https://looselab.github.io/ROBIN/"),
                         ).classes("text-body-medium")
                         if _current_user_is_admin():
                             ui.separator()
@@ -1342,6 +1367,7 @@ def frame(
                                 lambda: ui.navigate.to("/admin"),
                             ).classes("text-body-medium")
                         ui.separator()
+
                         def _dark_mode_initial() -> bool:
                             """Prefer session (browser) storage so initial value matches first paint."""
                             try:
@@ -1368,15 +1394,13 @@ def frame(
                                 pass
                             # Session must be updated via a new request (see NiceGUI app.storage.browser docs).
                             body = json.dumps({"value": val})
-                            ui.run_javascript(
-                                f"""
+                            ui.run_javascript(f"""
                                 fetch('/robin_dark_mode', {{
                                     method: 'POST',
                                     headers: {{'Content-Type': 'application/json'}},
                                     body: {json.dumps(body)},
                                 }});
-                                """
-                            )
+                                """)
 
                         def _sync_dark_mode_from_storage() -> None:
                             try:
@@ -1403,9 +1427,7 @@ def frame(
                             "Change password",
                             lambda: ui.navigate.to("/change-password?voluntary=1"),
                         ).classes("text-body-medium")
-                        ui.menu_item("Close", menu.close).classes(
-                            "text-body-medium"
-                        )
+                        ui.menu_item("Close", menu.close).classes("text-body-medium")
                         ui.button(
                             "LOG OUT", icon="logout", on_click=logout_user
                         ).classes("bg-error text-white rounded-md")
@@ -1455,8 +1477,7 @@ def frame(
                 )
 
     with ui.column().classes(
-        "w-full h-full max-w-full overflow-hidden flex flex-col items-center "
-        "px-1"
+        "w-full h-full max-w-full overflow-hidden flex flex-col items-center " "px-1"
     ) as main_content:
         pass
 
@@ -1473,8 +1494,9 @@ def frame(
     if batphone:
         footer_classes += " batphone"
     with ui.footer().classes(footer_classes):
-        with ui.dialog() as dialog, ui.card().classes(
-            "robin-dialog-surface p-4 md:p-5 min-w-[16rem] max-w-sm"
+        with (
+            ui.dialog() as dialog,
+            ui.card().classes("robin-dialog-surface p-4 md:p-5 min-w-[16rem] max-w-sm"),
         ):
             ui.label("Links").classes(
                 "classification-insight-heading text-headline-small q-mb-sm"
@@ -1518,9 +1540,13 @@ def frame(
 
             # Center: Buttons with proper spacing
             with ui.row().classes("items-center gap-2 flex-shrink-0"):
-                ui.button("Links", on_click=dialog.open).classes("rounded-md mobile-button text-xs px-2 py-1")
+                ui.button("Links", on_click=dialog.open).classes(
+                    "rounded-md mobile-button text-xs px-2 py-1"
+                )
 
-                with ui.button(icon="info").classes("rounded-md mobile-button px-2 py-1"):
+                with ui.button(icon="info").classes(
+                    "rounded-md mobile-button px-2 py-1"
+                ):
                     with ui.menu() as menu:
                         ui.label().bind_text_from(
                             app, "urls", backward=lambda n: f"Available urls: {n}"
@@ -1530,9 +1556,7 @@ def frame(
                         )
 
             # Right side: Compact copyright (mobile only)
-            ui.label("©Looselab").classes(
-                "text-xs text-weight-italic flex-shrink-0"
-            )
+            ui.label("©Looselab").classes("text-xs text-weight-italic flex-shrink-0")
 
             # Desktop-only additional info
             ui.label("Not for diagnostic use.").classes(
@@ -1563,15 +1587,16 @@ async def cleanup_and_exit():
     logging.info("User initiated shutdown via UI")
 
     # Create and show shutdown modal with M3 styling
-    with ui.dialog().props("persistent") as shutdown_dialog, ui.card().classes(
-        "robin-dialog-surface p-4 md:p-5 w-full max-w-sm"
+    with (
+        ui.dialog().props("persistent") as shutdown_dialog,
+        ui.card().classes("robin-dialog-surface p-4 md:p-5 w-full max-w-sm"),
     ):
         ui.label("Shutting down").classes(
             "classification-insight-heading text-headline-small q-mb-sm"
         )
-        ui.label(
-            "R.O.B.I.N is shutting down. Please wait while we clean up…"
-        ).classes("classification-insight-foot q-mb-md")
+        ui.label("R.O.B.I.N is shutting down. Please wait while we clean up…").classes(
+            "classification-insight-foot q-mb-md"
+        )
         with ui.row().classes("w-full justify-center"):
             ui.spinner(size="lg", color="primary")
 
@@ -1613,23 +1638,37 @@ def create_home_page():
         ui.label("Welcome to the Application").classes(
             "text-headline-large text-center px-3"
         )
-        with ui.row().classes('items-center m-auto'):
+        with ui.row().classes("items-center m-auto"):
             ui.circular_progress(value=0.1, show_value=False, size="xs")
             ui.circular_progress(value=0.1, show_value=False, size="xl")
-        with ui.row().classes('items-center m-auto'):
-            with ui.circular_progress(value=0.1, show_value=False, size="sm") as progress:
+        with ui.row().classes("items-center m-auto"):
+            with ui.circular_progress(
+                value=0.1, show_value=False, size="sm"
+            ) as progress:
                 ui.button(
-                    icon='star',
-                    on_click=lambda: progress.set_value(progress.value + 0.1)
-                ).props('flat round')
-            ui.label('click to increase progress')
-        with ui.card().classes("w-full max-w-4xl mx-auto mobile-padding main-content-card").style("border: 2px solid var(--md-primary)"):
-            with ui.row().classes("w-full flex justify-between items-center flex-wrap gap-2"):
-                ui.label('Sample Name').classes("text-headline-medium flex-shrink-0")
-                ui.button("Button").classes("bg-primary text-white rounded-md mobile-button")
+                    icon="star",
+                    on_click=lambda: progress.set_value(progress.value + 0.1),
+                ).props("flat round")
+            ui.label("click to increase progress")
+        with (
+            ui.card()
+            .classes("w-full max-w-4xl mx-auto mobile-padding main-content-card")
+            .style("border: 2px solid var(--md-primary)")
+        ):
+            with ui.row().classes(
+                "w-full flex justify-between items-center flex-wrap gap-2"
+            ):
+                ui.label("Sample Name").classes("text-headline-medium flex-shrink-0")
+                ui.button("Button").classes(
+                    "bg-primary text-white rounded-md mobile-button"
+                )
             ui.separator().classes().style("border: 1px solid var(--md-primary)")
-            with ui.card().classes("w-full bg-gradient-to-r from-blue-50 to-indigo-50 mobile-padding"):
-                ui.label("Run Information").classes("text-lg font-semibold mb-3 text-blue-800")
+            with ui.card().classes(
+                "w-full bg-gradient-to-r from-blue-50 to-indigo-50 mobile-padding"
+            ):
+                ui.label("Run Information").classes(
+                    "text-lg font-semibold mb-3 text-blue-800"
+                )
                 with ui.row().classes("w-full gap-2 sm:gap-6 items-center flex-wrap"):
                     ui.label("Run").classes("text-body-medium text-xs sm:text-sm")
                     ui.label("Model").classes("text-body-medium text-xs sm:text-sm")
@@ -1637,52 +1676,114 @@ def create_home_page():
                     ui.label("Flow Cell").classes("text-body-medium text-xs sm:text-sm")
                     ui.label("Sample").classes("text-body-medium text-xs sm:text-sm")
 
-
             with ui.card().classes("w-full mobile-padding"):
-                ui.label("Classification Results").classes("text-lg font-semibold mb-3 text-blue-800")
+                ui.label("Classification Results").classes(
+                    "text-lg font-semibold mb-3 text-blue-800"
+                )
                 # Use responsive grid: 2 columns on desktop, 1 column on mobile
-                with ui.row().classes("w-full gap-2 sm:gap-3 flex-wrap classification-cards"):
+                with ui.row().classes(
+                    "w-full gap-2 sm:gap-3 flex-wrap classification-cards"
+                ):
                     # Sturgeon Classification
-                    with ui.card().classes("flex-1 min-w-0 elevation-4 rounded-xl bg-gradient-to-br from-blue-50 to-indigo-50 border-l-4 border-blue-500 classification-card"):
-                        ui.label("Sturgeon Classification").classes("font-bold text-blue-800 mb-2 text-sm sm:text-base")
-                        ui.label("Class: --").classes("font-bold text-medium text-blue-600 text-xs sm:text-sm")
-                        ui.label("Confidence: --%").classes("text-xs sm:text-sm text-blue-600")
-                        ui.label("Probes: --").classes("text-xs sm:text-sm text-blue-600")
-                        ui.label("Model: --").classes("text-xs sm:text-sm text-blue-600")
-                        ui.label("Features: --").classes("text-xs sm:text-sm text-blue-600")
+                    with ui.card().classes(
+                        "flex-1 min-w-0 elevation-4 rounded-xl bg-gradient-to-br from-blue-50 to-indigo-50 border-l-4 border-blue-500 classification-card"
+                    ):
+                        ui.label("Sturgeon Classification").classes(
+                            "font-bold text-blue-800 mb-2 text-sm sm:text-base"
+                        )
+                        ui.label("Class: --").classes(
+                            "font-bold text-medium text-blue-600 text-xs sm:text-sm"
+                        )
+                        ui.label("Confidence: --%").classes(
+                            "text-xs sm:text-sm text-blue-600"
+                        )
+                        ui.label("Probes: --").classes(
+                            "text-xs sm:text-sm text-blue-600"
+                        )
+                        ui.label("Model: --").classes(
+                            "text-xs sm:text-sm text-blue-600"
+                        )
+                        ui.label("Features: --").classes(
+                            "text-xs sm:text-sm text-blue-600"
+                        )
 
                     # NanoDX Classification
-                    with ui.card().classes("flex-1 min-w-0 elevation-4 rounded-xl bg-gradient-to-br from-green-50 to-green-100 border-l-4 border-green-500 classification-card"):
-                        ui.label("NanoDX Classification").classes("font-bold text-green-800 mb-2 text-sm sm:text-base")
-                        ui.label("Class: --").classes("font-bold text-medium text-green-600 text-xs sm:text-sm")
-                        ui.label("Confidence: --%").classes("text-xs sm:text-sm text-green-600")
-                        ui.label("Probes: --").classes("text-xs sm:text-sm text-green-600")
-                        ui.label("Model: --").classes("text-xs sm:text-sm text-green-600")
-                        ui.label("Features: --").classes("text-xs sm:text-sm text-green-600")
+                    with ui.card().classes(
+                        "flex-1 min-w-0 elevation-4 rounded-xl bg-gradient-to-br from-green-50 to-green-100 border-l-4 border-green-500 classification-card"
+                    ):
+                        ui.label("NanoDX Classification").classes(
+                            "font-bold text-green-800 mb-2 text-sm sm:text-base"
+                        )
+                        ui.label("Class: --").classes(
+                            "font-bold text-medium text-green-600 text-xs sm:text-sm"
+                        )
+                        ui.label("Confidence: --%").classes(
+                            "text-xs sm:text-sm text-green-600"
+                        )
+                        ui.label("Probes: --").classes(
+                            "text-xs sm:text-sm text-green-600"
+                        )
+                        ui.label("Model: --").classes(
+                            "text-xs sm:text-sm text-green-600"
+                        )
+                        ui.label("Features: --").classes(
+                            "text-xs sm:text-sm text-green-600"
+                        )
 
                     # PanNanoDX Classification
-                    with ui.card().classes("flex-1 min-w-0 elevation-4 rounded-xl bg-gradient-to-br from-purple-50 to-purple-100 border-l-4 border-purple-500 classification-card"):
-                        ui.label("PanNanoDX Classification").classes("font-bold text-purple-800 mb-2 text-sm sm:text-base")
-                        ui.label("Class: --").classes("font-bold text-medium text-purple-600 text-xs sm:text-sm")
-                        ui.label("Confidence: --%").classes("text-xs sm:text-sm text-purple-600")
-                        ui.label("Probes: --").classes("text-xs sm:text-sm text-purple-600")
-                        ui.label("Model: --").classes("text-xs sm:text-sm text-purple-600")
-                        ui.label("Features: --").classes("text-xs sm:text-sm text-purple-600")
+                    with ui.card().classes(
+                        "flex-1 min-w-0 elevation-4 rounded-xl bg-gradient-to-br from-purple-50 to-purple-100 border-l-4 border-purple-500 classification-card"
+                    ):
+                        ui.label("PanNanoDX Classification").classes(
+                            "font-bold text-purple-800 mb-2 text-sm sm:text-base"
+                        )
+                        ui.label("Class: --").classes(
+                            "font-bold text-medium text-purple-600 text-xs sm:text-sm"
+                        )
+                        ui.label("Confidence: --%").classes(
+                            "text-xs sm:text-sm text-purple-600"
+                        )
+                        ui.label("Probes: --").classes(
+                            "text-xs sm:text-sm text-purple-600"
+                        )
+                        ui.label("Model: --").classes(
+                            "text-xs sm:text-sm text-purple-600"
+                        )
+                        ui.label("Features: --").classes(
+                            "text-xs sm:text-sm text-purple-600"
+                        )
 
                     # Random Forest Classification
-                    with ui.card().classes("flex-1 min-w-0 elevation-4 rounded-xl bg-gradient-to-br from-orange-50 to-orange-100 border-l-4 border-orange-500 classification-card"):
-                        ui.label("Random Forest Classification").classes("font-bold text-orange-800 mb-2 text-sm sm:text-base")
-                        ui.label("Class: --").classes("font-bold text-medium text-orange-600 text-xs sm:text-sm")
-                        ui.label("Confidence: --%").classes("text-xs sm:text-sm text-orange-600")
-                        ui.label("Probes: --").classes("text-xs sm:text-sm text-orange-600")
-                        ui.label("Model: --").classes("text-xs sm:text-sm text-orange-600")
-                        ui.label("Features: --").classes("text-xs sm:text-sm text-orange-600")
+                    with ui.card().classes(
+                        "flex-1 min-w-0 elevation-4 rounded-xl bg-gradient-to-br from-orange-50 to-orange-100 border-l-4 border-orange-500 classification-card"
+                    ):
+                        ui.label("Random Forest Classification").classes(
+                            "font-bold text-orange-800 mb-2 text-sm sm:text-base"
+                        )
+                        ui.label("Class: --").classes(
+                            "font-bold text-medium text-orange-600 text-xs sm:text-sm"
+                        )
+                        ui.label("Confidence: --%").classes(
+                            "text-xs sm:text-sm text-orange-600"
+                        )
+                        ui.label("Probes: --").classes(
+                            "text-xs sm:text-sm text-orange-600"
+                        )
+                        ui.label("Model: --").classes(
+                            "text-xs sm:text-sm text-orange-600"
+                        )
+                        ui.label("Features: --").classes(
+                            "text-xs sm:text-sm text-orange-600"
+                        )
 
-
-            ui.label('text below').classes("text-body-medium px-3")
+            ui.label("text below").classes("text-body-medium px-3")
             with ui.card_section().classes("px-3"):
-                ui.image('https://picsum.photos/id/684/640/360').classes("w-full h-auto rounded-lg")
-                ui.label('Lorem ipsum dolor sit amet, consectetur adipiscing elit, ...').classes("text-body-medium mobile-text")
+                ui.image("https://picsum.photos/id/684/640/360").classes(
+                    "w-full h-auto rounded-lg"
+                )
+                ui.label(
+                    "Lorem ipsum dolor sit amet, consectetur adipiscing elit, ..."
+                ).classes("text-body-medium mobile-text")
 
 
 def create_standalone_page():
@@ -1693,26 +1794,39 @@ def create_standalone_page():
     )
     ui.add_head_html(EDITORIAL_FONTS_HTML)
     ui.add_head_html(
-        HEADER_HTML + f"<style>{STYLE_CSS}</style><style>{M3_COMPONENTS_CSS}</style><style>{MOSAIC_COMPONENTS_CSS}</style>"
+        HEADER_HTML
+        + f"<style>{STYLE_CSS}</style><style>{M3_COMPONENTS_CSS}</style><style>{MOSAIC_COMPONENTS_CSS}</style>"
     )
 
     # Create a simple header (same shell padding pattern as frame())
-    with ui.header(elevated=True).classes("items-center duration-200 p-0 px-2 no-wrap elevation-1"):
-        with ui.row().classes("w-full items-center justify-between px-1 py-0.5 sm:px-3 sm:py-1.5"):
-            ui.html("<strong>R.O.B.I.N</strong>", sanitize=False).classes("text-headline-medium drop-shadow font-bold").style(
-                "font-weight: 700; font-family: var(--font-display)"
-            )
+    with ui.header(elevated=True).classes(
+        "items-center duration-200 p-0 px-2 no-wrap elevation-1"
+    ):
+        with ui.row().classes(
+            "w-full items-center justify-between px-1 py-0.5 sm:px-3 sm:py-1.5"
+        ):
+            ui.html("<strong>R.O.B.I.N</strong>", sanitize=False).classes(
+                "text-headline-medium drop-shadow font-bold"
+            ).style("font-weight: 700; font-family: var(--font-display)")
             ui.image(get_imagefile()).style("width: 50px").classes("ml-auto")
 
     # Create main content
     with ui.column().classes("w-full h-full max-w-full overflow-hidden p-6"):
-        ui.label("Welcome to ROBIN Theme Test").classes("text-headline-large text-center")
-        ui.label("This is a standalone test of the ROBIN theme system.").classes("text-body-large text-center mt-4")
-        ui.label(f"Version: {get_about().__version__}").classes("text-body-medium text-center mt-2")
+        ui.label("Welcome to ROBIN Theme Test").classes(
+            "text-headline-large text-center"
+        )
+        ui.label("This is a standalone test of the ROBIN theme system.").classes(
+            "text-body-large text-center mt-4"
+        )
+        ui.label(f"Version: {get_about().__version__}").classes(
+            "text-body-medium text-center mt-2"
+        )
 
     # Create a simple footer (same shell padding pattern as frame())
     with ui.footer().classes("items-center duration-200 p-0 px-2 no-wrap elevation-1"):
-        with ui.row().classes("w-full items-center justify-between px-1 py-0.5 sm:px-3 sm:py-1.5"):
+        with ui.row().classes(
+            "w-full items-center justify-between px-1 py-0.5 sm:px-3 sm:py-1.5"
+        ):
             ui.image(get_imagefile()).style("width: 40px")
             ui.label("ROBIN Theme Test - Standalone Mode").classes("text-body-small")
 
@@ -1728,12 +1842,12 @@ def create_workflow_page():
         crossnn_version = get_crossnn_version()
         cnv_from_bam_version = get_cnv_from_bam_version()
 
-        with ui.element("div").classes("w-full min-w-0").props(
-            "id=workflow-diagram-page"
+        with (
+            ui.element("div")
+            .classes("w-full min-w-0")
+            .props("id=workflow-diagram-page")
         ):
-            with ui.column().classes(
-                "w-full max-w-6xl mx-auto gap-3 p-2 md:p-3"
-            ):
+            with ui.column().classes("w-full max-w-6xl mx-auto gap-3 p-2 md:p-3"):
                 with ui.element("div").classes(
                     "classification-insight-shell w-full min-w-0"
                 ):
@@ -1748,12 +1862,8 @@ def create_workflow_page():
                 with ui.element("div").classes(
                     "classification-insight-card w-full min-w-0"
                 ):
-                    with ui.column().classes(
-                        "w-full min-w-0 gap-3 p-2 md:p-3"
-                    ):
-                        with ui.row().classes(
-                            "items-center gap-2 min-w-0"
-                        ):
+                    with ui.column().classes("w-full min-w-0 gap-3 p-2 md:p-3"):
+                        with ui.row().classes("items-center gap-2 min-w-0"):
                             ui.icon("account_tree").classes(
                                 "classification-insight-icon"
                             )
@@ -1768,7 +1878,7 @@ def create_workflow_page():
                             "w-full min-w-0 overflow-x-auto workflow-diagram-scroll"
                         ):
                             ui.mermaid(
-            f"""
+                                f"""
 flowchart TD
     %% Style definitions with M3 color palette
     classDef minKNOW fill:#E8DEF8,stroke:#6750A4,stroke-width:2px,color:#1D192B,font-size:14px,font-weight:500
@@ -1849,16 +1959,20 @@ flowchart TD
     style MinKNOW fill:#E8DEF8,stroke:#6750A4,stroke-width:2px
     style ROBIN fill:#EADDFF,stroke:#6750A4,stroke-width:2px
 """,
-            config={
-                "theme": "redux",
-                "look": "neo",
-                "flowchart": {"curve": "basis", "defaultRenderer": "elk"},
-            },
-        ).classes("w-full min-w-0 workflow-diagram-mermaid")
+                                config={
+                                    "theme": "redux",
+                                    "look": "neo",
+                                    "flowchart": {
+                                        "curve": "basis",
+                                        "defaultRenderer": "elk",
+                                    },
+                                },
+                            ).classes("w-full min-w-0 workflow-diagram-mermaid")
 
 
 def register_theme_pages():
     """Register the theme pages. This function should be called when the module is imported."""
+
     @ui.page("/")
     def home_page():
         create_home_page()

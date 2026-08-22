@@ -117,9 +117,7 @@ def append_tucan_scores(
     # Prefer timestamp / coverage meta first, then class columns.
     cols = list(rows.columns)
     ordered = [
-        c
-        for c in ("timestamp", "covered_cpgs", "number_probes", "probes")
-        if c in cols
+        c for c in ("timestamp", "covered_cpgs", "number_probes", "probes") if c in cols
     ]
     ordered.extend(c for c in cols if c not in ordered)
     new_df = rows[ordered]
@@ -137,7 +135,9 @@ def append_tucan_scores(
     combined.to_csv(scores_path, index=False)
 
 
-def _top_prediction(prediction_df: pd.DataFrame) -> tuple[Optional[str], Optional[float], int]:
+def _top_prediction(
+    prediction_df: pd.DataFrame,
+) -> tuple[Optional[str], Optional[float], int]:
     """Return (top_class, top_score, covered_cpgs) from a Tucan output frame."""
     if prediction_df is None or prediction_df.empty:
         return None, None, 0
@@ -215,9 +215,7 @@ class TucanAnalysis:
         self.bambatch: Dict[str, int] = {}
         self._assets: Optional[Dict[str, Any]] = None
 
-        logger.info(
-            "Tucan Analysis initialized (probe_margin=%s)", self.probe_margin
-        )
+        logger.info("Tucan Analysis initialized (probe_margin=%s)", self.probe_margin)
 
     def _ensure_assets(self) -> Dict[str, Any]:
         if self._assets is not None:
@@ -229,9 +227,7 @@ class TucanAnalysis:
         )
         return self._assets
 
-    def process_parquet_file(
-        self, parquet_path: str, sample_id: str
-    ) -> TucanMetadata:
+    def process_parquet_file(self, parquet_path: str, sample_id: str) -> TucanMetadata:
         start_time = time.time()
 
         if sample_id not in self.bambatch:
@@ -320,9 +316,9 @@ class TucanAnalysis:
                 "top_score": top_score,
                 "scores_file": scores_path,
                 "bed_file": bed_path,
-                "num_cpgs": self.num_cpgs
-                if self.num_cpgs is not None
-                else DEFAULT_NUM_CPGS,
+                "num_cpgs": (
+                    self.num_cpgs if self.num_cpgs is not None else DEFAULT_NUM_CPGS
+                ),
                 "probe_margin": self.probe_margin,
                 "processing_steps": result.processing_steps.copy(),
             }
@@ -419,7 +415,9 @@ def process_multiple_files(
                 pass
 
         if analysis_result["files_processed"] == 0:
-            analysis_result["error_message"] = "No files could be processed successfully"
+            analysis_result["error_message"] = (
+                "No files could be processed successfully"
+            )
             analysis_result["processing_steps"].append("no_files_processed")
             return analysis_result
 
@@ -473,9 +471,13 @@ def tucan_handler(job, work_dir=None):
                     )
 
             if not parquet_paths:
-                error_msg = "No parquet paths found from bed conversion results in batch"
+                error_msg = (
+                    "No parquet paths found from bed conversion results in batch"
+                )
                 if suppress_expected:
-                    logger.warning("%s (expected for fail-only BAM submission)", error_msg)
+                    logger.warning(
+                        "%s (expected for fail-only BAM submission)", error_msg
+                    )
                     job.context.add_result(
                         "tucan_analysis",
                         {"status": "expected_failure", "reason": error_msg},
@@ -560,7 +562,10 @@ def tucan_handler(job, work_dir=None):
             if suppress_expected:
                 job.context.add_result(
                     "tucan_analysis",
-                    {"status": "expected_failure", "error_message": result.error_message},
+                    {
+                        "status": "expected_failure",
+                        "error_message": result.error_message,
+                    },
                 )
             else:
                 job.context.add_error("tucan_analysis", result.error_message)
@@ -596,7 +601,9 @@ def tucan_handler(job, work_dir=None):
 
     except Exception as exc:
         if suppress_expected:
-            logger.warning("Expected Tucan failure for fail-only BAM submission: %s", exc)
+            logger.warning(
+                "Expected Tucan failure for fail-only BAM submission: %s", exc
+            )
             job.context.add_result(
                 "tucan_analysis",
                 {"status": "expected_failure", "error_message": str(exc)},

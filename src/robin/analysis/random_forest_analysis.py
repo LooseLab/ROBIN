@@ -26,14 +26,14 @@ The module requires proper configuration of input/output directories and
 assumes the presence of necessary R scripts and model files.
 """
 
+import logging
 import os
+import shutil
+import subprocess
 import tempfile
 import time
-import subprocess
-import logging
-import shutil
 from dataclasses import dataclass, field
-from typing import Dict, Any, Optional, List
+from typing import Any, Dict, List, Optional
 
 import pandas as pd
 
@@ -79,8 +79,6 @@ def _compute_hvpath() -> Optional[str]:
 
 
 HVPATH = _compute_hvpath()
-
-
 
 
 @dataclass
@@ -524,7 +522,7 @@ def process_multiple_files(
 ):
     """
     Process multiple parquet files for Random Forest analysis.
-    
+
     This function processes multiple parquet files for the same sample.
     Each file is processed individually and results are accumulated in
     the same random_forest_scores.csv file.
@@ -542,17 +540,19 @@ def process_multiple_files(
     """
     if not parquet_paths or not metadata_list:
         raise ValueError("parquet_paths and metadata_list must not be empty")
-    
+
     if len(parquet_paths) != len(metadata_list):
         raise ValueError("parquet_paths and metadata_list must have the same length")
-    
+
     # Get sample ID from first metadata (assuming all parquet files are from same sample)
     sample_id = metadata_list[0].get("sample_id", "unknown")
-    
-    logger.info(f"🌲 Starting multi-file Random Forest analysis for sample: {sample_id}")
+
+    logger.info(
+        f"🌲 Starting multi-file Random Forest analysis for sample: {sample_id}"
+    )
     logger.info(f"Processing {len(parquet_paths)} parquet files for sample {sample_id}")
     logger.info(f"Using {threads} threads for R script execution")
-    
+
     # Log essential metadata only
     for i, (parquet_path, metadata) in enumerate(zip(parquet_paths, metadata_list)):
         logger.debug(f"Parquet file {i+1}: {os.path.basename(parquet_path)}")
@@ -574,21 +574,19 @@ def process_multiple_files(
         # Create sample-specific output directory
         sample_dir = os.path.join(work_dir, sample_id)
         os.makedirs(sample_dir, exist_ok=True)
-        
+
         scores_file_path = os.path.join(sample_dir, "random_forest_scores.csv")
         analysis_result["scores_file_path"] = scores_file_path
-        
+
         logger.info(f"Created output directory: {sample_dir}")
         logger.info(f"Scores file: {scores_file_path}")
         analysis_result["processing_steps"].append("directory_created")
 
         # Initialize Random Forest analysis
         random_forest_analyzer = RandomForestAnalysis(
-            work_dir=work_dir, 
-            threads=threads, 
-            showerrors=showerrors
+            work_dir=work_dir, threads=threads, showerrors=showerrors
         )
-        
+
         logger.info("Initialized Random Forest analyzer")
         analysis_result["processing_steps"].append("analyzer_initialized")
 
@@ -596,43 +594,57 @@ def process_multiple_files(
         logger.info("Processing parquet files individually")
         processed_files = 0
         total_batches = 0
-        
+
         for i, (parquet_path, metadata) in enumerate(zip(parquet_paths, metadata_list)):
-            logger.info(f"Processing parquet file {i+1}/{len(parquet_paths)}: {os.path.basename(parquet_path)}")
-            
+            logger.info(
+                f"Processing parquet file {i+1}/{len(parquet_paths)}: {os.path.basename(parquet_path)}"
+            )
+
             try:
                 # Check if parquet file exists
                 if not os.path.exists(parquet_path):
                     logger.warning(f"Parquet file not found: {parquet_path}")
                     continue
-                
+
                 # Process the parquet file
-                rf_result = random_forest_analyzer.process_parquet_file(parquet_path, sample_id)
-                
+                rf_result = random_forest_analyzer.process_parquet_file(
+                    parquet_path, sample_id
+                )
+
                 if rf_result.error_message:
-                    logger.warning(f"Error processing {os.path.basename(parquet_path)}: {rf_result.error_message}")
+                    logger.warning(
+                        f"Error processing {os.path.basename(parquet_path)}: {rf_result.error_message}"
+                    )
                     continue
-                
+
                 processed_files += 1
                 total_batches += 1
-                logger.debug(f"Successfully processed file {i+1}: {os.path.basename(parquet_path)}")
+                logger.debug(
+                    f"Successfully processed file {i+1}: {os.path.basename(parquet_path)}"
+                )
                 logger.debug(f"Batch number: {rf_result.batch_number}")
                 if job_id is not None:
                     try:
-                        from robin.workflow_ray import notify_coordinator_files_completed
+                        from robin.workflow_ray import (
+                            notify_coordinator_files_completed,
+                        )
 
                         notify_coordinator_files_completed(
                             "random_forest", 1, job_id=job_id
                         )
                     except Exception:
                         pass
-                
+
             except Exception as e:
-                logger.warning(f"Error processing {os.path.basename(parquet_path)}: {e}")
+                logger.warning(
+                    f"Error processing {os.path.basename(parquet_path)}: {e}"
+                )
                 continue
 
         if processed_files == 0:
-            analysis_result["error_message"] = "No files could be processed successfully"
+            analysis_result["error_message"] = (
+                "No files could be processed successfully"
+            )
             analysis_result["processing_steps"].append("no_files_processed")
             return analysis_result
 
@@ -644,7 +656,7 @@ def process_multiple_files(
         if os.path.exists(scores_file_path):
             analysis_result["processing_steps"].append("scores_file_created")
             logger.info(f"Random Forest scores accumulated in: {scores_file_path}")
-            
+
             # Load and log summary of results
             try:
                 scores_df = pd.read_csv(scores_file_path)
@@ -664,10 +676,12 @@ def process_multiple_files(
 
         analysis_result["processing_steps"].append("analysis_complete")
         logger.info(f"Multi-file Random Forest analysis completed for {sample_id}")
-        logger.info(f"Files successfully processed: {analysis_result['files_processed']}/{analysis_result['total_files']}")
+        logger.info(
+            f"Files successfully processed: {analysis_result['files_processed']}/{analysis_result['total_files']}"
+        )
         logger.info(f"Total batches processed: {analysis_result['total_batches']}")
         logger.info(f"Output directory: {sample_dir}")
-        
+
         return analysis_result
 
     except Exception as e:
@@ -697,48 +711,62 @@ def random_forest_handler(job, work_dir=None):
             batch_size = batched_job.get_file_count()
             sample_id = batched_job.get_sample_id()
             batch_id = batched_job.batch_id
-            logger.info(f"Processing Random Forest analysis batch: {batch_size} files for sample '{sample_id}' (batch_id: {batch_id})")
-            
+            logger.info(
+                f"Processing Random Forest analysis batch: {batch_size} files for sample '{sample_id}' (batch_id: {batch_id})"
+            )
+
             # Get all filepaths in the batch
             filepaths = batched_job.get_filepaths()
-            
+
             # Log individual files in the batch
             for i, filepath in enumerate(filepaths):
-                logger.info(f"  Batch file {i+1}/{batch_size}: {os.path.basename(filepath)}")
-            
+                logger.info(
+                    f"  Batch file {i+1}/{batch_size}: {os.path.basename(filepath)}"
+                )
+
             # Prepare metadata list and extract parquet paths from bed conversion results
             metadata_list = []
             parquet_paths = []
-            
+
             for i, bam_path in enumerate(filepaths):
                 # Get metadata from preprocessing for this specific file
                 file_metadata = batched_job.contexts[i].metadata.get("bam_metadata", {})
-                
+
                 # Get sample ID from preprocessing results for this specific file
                 file_context = batched_job.contexts[i]
                 file_sample_id = file_context.get_sample_id()
-                
+
                 # Use the sample ID from the file's context (which should have preprocessing results)
                 if file_sample_id != "unknown":
                     file_metadata["sample_id"] = file_sample_id
                 else:
                     file_metadata["sample_id"] = sample_id
-                
+
                 # Get parquet path from bed conversion results for this file
-                bed_conversion_result = batched_job.contexts[i].results.get("bed_conversion", {})
+                bed_conversion_result = batched_job.contexts[i].results.get(
+                    "bed_conversion", {}
+                )
                 parquet_path = bed_conversion_result.get("parquet_path")
-                
+
                 if parquet_path:
                     parquet_paths.append(parquet_path)
                     metadata_list.append(file_metadata)
-                    logger.debug(f"Found parquet path for file {i+1}: {os.path.basename(parquet_path)}")
+                    logger.debug(
+                        f"Found parquet path for file {i+1}: {os.path.basename(parquet_path)}"
+                    )
                 else:
-                    logger.warning(f"No parquet path found for file {i+1}: {os.path.basename(bam_path)}")
-            
+                    logger.warning(
+                        f"No parquet path found for file {i+1}: {os.path.basename(bam_path)}"
+                    )
+
             if not parquet_paths:
-                error_msg = "No parquet paths found from bed conversion results in batch"
+                error_msg = (
+                    "No parquet paths found from bed conversion results in batch"
+                )
                 if suppress_expected:
-                    logger.warning(f"{error_msg} (expected for fail-only BAM submission)")
+                    logger.warning(
+                        f"{error_msg} (expected for fail-only BAM submission)"
+                    )
                     job.context.add_result(
                         "random_forest_analysis",
                         {"status": "expected_failure", "reason": error_msg},
@@ -747,7 +775,7 @@ def random_forest_handler(job, work_dir=None):
                     logger.error(error_msg)
                     job.context.add_error("random_forest_analysis", error_msg)
                 return
-            
+
             # Determine work directory for the batch
             if work_dir is None:
                 # Default to first parquet file directory
@@ -757,9 +785,11 @@ def random_forest_handler(job, work_dir=None):
                 os.makedirs(work_dir, exist_ok=True)
                 batch_work_dir = work_dir
                 logger.debug(f"Using specified work directory: {batch_work_dir}")
-            
+
             # Process all parquet files in the batch using the new aggregated function
-            logger.info(f"Processing {len(parquet_paths)} parquet files as aggregated batch for sample '{sample_id}'")
+            logger.info(
+                f"Processing {len(parquet_paths)} parquet files as aggregated batch for sample '{sample_id}'"
+            )
             batch_result = process_multiple_files(
                 parquet_paths=parquet_paths,
                 metadata_list=metadata_list,
@@ -769,21 +799,32 @@ def random_forest_handler(job, work_dir=None):
                 showerrors=False,  # Default error display setting
                 job_id=job.job_id,
             )
-            
+
             # Store batch results in job context (maintain compatibility with existing structure)
-            job.context.add_metadata("random_forest_analysis", {
-                "batch_result": batch_result,  # Single aggregated result
-                "batch_size": batch_size,
-                "sample_id": sample_id,
-                "batch_id": batch_id,
-                "files_processed": batch_result.get("files_processed", len(parquet_paths)),
-                "total_files": batch_result.get("total_files", len(parquet_paths))
-            })
-            
-            logger.info(f"Completed Random Forest analysis batch processing: {batch_size} files for sample '{sample_id}'")
-            logger.info(f"Files successfully processed: {batch_result.get('files_processed', len(parquet_paths))}/{batch_result.get('total_files', len(parquet_paths))}")
-            logger.info(f"Total batches processed: {batch_result.get('total_batches', 0)}")
-            
+            job.context.add_metadata(
+                "random_forest_analysis",
+                {
+                    "batch_result": batch_result,  # Single aggregated result
+                    "batch_size": batch_size,
+                    "sample_id": sample_id,
+                    "batch_id": batch_id,
+                    "files_processed": batch_result.get(
+                        "files_processed", len(parquet_paths)
+                    ),
+                    "total_files": batch_result.get("total_files", len(parquet_paths)),
+                },
+            )
+
+            logger.info(
+                f"Completed Random Forest analysis batch processing: {batch_size} files for sample '{sample_id}'"
+            )
+            logger.info(
+                f"Files successfully processed: {batch_result.get('files_processed', len(parquet_paths))}/{batch_result.get('total_files', len(parquet_paths))}"
+            )
+            logger.info(
+                f"Total batches processed: {batch_result.get('total_batches', 0)}"
+            )
+
             if batch_result.get("error_message"):
                 if suppress_expected:
                     logger.warning(
@@ -805,7 +846,9 @@ def random_forest_handler(job, work_dir=None):
                         "random_forest_analysis", batch_result["error_message"]
                     )
             else:
-                logger.info("Batch processing completed successfully with aggregated Random Forest analysis")
+                logger.info(
+                    "Batch processing completed successfully with aggregated Random Forest analysis"
+                )
                 job.context.add_result(
                     "random_forest_analysis",
                     {
@@ -816,13 +859,17 @@ def random_forest_handler(job, work_dir=None):
                         "processing_steps": batch_result.get("processing_steps", []),
                         "scores_file": batch_result.get("scores_file_path", ""),
                         "bed_file": batch_result.get("bed_file_path", ""),
-                        "files_processed": batch_result.get("files_processed", len(parquet_paths)),
-                        "total_files": batch_result.get("total_files", len(parquet_paths)),
+                        "files_processed": batch_result.get(
+                            "files_processed", len(parquet_paths)
+                        ),
+                        "total_files": batch_result.get(
+                            "total_files", len(parquet_paths)
+                        ),
                     },
                 )
-            
+
             return
-            
+
         else:
             # Single file processing (backward compatibility)
             # Get the parquet file path from bed_conversion results
@@ -853,7 +900,9 @@ def random_forest_handler(job, work_dir=None):
             random_forest_analyzer = RandomForestAnalysis(work_dir=work_dir)
 
             # Process the parquet file
-            result = random_forest_analyzer.process_parquet_file(parquet_path, sample_id)
+            result = random_forest_analyzer.process_parquet_file(
+                parquet_path, sample_id
+            )
 
             # Store results in job context
             job.context.add_metadata("random_forest_analysis", result.results)

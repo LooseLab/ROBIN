@@ -5,24 +5,26 @@ BAM to parquet file conversion module for robin.
 Requires Python 3.12+. Automated conversion of BAM files to parquet using
 matkit; integrates with robin's preprocessing pipeline and CPG master file.
 """
+
 from __future__ import annotations
 
 import sys
+
 if sys.version_info < (3, 12):
     raise RuntimeError("robin bed_conversion requires Python 3.12 or newer")
 
-import os
-import time
-import tempfile
 import logging
+import os
+import tempfile
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
-from typing import Dict, Any, List, Optional
+from typing import Any, Dict, List, Optional
 
 # Import robin utilities and resources
 try:
-    from robin.analysis.utilities.matkit import run_matkit
     from robin import resources
+    from robin.analysis.utilities.matkit import run_matkit
 except ImportError:
     run_matkit = None
     resources = None
@@ -288,6 +290,7 @@ class BedConversionAnalysis:
                     # Fallback if robin is not available (write empty parquet not used in real runs)
                     import pyarrow as pa
                     import pyarrow.parquet as pq
+
                     empty = pa.table(
                         {
                             "chrom": pa.array([], type=pa.binary()),
@@ -311,7 +314,9 @@ class BedConversionAnalysis:
                 try:
                     os.remove(temp_file.name)
                 except Exception as e:
-                    logger.error(f"Failed to delete temporary file {temp_file.name}: {e}")
+                    logger.error(
+                        f"Failed to delete temporary file {temp_file.name}: {e}"
+                    )
                     pass
                 raise
 
@@ -321,13 +326,17 @@ class BedConversionAnalysis:
         # Parallel path: tolerate per-file failures so one bad BAM does not fail the batch
         try:
             with ThreadPoolExecutor(max_workers=threads) as executor:
-                futures = {executor.submit(process_single_bam, bam): bam for bam in bams}
+                futures = {
+                    executor.submit(process_single_bam, bam): bam for bam in bams
+                }
                 for future in as_completed(futures):
                     try:
                         processed_files.append(future.result())
                     except Exception as e:
                         bam_path = futures[future]
-                        logger.warning(f"Failed to process BAM {os.path.basename(bam_path)}: {e}")
+                        logger.warning(
+                            f"Failed to process BAM {os.path.basename(bam_path)}: {e}"
+                        )
             return processed_files
         except Exception:
             cleanup_temp_files(processed_files)
@@ -409,6 +418,7 @@ class BedConversionAnalysis:
 
         return state
 
+
 def process_multiple_files(
     bam_paths,
     metadata_list,
@@ -422,7 +432,7 @@ def process_multiple_files(
 ):
     """
     Process multiple BAM files for bed conversion analysis.
-    
+
     This function processes multiple BAM files for the same sample.
     Each file is processed individually and results are accumulated in
     the same parquet file.
@@ -439,17 +449,17 @@ def process_multiple_files(
     """
     if not bam_paths or not metadata_list:
         raise ValueError("bam_paths and metadata_list must not be empty")
-    
+
     if len(bam_paths) != len(metadata_list):
         raise ValueError("bam_paths and metadata_list must have the same length")
-    
+
     # Get sample ID from first metadata (assuming all BAM files are from same sample)
     sample_id = metadata_list[0].get("sample_id", "unknown")
-    
+
     logger.info(f"🔄 Starting multi-file bed conversion for sample: {sample_id}")
     logger.info(f"Processing {len(bam_paths)} BAM files for sample {sample_id}")
     logger.info(f"Using {threads} threads for processing")
-    
+
     analysis_result = {
         "sample_id": sample_id,
         "bam_paths": bam_paths,
@@ -465,10 +475,10 @@ def process_multiple_files(
         # Create sample-specific output directory
         sample_dir = os.path.join(work_dir, sample_id)
         os.makedirs(sample_dir, exist_ok=True)
-        
+
         parquet_path = os.path.join(sample_dir, f"{sample_id}.parquet")
         analysis_result["parquet_path"] = parquet_path
-        
+
         logger.info(f"Created output directory: {sample_dir}")
         logger.info(f"Parquet file: {parquet_path}")
         analysis_result["processing_steps"].append("directory_created")
@@ -480,7 +490,7 @@ def process_multiple_files(
             reference_fasta=reference_fasta,
             cpg_mode=cpg_mode,
         )
-        
+
         logger.info("Initialized bed conversion analyzer")
         analysis_result["processing_steps"].append("analyzer_initialized")
 
@@ -496,12 +506,16 @@ def process_multiple_files(
             analysis_result["processing_steps"].append("no_files_processed")
             return analysis_result
 
-        logger.info(f"Processing {len(valid_bam_paths)} BAM files (up to {bed_analyzer.threads} in parallel)")
+        logger.info(
+            f"Processing {len(valid_bam_paths)} BAM files (up to {bed_analyzer.threads} in parallel)"
+        )
         all_processed_data = bed_analyzer._process_bams(valid_bam_paths, sample_dir)
         processed_files = len(all_processed_data)
 
         if processed_files == 0:
-            analysis_result["error_message"] = "No files could be processed successfully"
+            analysis_result["error_message"] = (
+                "No files could be processed successfully"
+            )
             analysis_result["processing_steps"].append("no_files_processed")
             return analysis_result
 
@@ -510,19 +524,21 @@ def process_multiple_files(
 
         # Create parquet file from all processed data
         if all_processed_data:
-            logger.info(f"Creating parquet file from {len(all_processed_data)} processed files")
+            logger.info(
+                f"Creating parquet file from {len(all_processed_data)} processed files"
+            )
             try:
                 # Use merge_modkit_files to create the final parquet file
                 bed_analyzer._update_state(
-                    parquet_path, 
-                    all_processed_data, 
-                    sample_id, 
-                    processed_files  # Use number of processed files as file_number
+                    parquet_path,
+                    all_processed_data,
+                    sample_id,
+                    processed_files,  # Use number of processed files as file_number
                 )
-                
+
                 analysis_result["processing_steps"].append("parquet_created")
                 logger.info(f"Parquet file created successfully: {parquet_path}")
-                
+
                 # Verify parquet file was created
                 if os.path.exists(parquet_path):
                     parquet_size = os.path.getsize(parquet_path)
@@ -535,21 +551,25 @@ def process_multiple_files(
                         logger.error(msg)
                     analysis_result["error_message"] = "Parquet file creation failed"
                     return analysis_result
-                    
+
             except Exception as e:
                 logger.error(f"Error creating parquet file: {e}")
                 analysis_result["error_message"] = f"Parquet creation failed: {str(e)}"
                 return analysis_result
         else:
-            analysis_result["error_message"] = "No processed data available for parquet creation"
+            analysis_result["error_message"] = (
+                "No processed data available for parquet creation"
+            )
             analysis_result["processing_steps"].append("no_data_for_parquet")
             return analysis_result
 
         analysis_result["processing_steps"].append("analysis_complete")
         logger.info(f"Multi-file bed conversion completed for {sample_id}")
-        logger.info(f"Files successfully processed: {analysis_result['files_processed']}/{analysis_result['total_files']}")
+        logger.info(
+            f"Files successfully processed: {analysis_result['files_processed']}/{analysis_result['total_files']}"
+        )
         logger.info(f"Output parquet file: {analysis_result['parquet_path']}")
-        
+
         return analysis_result
 
     except Exception as e:
@@ -597,27 +617,35 @@ def bed_conversion_handler(job, work_dir=None, reference=None):
         # Get job-specific logger
         logger = get_job_logger(str(job.job_id), job.job_type, job.context.filepath)
         suppress_expected = _is_fail_only_expected(job)
-        
+
         # Check if this is a batched job
         batched_job = job.context.metadata.get("_batched_job")
         if batched_job:
             batch_size = batched_job.get_file_count()
             sample_id = batched_job.get_sample_id()
             batch_id = batched_job.batch_id
-            logger.info(f"Processing bed conversion batch: {batch_size} files for sample '{sample_id}' (batch_id: {batch_id})")
-            
+            logger.info(
+                f"Processing bed conversion batch: {batch_size} files for sample '{sample_id}' (batch_id: {batch_id})"
+            )
+
             # Get all filepaths in the batch
             filepaths = batched_job.get_filepaths()
-            
+
             # Log individual files in the batch
             for i, filepath in enumerate(filepaths):
-                logger.info(f"  Batch file {i+1}/{batch_size}: {os.path.basename(filepath)}")
-            
+                logger.info(
+                    f"  Batch file {i+1}/{batch_size}: {os.path.basename(filepath)}"
+                )
+
             # Prepare metadata list for all BAM files in the batch (list comp inlined in 3.12)
             def _batch_metadata(i: int) -> dict:
                 ctx = batched_job.contexts[i]
                 sid = ctx.get_sample_id()
-                return {**ctx.metadata.get("bam_metadata", {}), "sample_id": sid if sid != "unknown" else sample_id}
+                return {
+                    **ctx.metadata.get("bam_metadata", {}),
+                    "sample_id": sid if sid != "unknown" else sample_id,
+                }
+
             metadata_list = [_batch_metadata(i) for i in range(len(filepaths))]
 
             # Determine work directory for the batch
@@ -629,7 +657,7 @@ def bed_conversion_handler(job, work_dir=None, reference=None):
                 os.makedirs(work_dir, exist_ok=True)
                 batch_work_dir = work_dir
                 logger.debug(f"Using specified work directory: {batch_work_dir}")
-            
+
             ref_fasta, cpg_mode = _bed_conversion_matkit_options(
                 job, batch_work_dir, reference, sample_id
             )
@@ -639,7 +667,9 @@ def bed_conversion_handler(job, work_dir=None, reference=None):
                 )
 
             # Process all BAM files in the batch using the new aggregated function
-            logger.info(f"Processing {batch_size} BAM files as aggregated batch for sample '{sample_id}'")
+            logger.info(
+                f"Processing {batch_size} BAM files as aggregated batch for sample '{sample_id}'"
+            )
             batch_result = process_multiple_files(
                 bam_paths=filepaths,
                 metadata_list=metadata_list,
@@ -650,20 +680,27 @@ def bed_conversion_handler(job, work_dir=None, reference=None):
                 reference_fasta=ref_fasta,
                 cpg_mode=cpg_mode,
             )
-            
+
             # Store batch results in job context (maintain compatibility with existing structure)
-            job.context.add_metadata("bed_conversion", {
-                "batch_result": batch_result,  # Single aggregated result
-                "batch_size": batch_size,
-                "sample_id": sample_id,
-                "batch_id": batch_id,
-                "files_processed": batch_result.get("files_processed", batch_size),
-                "total_files": batch_result.get("total_files", batch_size)
-            })
-            
-            logger.info(f"Completed bed conversion batch processing: {batch_size} files for sample '{sample_id}'")
-            logger.info(f"Files successfully processed: {batch_result.get('files_processed', batch_size)}/{batch_result.get('total_files', batch_size)}")
-            
+            job.context.add_metadata(
+                "bed_conversion",
+                {
+                    "batch_result": batch_result,  # Single aggregated result
+                    "batch_size": batch_size,
+                    "sample_id": sample_id,
+                    "batch_id": batch_id,
+                    "files_processed": batch_result.get("files_processed", batch_size),
+                    "total_files": batch_result.get("total_files", batch_size),
+                },
+            )
+
+            logger.info(
+                f"Completed bed conversion batch processing: {batch_size} files for sample '{sample_id}'"
+            )
+            logger.info(
+                f"Files successfully processed: {batch_result.get('files_processed', batch_size)}/{batch_result.get('total_files', batch_size)}"
+            )
+
             if batch_result.get("error_message"):
                 if suppress_expected:
                     logger.warning(
@@ -682,9 +719,13 @@ def bed_conversion_handler(job, work_dir=None, reference=None):
                     logger.error(
                         f"Batch processing completed with errors: {batch_result['error_message']}"
                     )
-                    job.context.add_error("bed_conversion", batch_result["error_message"])
+                    job.context.add_error(
+                        "bed_conversion", batch_result["error_message"]
+                    )
             else:
-                logger.info("Batch processing completed successfully with aggregated bed conversion")
+                logger.info(
+                    "Batch processing completed successfully with aggregated bed conversion"
+                )
                 job.context.add_result(
                     "bed_conversion",
                     {
@@ -693,15 +734,17 @@ def bed_conversion_handler(job, work_dir=None, reference=None):
                         "analysis_time": batch_result.get("analysis_timestamp", 0),
                         "parquet_path": batch_result.get("parquet_path", ""),
                         "processing_steps": batch_result.get("processing_steps", []),
-                        "files_processed": batch_result.get("files_processed", batch_size),
+                        "files_processed": batch_result.get(
+                            "files_processed", batch_size
+                        ),
                         "total_files": batch_result.get("total_files", batch_size),
                         "matkit_cpg_mode": cpg_mode,
                         "reference_fasta": ref_fasta,
                     },
                 )
-            
+
             return
-            
+
         else:
             # Single file processing (backward compatibility)
             bam_path = job.context.filepath
@@ -743,7 +786,9 @@ def bed_conversion_handler(job, work_dir=None, reference=None):
 
             # Store results in job context
             job.context.add_metadata("bed_conversion", bed_result.results)
-            job.context.add_metadata("bed_processing_steps", bed_result.processing_steps)
+            job.context.add_metadata(
+                "bed_processing_steps", bed_result.processing_steps
+            )
 
             if bed_result.error_message:
                 if suppress_expected:
@@ -782,7 +827,9 @@ def bed_conversion_handler(job, work_dir=None, reference=None):
                 )
                 logger.info(f"Sample ID: {bed_result.sample_id}")
                 logger.info(f"Parquet file: {bed_result.parquet_path}")
-                logger.debug(f"Processing steps: {', '.join(bed_result.processing_steps)}")
+                logger.debug(
+                    f"Processing steps: {', '.join(bed_result.processing_steps)}"
+                )
 
     except Exception as e:
         suppress_expected = _is_fail_only_expected(job)

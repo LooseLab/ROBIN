@@ -23,9 +23,9 @@ from robin.minknow.run import (
 )
 from robin.minknow.stream_monitor import acquire_stream_monitor
 from robin.minknow.toml_config import load_minknow_toml
+from robin.minknow.watch import process_auto_watch, watch_active_runs
 from robin.minknow.workflow_refs import load_workflow_config_for_refs
 from robin.workflow_config import load_workflow_toml
-from robin.minknow.watch import process_auto_watch, watch_active_runs
 
 
 @click.group()
@@ -265,7 +265,10 @@ def models(
     use_local_token: Optional[bool],
 ) -> None:
     """List basecall simplex and modified models installed on a MinKNOW host."""
-    from robin.minknow.model_resolve import recommended_cpg_modified_model, score_simplex_model
+    from robin.minknow.model_resolve import (
+        recommended_cpg_modified_model,
+        score_simplex_model,
+    )
 
     auth = build_auth_config(
         host,
@@ -425,7 +428,9 @@ def start(
 
     resolved_host = (host or workflow_config_loaded.settings.host).strip()
     if not resolved_host:
-        raise click.ClickException("--host is required (or set [minknow].host in preset file)")
+        raise click.ClickException(
+            "--host is required (or set [minknow].host in preset file)"
+        )
 
     resolved_position = (position or preset.position or "").strip()
     if not resolved_position:
@@ -461,9 +466,7 @@ def start(
         if raw_work:
             resolved_work_directory = Path(str(raw_work)).expanduser()
     if resolved_work_directory is not None:
-        click.echo(
-            f"Readfish output dir: {resolved_work_directory / sample_id}"
-        )
+        click.echo(f"Readfish output dir: {resolved_work_directory / sample_id}")
     click.echo("Preset:")
     for line in preset.summary_lines():
         click.echo(f"  {line}")
@@ -485,7 +488,9 @@ def start(
         experiment_group=experiment_group,
         readfish=workflow_config_loaded.readfish,
         work_directory=(
-            str(resolved_work_directory) if resolved_work_directory is not None else None
+            str(resolved_work_directory)
+            if resolved_work_directory is not None
+            else None
         ),
     )
 
@@ -820,9 +825,13 @@ def stop(
     except MinKnowStopError as exc:
         raise click.ClickException(str(exc)) from exc
 
-    click.echo(f"Stop requested for {result.position} (run_id={result.protocol_run_id})")
+    click.echo(
+        f"Stop requested for {result.position} (run_id={result.protocol_run_id})"
+    )
     if result.waited:
-        click.echo(f"Protocol finished with state: {result.protocol_state or 'unknown'}")
+        click.echo(
+            f"Protocol finished with state: {result.protocol_state or 'unknown'}"
+        )
 
 
 def _watch_auto_add_paths(settings: MinKnowSettings) -> None:
@@ -870,7 +879,6 @@ def _validate_preset_models_for_start(
 ) -> None:
     """Resolve preset models against the connected host; raise on failure."""
     import grpc
-
     from minknow_api.manager import Manager
     from minknow_api.tools import protocols
 
@@ -889,9 +897,7 @@ def _validate_preset_models_for_start(
         connection = flow_position.connect()
         flow_cell = connection.device.get_flow_cell_info()
         if not getattr(flow_cell, "has_flow_cell", False):
-            raise click.ClickException(
-                f"No flow cell present in position {position}"
-            )
+            raise click.ClickException(f"No flow cell present in position {position}")
 
         product_code = (
             preset.product_code
@@ -927,8 +933,7 @@ def _validate_preset_models_for_start(
 
         if resolved_preset.basecall_simplex_model != preset.basecall_simplex_model:
             click.echo(
-                "Resolved simplex model: "
-                f"{resolved_preset.basecall_simplex_model}"
+                "Resolved simplex model: " f"{resolved_preset.basecall_simplex_model}"
             )
         if resolved_preset.modified_models != preset.modified_models:
             if resolved_preset.modified_models:

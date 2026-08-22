@@ -162,7 +162,9 @@ class RobinRunPreset:
         filtered = {key: value for key, value in kwargs.items() if value is not None}
         unknown = set(filtered) - allowed
         if unknown:
-            raise ValueError(f"Unknown preset override(s): {', '.join(sorted(unknown))}")
+            raise ValueError(
+                f"Unknown preset override(s): {', '.join(sorted(unknown))}"
+            )
         return replace(self, **filtered)
 
     def validate(self, *, check_paths: bool = False) -> list[str]:
@@ -177,16 +179,25 @@ class RobinRunPreset:
         if not self.kit:
             errors.append("kit is required")
         if self.enable_basecalling and not self.basecall_simplex_model:
-            errors.append("basecall_simplex_model is required when basecalling is enabled")
+            errors.append(
+                "basecall_simplex_model is required when basecalling is enabled"
+            )
         if self.enable_basecalling and not self.alignment_reference:
             errors.append("alignment_reference is required when basecalling is enabled")
         if self.bed_file and not self.alignment_reference:
             errors.append("bed_file requires alignment_reference")
         if self.read_until_filter and not self.effective_read_until_reference():
-            errors.append("read_until_filter requires read_until_reference or alignment_reference")
+            errors.append(
+                "read_until_filter requires read_until_reference or alignment_reference"
+            )
         if self.read_until_bed_file and not self.effective_read_until_reference():
-            errors.append("read_until_bed_file requires read_until_reference or alignment_reference")
-        if self.read_until_filter and self.read_until_filter not in {"enrich", "deplete"}:
+            errors.append(
+                "read_until_bed_file requires read_until_reference or alignment_reference"
+            )
+        if self.read_until_filter and self.read_until_filter not in {
+            "enrich",
+            "deplete",
+        }:
             errors.append("read_until_filter must be 'enrich' or 'deplete'")
         if self.adaptive_sampling_backend not in ADAPTIVE_SAMPLING_BACKENDS:
             errors.append(
@@ -332,8 +343,7 @@ class RobinRunPreset:
         elif self.readfish_adaptive_sampling_enabled():
             bed = self.effective_read_until_bed_file()
             lines.append(
-                f"Adaptive sampling (readfish): {self.read_until_filter} "
-                f"({bed})"
+                f"Adaptive sampling (readfish): {self.read_until_filter} " f"({bed})"
             )
         if self.simulation_bulk_file:
             lines.append(f"Simulated playback: {self.simulation_bulk_file}")

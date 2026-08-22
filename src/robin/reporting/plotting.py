@@ -4,23 +4,22 @@ plotting.py
 This module contains functions for creating plots used in the PDF report.
 """
 
-import pandas as pd
-import numpy as np
-import seaborn as sns
-import matplotlib.pyplot as plt
-import matplotlib.patheffects as mpath_effects
 import io
-import textwrap
-import matplotlib.font_manager as fm
+import logging
 import os
-from robin.gui import fonts
+import textwrap
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
+import matplotlib.font_manager as fm
+import matplotlib.patheffects as mpath_effects
+import matplotlib.pyplot as plt
 import natsort
-
+import numpy as np
+import pandas as pd
+import seaborn as sns
 from matplotlib import gridspec
 
-import logging
-from typing import List, Optional, Sequence, Tuple, Dict, Any
+from robin.gui import fonts
 
 logger = logging.getLogger(__name__)
 
@@ -217,7 +216,14 @@ def _apply_cnv_chromosome_axes(
     ax.spines["top"].set_visible(False)
     ax.xaxis.set_ticks_position("bottom")
     ax.yaxis.set_ticks_position("left")
-    ax.grid(True, axis="y", color=MODERN_COLORS["grid"], linestyle="--", linewidth=0.4, alpha=0.55)
+    ax.grid(
+        True,
+        axis="y",
+        color=MODERN_COLORS["grid"],
+        linestyle="--",
+        linewidth=0.4,
+        alpha=0.55,
+    )
     ax.grid(False, axis="x")
     ax.tick_params(colors=CNV_TEXT["primary"], labelsize=CNV_FONT["tick"])
 
@@ -311,11 +317,32 @@ def _add_cnv_regions_on_plot(ax, regions: List[Dict[str, Any]], y_max: float) ->
         fill_color = CNV_COLORS["gain_fill"] if is_gain else CNV_COLORS["loss_fill"]
         edge_color = CNV_COLORS["gain_edge"] if is_gain else CNV_COLORS["loss_edge"]
 
-        ax.axvspan(start_mb, end_mb, color=fill_color, alpha=0.55, zorder=0, linewidth=0)
-        ax.axvline(start_mb, color=edge_color, linestyle="--", linewidth=0.9, alpha=0.75, zorder=1)
-        ax.axvline(end_mb, color=edge_color, linestyle="--", linewidth=0.9, alpha=0.75, zorder=1)
+        ax.axvspan(
+            start_mb, end_mb, color=fill_color, alpha=0.55, zorder=0, linewidth=0
+        )
+        ax.axvline(
+            start_mb,
+            color=edge_color,
+            linestyle="--",
+            linewidth=0.9,
+            alpha=0.75,
+            zorder=1,
+        )
+        ax.axvline(
+            end_mb,
+            color=edge_color,
+            linestyle="--",
+            linewidth=0.9,
+            alpha=0.75,
+            zorder=1,
+        )
         _draw_region_bracket(
-            ax, start_mb, end_mb, y_max * 0.992, edge_color, height_frac=y_max * 0.028,
+            ax,
+            start_mb,
+            end_mb,
+            y_max * 0.992,
+            edge_color,
+            height_frac=y_max * 0.028,
         )
 
 
@@ -393,7 +420,9 @@ def _normalise_coverage_to_cnv_axis(
     return float(scale_mean_cnv) * ratio
 
 
-def _panel_label_matches_configured(label: str, configured_genes: Sequence[str]) -> bool:
+def _panel_label_matches_configured(
+    label: str, configured_genes: Sequence[str]
+) -> bool:
     """True when a panel target label matches a configured ``[cnv].genes`` symbol."""
     key = str(label).strip().casefold()
     if not key:
@@ -404,8 +433,10 @@ def _panel_label_matches_configured(label: str, configured_genes: Sequence[str])
             continue
         if key == want:
             return True
-        if key.startswith(f"{want}_") or key.startswith(f"{want}-") or key.startswith(
-            f"{want} "
+        if (
+            key.startswith(f"{want}_")
+            or key.startswith(f"{want}-")
+            or key.startswith(f"{want} ")
         ):
             return True
     return False
@@ -535,7 +566,11 @@ def _attach_normalised_coverage(
         return []
     if mean_cov is None or not np.isfinite(mean_cov) or mean_cov <= 0:
         coverage_vals = np.asarray(
-            [float(p["coverage_val"]) for p in points if p.get("coverage_val") is not None],
+            [
+                float(p["coverage_val"])
+                for p in points
+                if p.get("coverage_val") is not None
+            ],
             dtype=float,
         )
         coverage_vals = coverage_vals[np.isfinite(coverage_vals) & (coverage_vals > 0)]
@@ -572,7 +607,11 @@ def _expand_ylim_for_coverage_points(
     """Widen CNV axis limits so normalised coverage markers stay in view."""
     if not coverage_points:
         return y_min, y_max
-    ys = [float(p["y_norm"]) for p in coverage_points if np.isfinite(p.get("y_norm", np.nan))]
+    ys = [
+        float(p["y_norm"])
+        for p in coverage_points
+        if np.isfinite(p.get("y_norm", np.nan))
+    ]
     if not ys:
         return y_min, y_max
     pad = max((y_max - y_min) * 0.08, 0.15)
@@ -937,7 +976,9 @@ def _draw_region_bracket(
     )
 
 
-def _apply_cnv_axes_style(ax, *, xlabel: str, ylabel: str, title: Optional[str] = None) -> None:
+def _apply_cnv_axes_style(
+    ax, *, xlabel: str, ylabel: str, title: Optional[str] = None
+) -> None:
     """Apply consistent seaborn-inspired styling to a CNV axes."""
     _setup_cnv_fonts()
     ax.set_facecolor("white")
@@ -964,7 +1005,14 @@ def _apply_cnv_axes_style(ax, *, xlabel: str, ylabel: str, title: Optional[str] 
             fontproperties=_CNV_FONT_BOLD,
         )
     sns.despine(ax=ax, top=True, right=True)
-    ax.grid(True, axis="y", color=MODERN_COLORS["grid"], linestyle="--", linewidth=0.4, alpha=0.55)
+    ax.grid(
+        True,
+        axis="y",
+        color=MODERN_COLORS["grid"],
+        linestyle="--",
+        linewidth=0.4,
+        alpha=0.55,
+    )
     ax.grid(False, axis="x")
     ax.tick_params(colors=CNV_TEXT["primary"], labelsize=CNV_FONT["tick"])
 
@@ -1011,7 +1059,14 @@ def _apply_cnv_genome_overview_axes(
     ax.xaxis.set_ticks_position("none")
     ax.tick_params(axis="x", which="both", bottom=False, labelbottom=False)
     ax.yaxis.set_ticks_position("left")
-    ax.grid(True, axis="y", color=MODERN_COLORS["grid"], linestyle="--", linewidth=0.4, alpha=0.55)
+    ax.grid(
+        True,
+        axis="y",
+        color=MODERN_COLORS["grid"],
+        linestyle="--",
+        linewidth=0.4,
+        alpha=0.55,
+    )
     ax.grid(False, axis="x")
     ax.tick_params(axis="y", colors=CNV_TEXT["primary"], labelsize=CNV_FONT["tick"])
 
@@ -1022,14 +1077,37 @@ def _chromosome_cnv_dataframe(positions_mb, values) -> pd.DataFrame:
     )
 
 
-def _add_cnv_reference_lines(ax, mean_cnv: float, std_cnv: float, y_min: float, y_max: float) -> None:
+def _add_cnv_reference_lines(
+    ax, mean_cnv: float, std_cnv: float, y_min: float, y_max: float
+) -> None:
     """Genome-wide reference guides (mean plus optional spread)."""
-    ax.axhline(y=mean_cnv, color=CNV_COLORS["reference"], linestyle="--", linewidth=0.9, alpha=0.7, zorder=1)
+    ax.axhline(
+        y=mean_cnv,
+        color=CNV_COLORS["reference"],
+        linestyle="--",
+        linewidth=0.9,
+        alpha=0.7,
+        zorder=1,
+    )
     for offset in (std_cnv, 2 * std_cnv):
         if y_min < mean_cnv + offset <= y_max:
-            ax.axhline(y=mean_cnv + offset, color=CNV_COLORS["reference"], linestyle=":", linewidth=0.6, alpha=0.4, zorder=1)
+            ax.axhline(
+                y=mean_cnv + offset,
+                color=CNV_COLORS["reference"],
+                linestyle=":",
+                linewidth=0.6,
+                alpha=0.4,
+                zorder=1,
+            )
         if y_min <= mean_cnv - offset < y_max:
-            ax.axhline(y=mean_cnv - offset, color=CNV_COLORS["reference"], linestyle=":", linewidth=0.6, alpha=0.4, zorder=1)
+            ax.axhline(
+                y=mean_cnv - offset,
+                color=CNV_COLORS["reference"],
+                linestyle=":",
+                linewidth=0.6,
+                alpha=0.4,
+                zorder=1,
+            )
 
 
 def _log2_linear_axis_limits(
@@ -1239,18 +1317,25 @@ def _create_empty_cnv_buffer():
     """Create a minimal valid JPEG buffer for empty CNV plots."""
     try:
         plt.figure(figsize=(16, 4))
-        plt.text(0.5, 0.5, "No CNV data available", 
-                ha='center', va='center', transform=plt.gca().transAxes,
-                fontsize=14, color='gray')
+        plt.text(
+            0.5,
+            0.5,
+            "No CNV data available",
+            ha="center",
+            va="center",
+            transform=plt.gca().transAxes,
+            fontsize=14,
+            color="gray",
+        )
         plt.title("Copy Number Changes")
-        plt.axis('off')
-        
+        plt.axis("off")
+
         buf = io.BytesIO()
         fig = plt.gcf()
         plt.savefig(buf, format="jpg", dpi=300, bbox_inches="tight")
         plt.close(fig)
         buf.seek(0)
-        
+
         # Validate buffer contains data
         if buf.getvalue():
             return buf
@@ -1261,30 +1346,180 @@ def _create_empty_cnv_buffer():
         try:
             # Create a minimal 1x1 white JPEG
             from PIL import Image as PILImage
-            img = PILImage.new('RGB', (1, 1), color='white')
+
+            img = PILImage.new("RGB", (1, 1), color="white")
             buf = io.BytesIO()
-            img.save(buf, format='JPEG')
+            img.save(buf, format="JPEG")
             buf.seek(0)
             return buf
         except Exception:
             # Last resort: return a minimal valid JPEG binary directly
             # This is a valid 1x1 white JPEG
-            jpeg_bytes = bytes([
-                0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 0x4A, 0x46, 0x49, 0x46, 0x00, 0x01,
-                0x01, 0x01, 0x00, 0x48, 0x00, 0x48, 0x00, 0x00, 0xFF, 0xDB, 0x00, 0x43,
-                0x00, 0x08, 0x06, 0x06, 0x07, 0x06, 0x05, 0x08, 0x07, 0x07, 0x07, 0x09,
-                0x09, 0x08, 0x0A, 0x0C, 0x14, 0x0D, 0x0C, 0x0B, 0x0B, 0x0C, 0x19, 0x12,
-                0x13, 0x0F, 0x14, 0x1D, 0x1A, 0x1F, 0x1E, 0x1D, 0x1A, 0x1C, 0x1C, 0x20,
-                0x24, 0x2E, 0x27, 0x20, 0x22, 0x2C, 0x23, 0x1C, 0x1C, 0x28, 0x37, 0x29,
-                0x2C, 0x30, 0x31, 0x34, 0x34, 0x34, 0x1F, 0x27, 0x39, 0x3D, 0x38, 0x32,
-                0x3C, 0x2E, 0x33, 0x34, 0x32, 0xFF, 0xC0, 0x00, 0x0B, 0x08, 0x00, 0x01,
-                0x00, 0x01, 0x01, 0x01, 0x11, 0x00, 0xFF, 0xC4, 0x00, 0x14, 0x00, 0x01,
-                0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-                0x00, 0x00, 0x00, 0x08, 0xFF, 0xC4, 0x00, 0x14, 0x10, 0x01, 0x00, 0x00,
-                0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-                0x00, 0x00, 0xFF, 0xDA, 0x00, 0x08, 0x01, 0x01, 0x00, 0x00, 0x3F, 0x00,
-                0xD2, 0xCF, 0x20, 0xFF, 0xD9
-            ])
+            jpeg_bytes = bytes(
+                [
+                    0xFF,
+                    0xD8,
+                    0xFF,
+                    0xE0,
+                    0x00,
+                    0x10,
+                    0x4A,
+                    0x46,
+                    0x49,
+                    0x46,
+                    0x00,
+                    0x01,
+                    0x01,
+                    0x01,
+                    0x00,
+                    0x48,
+                    0x00,
+                    0x48,
+                    0x00,
+                    0x00,
+                    0xFF,
+                    0xDB,
+                    0x00,
+                    0x43,
+                    0x00,
+                    0x08,
+                    0x06,
+                    0x06,
+                    0x07,
+                    0x06,
+                    0x05,
+                    0x08,
+                    0x07,
+                    0x07,
+                    0x07,
+                    0x09,
+                    0x09,
+                    0x08,
+                    0x0A,
+                    0x0C,
+                    0x14,
+                    0x0D,
+                    0x0C,
+                    0x0B,
+                    0x0B,
+                    0x0C,
+                    0x19,
+                    0x12,
+                    0x13,
+                    0x0F,
+                    0x14,
+                    0x1D,
+                    0x1A,
+                    0x1F,
+                    0x1E,
+                    0x1D,
+                    0x1A,
+                    0x1C,
+                    0x1C,
+                    0x20,
+                    0x24,
+                    0x2E,
+                    0x27,
+                    0x20,
+                    0x22,
+                    0x2C,
+                    0x23,
+                    0x1C,
+                    0x1C,
+                    0x28,
+                    0x37,
+                    0x29,
+                    0x2C,
+                    0x30,
+                    0x31,
+                    0x34,
+                    0x34,
+                    0x34,
+                    0x1F,
+                    0x27,
+                    0x39,
+                    0x3D,
+                    0x38,
+                    0x32,
+                    0x3C,
+                    0x2E,
+                    0x33,
+                    0x34,
+                    0x32,
+                    0xFF,
+                    0xC0,
+                    0x00,
+                    0x0B,
+                    0x08,
+                    0x00,
+                    0x01,
+                    0x00,
+                    0x01,
+                    0x01,
+                    0x01,
+                    0x11,
+                    0x00,
+                    0xFF,
+                    0xC4,
+                    0x00,
+                    0x14,
+                    0x00,
+                    0x01,
+                    0x00,
+                    0x00,
+                    0x00,
+                    0x00,
+                    0x00,
+                    0x00,
+                    0x00,
+                    0x00,
+                    0x00,
+                    0x00,
+                    0x00,
+                    0x00,
+                    0x00,
+                    0x00,
+                    0x00,
+                    0x08,
+                    0xFF,
+                    0xC4,
+                    0x00,
+                    0x14,
+                    0x10,
+                    0x01,
+                    0x00,
+                    0x00,
+                    0x00,
+                    0x00,
+                    0x00,
+                    0x00,
+                    0x00,
+                    0x00,
+                    0x00,
+                    0x00,
+                    0x00,
+                    0x00,
+                    0x00,
+                    0x00,
+                    0x00,
+                    0x00,
+                    0xFF,
+                    0xDA,
+                    0x00,
+                    0x08,
+                    0x01,
+                    0x01,
+                    0x00,
+                    0x00,
+                    0x3F,
+                    0x00,
+                    0xD2,
+                    0xCF,
+                    0x20,
+                    0xFF,
+                    0xD9,
+                ]
+            )
             buf = io.BytesIO(jpeg_bytes)
             buf.seek(0)
             return buf
@@ -1418,9 +1653,7 @@ def create_CNV_plot(
             y_max = max(mean_value + (4 * std_value), mean_value * 1.35, 2.5)
 
         width = CNV_GENOME_LANDSCAPE_FIG_WIDTH
-        fig, ax = plt.subplots(
-            figsize=(width, CNV_GENOME_LANDSCAPE_FIG_HEIGHT)
-        )
+        fig, ax = plt.subplots(figsize=(width, CNV_GENOME_LANDSCAPE_FIG_HEIGHT))
         genome_panel_points = _collect_genome_significant_panel_points(
             panel_genes_df,
             cnv_source,
@@ -1509,7 +1742,7 @@ def create_CNV_plot(
             return _create_empty_cnv_buffer()
 
         buf_data = buf.getvalue()
-        if len(buf_data) < 2 or buf_data[:2] != b'\xff\xd8':
+        if len(buf_data) < 2 or buf_data[:2] != b"\xff\xd8":
             logger.warning("Invalid JPEG data for CNV plot")
             return _create_empty_cnv_buffer()
 
@@ -1517,7 +1750,7 @@ def create_CNV_plot(
         return buf
     except Exception as e:
         logger.error(f"Error creating CNV plot: {str(e)}")
-        plt.close('all')
+        plt.close("all")
         return _create_empty_cnv_buffer()
 
 
@@ -1561,7 +1794,8 @@ def cnv_genome_landscape_image_size_pt(
     caption_reserve_pt: float = CNV_GENOME_LANDSCAPE_CAPTION_RESERVE_PT,
 ) -> tuple[float, float]:
     """Return (width, height) in points for the genome-wide CNV plot on A4 landscape."""
-    from reportlab.lib.pagesizes import A4, landscape as rl_landscape
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.pagesizes import landscape as rl_landscape
 
     page_w, page_h = rl_landscape(A4)
     frame_w = page_w - left_margin_pt - right_margin_pt - frame_padding_pt
@@ -1799,7 +2033,11 @@ def create_CNV_plot_per_chromosome(
                 "falling back to absolute ploidy"
             )
 
-        cnv_source = normalized_cnv if plot_log2 else (result.cnv if hasattr(result, "cnv") else None)
+        cnv_source = (
+            normalized_cnv
+            if plot_log2
+            else (result.cnv if hasattr(result, "cnv") else None)
+        )
         if not cnv_source:
             logger.warning("No CNV data available for per-chromosome plotting")
             return plots
@@ -1846,11 +2084,13 @@ def create_CNV_plot_per_chromosome(
                 continue
             if plot_log2:
                 y_min, y_max, _, mean_cnv, std_cnv = _compute_log2_y_limits(
-                    finite_values, [],
+                    finite_values,
+                    [],
                 )
             else:
                 y_min, y_max, _, mean_cnv, std_cnv = _compute_cnv_y_limits(
-                    finite_values, [],
+                    finite_values,
+                    [],
                 )
                 y_min = 0.0
             regions = (significant_regions or {}).get(contig, [])
@@ -1917,7 +2157,9 @@ def create_CNV_plot_per_chromosome(
             else:
                 _add_cnv_ploidy_reference_lines(ax, y_max, x_max_mb)
             _scatter_cnv_chromosome_points(
-                ax, cnv_df, color_by_state=plot_log2,
+                ax,
+                cnv_df,
+                color_by_state=plot_log2,
             )
             _apply_cnv_chromosome_axes(
                 ax,
@@ -1963,20 +2205,24 @@ def create_CNV_plot_per_chromosome(
                     continue
 
                 buf_data = buf.getvalue()
-                if len(buf_data) < 2 or buf_data[:2] != b'\xff\xd8':
-                    logger.warning(f"Invalid JPEG data for chromosome {contig} CNV plot")
+                if len(buf_data) < 2 or buf_data[:2] != b"\xff\xd8":
+                    logger.warning(
+                        f"Invalid JPEG data for chromosome {contig} CNV plot"
+                    )
                     continue
 
                 buf.seek(0)
                 plots.append((contig, buf))
             except Exception as e:
-                logger.error(f"Error creating CNV plot for chromosome {contig}: {str(e)}")
-                plt.close('all')
+                logger.error(
+                    f"Error creating CNV plot for chromosome {contig}: {str(e)}"
+                )
+                plt.close("all")
                 continue
 
     except Exception as e:
         logger.error(f"Error in create_CNV_plot_per_chromosome: {str(e)}")
-        plt.close('all')
+        plt.close("all")
 
     return plots
 
@@ -2007,7 +2253,11 @@ def classification_plot(df, title, threshold):
         "probes",
     }
     df_melted = df_melted[
-        ~df_melted["Condition"].astype(str).str.strip().str.lower().isin(meta_conditions)
+        ~df_melted["Condition"]
+        .astype(str)
+        .str.strip()
+        .str.lower()
+        .isin(meta_conditions)
     ]
 
     # Filter conditions that cross the threshold

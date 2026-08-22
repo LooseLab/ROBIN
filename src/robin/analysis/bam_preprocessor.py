@@ -2,25 +2,26 @@
 
 Requires Python 3.12+ (slots=True, str.removeprefix, PEP 709 comprehensions).
 """
+
 from __future__ import annotations
 
+import hashlib
 import os
+import re
 import sys
 import time
-import re
-import hashlib
 from dataclasses import dataclass, field
-from typing import Dict, Any, Optional, List, Tuple
 from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
 
 if sys.version_info < (3, 12):
     raise RuntimeError("robin bam_preprocessor requires Python 3.12 or newer")
 
 import pysam
 from dateutil import parser
+
 from robin.analysis.master_csv_manager import MasterCSVManager
 from robin.logging_config import get_job_logger
-
 
 # ============================================================================
 # CONSTANTS AND CONFIGURATION
@@ -53,7 +54,9 @@ except ValueError:
 
 # When True, BAMs with >50k reads are processed (downstream batching uses batch size 1 per file).
 # Set ROBIN_PROCESS_LARGE_BAMS=1 to enable.
-_PROCESS_LARGE_BAMS_INDIVIDUALLY = os.getenv("ROBIN_PROCESS_LARGE_BAMS", "0").strip().lower() in ("1", "true", "yes", "on")
+_PROCESS_LARGE_BAMS_INDIVIDUALLY = os.getenv(
+    "ROBIN_PROCESS_LARGE_BAMS", "0"
+).strip().lower() in ("1", "true", "yes", "on")
 
 # Constants for MGMT locus (chr10:129,466,536-129,467,536)
 _MGMT_CHR = "chr10"
@@ -99,7 +102,9 @@ def _persist_supplementary_read_ids(
     sample_id = metadata.extracted_data.get("sample_id", "unknown")
     supp_dir = os.path.join(work_dir, sample_id, "_supplementary_read_ids")
     os.makedirs(supp_dir, exist_ok=True)
-    path_hash = hashlib.sha256(os.path.abspath(bam_path).encode("utf-8")).hexdigest()[:16]
+    path_hash = hashlib.sha256(os.path.abspath(bam_path).encode("utf-8")).hexdigest()[
+        :16
+    ]
     supp_path = os.path.join(
         supp_dir,
         f"{os.path.basename(bam_path)}.{path_hash}.txt",
@@ -411,19 +416,19 @@ def process_bam_reads(bam_file: str) -> Optional[Dict[str, Any]]:
                 # A read has supplementary alignments if:
                 # 1. This alignment itself is supplementary (is_supplementary=True), OR
                 # 2. ANY alignment (primary or secondary) has an SA tag (indicating supplementary alignments exist)
-                # 
+                #
                 # We check ALL reads (not just primaries) to ensure we catch every read with supplementary mappings,
                 # even if the SA tag is only present on certain alignment records
                 has_supplementary_alignments = False
                 if is_supplementary:
                     supplementary_reads += 1
                     has_supplementary_alignments = True
-                
+
                 # Also check SA tag on ALL reads (primary, secondary, supplementary) to catch any we might miss
                 # Some BAM files may have SA tag on different records than expected
                 if read.has_tag("SA"):
                     has_supplementary_alignments = True
-                
+
                 if has_supplementary_alignments:
                     reads_with_supplementary.add(query_name)
 
@@ -718,7 +723,7 @@ def _send_alignment_warning_notification(
 ) -> None:
     """
     Send an alignment warning notification to the GUI.
-    
+
     Args:
         warning_msg: The warning message to display
         sample_id: Sample ID for context
@@ -727,7 +732,7 @@ def _send_alignment_warning_notification(
     try:
         from robin.gui.app import send_gui_update
         from robin.gui_launcher import UpdateType
-        
+
         send_gui_update(
             UpdateType.WARNING_NOTIFICATION,
             {
@@ -848,7 +853,7 @@ def bam_preprocessing_handler(job, center: str = None):
             metadata.extracted_data["modbase_warning_level"] = warning_level
             job.context.add_metadata("modbase_warning", modbase_warning)
             job.context.add_metadata("modbase_warning_level", warning_level)
-        
+
         if total_reads > 0:
             # Check if BAM file has no mapped reads (no alignment data)
             if mapped_reads == 0:
@@ -885,8 +890,7 @@ def bam_preprocessing_handler(job, center: str = None):
         elif total_reads == 0:
             # Edge case: BAM file has no reads at all
             warning_msg = (
-                f"BAM file contains no reads. "
-                f"This file may be empty or corrupted."
+                f"BAM file contains no reads. " f"This file may be empty or corrupted."
             )
             logger.warning(f"WARNING: {warning_msg}")
             metadata.extracted_data["alignment_warning"] = warning_msg
@@ -901,19 +905,23 @@ def bam_preprocessing_handler(job, center: str = None):
         job.context.add_metadata("file_size", metadata.file_size)
         job.context.add_metadata("creation_time", metadata.creation_time)
         job.context.add_metadata("processing_steps", metadata.processing_steps)
-        
+
         # Store center information
         if center:
             job.context.add_metadata("center", center)
             logger.info(f"Center set to: {center}")
-        
+
         # Preserve target_panel metadata from job context (set by file classifier)
         existing_target_panel = job.context.metadata.get("target_panel")
         if existing_target_panel:
-            logger.info(f"Preserving target panel from job context: {existing_target_panel}")
+            logger.info(
+                f"Preserving target panel from job context: {existing_target_panel}"
+            )
         else:
-            logger.warning("No target_panel found in job context - this may cause panel assignment issues")
-        
+            logger.warning(
+                "No target_panel found in job context - this may cause panel assignment issues"
+            )
+
         # Preserve reference metadata from job context (set by file classifier)
         existing_reference = job.context.metadata.get("reference")
         if existing_reference:
@@ -928,7 +936,7 @@ def bam_preprocessing_handler(job, center: str = None):
             )
         except Exception:
             total_reads = 0
-        
+
         if total_reads > 50000:
             if _PROCESS_LARGE_BAMS_INDIVIDUALLY:
                 # Process this BAM; downstream batching will pass it to workers as a single-file batch
@@ -962,9 +970,7 @@ def bam_preprocessing_handler(job, center: str = None):
 
         # Persist the complete ID set per BAM to avoid retaining large lists in memory.
         try:
-            work_dir = job.context.metadata.get(
-                "work_dir", os.path.dirname(bam_path)
-            )
+            work_dir = job.context.metadata.get("work_dir", os.path.dirname(bam_path))
             _persist_supplementary_read_ids(metadata, bam_path, work_dir)
         except Exception:
             # Keep the complete in-memory list as a safe fallback.
@@ -1003,27 +1009,33 @@ def bam_preprocessing_handler(job, center: str = None):
                     "has_mgmt_reads",
                     "mgmt_read_count",
                 )
-                bam_stats = {key: metadata.extracted_data.get(key, 0) for key in _bam_stat_keys}
+                bam_stats = {
+                    key: metadata.extracted_data.get(key, 0) for key in _bam_stat_keys
+                }
 
                 # Update master.csv
                 csv_manager.update_master_csv(
                     sample_id, bam_stats, metadata.extracted_data
                 )
-                
+
                 # Update analysis panel in master.csv (preserve from job context)
                 existing_target_panel = job.context.metadata.get("target_panel")
                 if existing_target_panel:
                     csv_manager.update_analysis_panel(sample_id, existing_target_panel)
-                    logger.info(f"Updated master.csv with analysis panel '{existing_target_panel}' for sample {sample_id}")
+                    logger.info(
+                        f"Updated master.csv with analysis panel '{existing_target_panel}' for sample {sample_id}"
+                    )
                 else:
-                    logger.warning(f"No target_panel found in job context for sample {sample_id} - analysis_panel not set in master.csv")
+                    logger.warning(
+                        f"No target_panel found in job context for sample {sample_id} - analysis_panel not set in master.csv"
+                    )
 
             except Exception as e:
                 logger.warning(f"Could not update master.csv for {sample_id}: {e}")
 
         # Step 5: Add result to context
         sample_id = metadata.extracted_data.get("sample_id", "unknown")
-        
+
         job.context.add_result(
             "preprocessing",
             {

@@ -87,7 +87,9 @@ def panel_source_available(panel: str) -> bool:
     """True if ``{panel}_panel_source.bed`` exists in ``robin.resources``."""
     import importlib.resources as importlib_resources
 
-    res = importlib_resources.files("robin.resources").joinpath(panel_source_filename(panel))
+    res = importlib_resources.files("robin.resources").joinpath(
+        panel_source_filename(panel)
+    )
     try:
         return res.is_file()
     except Exception:
@@ -133,7 +135,9 @@ def reference_looks_like_url(reference: str) -> bool:
     return ref.startswith("http://") or ref.startswith("https://")
 
 
-def _download_url(url: str, target_path: Path, *, label: str = "Downloading reference") -> None:
+def _download_url(
+    url: str, target_path: Path, *, label: str = "Downloading reference"
+) -> None:
     req = urllib.request.Request(
         url,
         headers={"User-Agent": "robin-sequencing-files/1.0"},
@@ -156,7 +160,9 @@ def _download_url(url: str, target_path: Path, *, label: str = "Downloading refe
 
         downloaded = 0
         if click is not None and total and total > 0:
-            with click.progressbar(length=total, label=label, show_eta=True, show_percent=True) as bar:
+            with click.progressbar(
+                length=total, label=label, show_eta=True, show_percent=True
+            ) as bar:
                 with target_path.open("wb") as f:
                     while True:
                         chunk = resp.read(chunk_size)

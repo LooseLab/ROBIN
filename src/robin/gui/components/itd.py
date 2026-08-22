@@ -15,7 +15,7 @@ from robin.analysis.itd_work import (
     normalize_itd_events_df,
 )
 from robin.gui.components.snp import navigate_igv_to_snp
-from robin.gui.theme import styled_table, client_timer
+from robin.gui.theme import client_timer, styled_table
 
 logger = logging.getLogger(__name__)
 
@@ -118,9 +118,12 @@ def _format_event_rows(df: pd.DataFrame) -> List[Dict[str, Any]]:
 def _add_table_search(table: Any, placeholder: str) -> None:
     try:
         with table.add_slot("top-right"):
-            with ui.input(placeholder=placeholder).props(
-                "type=search dense clearable"
-            ).bind_value(table, "filter").add_slot("append"):
+            with (
+                ui.input(placeholder=placeholder)
+                .props("type=search dense clearable")
+                .bind_value(table, "filter")
+                .add_slot("append")
+            ):
                 ui.icon("search")
     except Exception:
         pass
@@ -234,9 +237,7 @@ def add_itd_section(
         "(else local hotspot depth) and is the VAF denominator."
     )
     if include_igv:
-        blurb += (
-            " Use View in IGV (or click a called-event row) to inspect the locus."
-        )
+        blurb += " Use View in IGV (or click a called-event row) to inspect the locus."
 
     with ui.element("div").classes("classification-insight-shell w-full min-w-0"):
         ui.label("ITDs / insertions").classes(
@@ -281,10 +282,7 @@ def add_itd_section(
                 if summary is not None and not summary.empty:
                     ui.label("Gene summary").classes("text-subtitle2 q-mt-sm")
                     view = summary
-                    if (
-                        not show_empty.value
-                        and "n_events" in summary.columns
-                    ):
+                    if not show_empty.value and "n_events" in summary.columns:
                         view = summary[summary["n_events"] > 0]
                     if view.empty:
                         ui.label(
@@ -313,7 +311,9 @@ def add_itd_section(
                         c for c in ("support", "vaf", "gene") if c in events.columns
                     ]
                     ordered = (
-                        events.sort_values(sort_cols, ascending=[False] * len(sort_cols))
+                        events.sort_values(
+                            sort_cols, ascending=[False] * len(sort_cols)
+                        )
                         if sort_cols
                         else events
                     )

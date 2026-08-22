@@ -26,8 +26,8 @@ except Exception:
     pass
 
 try:
-    from .mgmt_analysis import mgmt_handler  # noqa: F401
     from .mgmt_analysis import extract_mgmt_site_rows_from_bed  # noqa: F401
+    from .mgmt_analysis import mgmt_handler  # noqa: F401
 
     __all__.extend(["mgmt_handler", "extract_mgmt_site_rows_from_bed"])
 except Exception:
@@ -99,8 +99,8 @@ except Exception:
 try:
     from .methylation_wrapper import (  # noqa: F401
         figure_is_renderable,
-        locus_figure,
         load_figure_pickle,
+        locus_figure,
         save_figure_pickle,
         try_load_figure_pickle,
     )

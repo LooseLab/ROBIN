@@ -1,35 +1,38 @@
 """
 Modkit/matkit utilities for BAM methylation. Requires Python 3.12+.
 """
+
 from __future__ import annotations
 
-import warnings
 import sys
+import warnings
+
 if sys.version_info < (3, 12):
     raise RuntimeError("robin matkit utilities require Python 3.12 or newer")
 
-from typing import List, Optional
 import bisect
 import gc
-import os
+import json
 import logging
+import os
+import pickle
 import subprocess
 import time
-import pickle
 from datetime import datetime
 from pathlib import Path
+from typing import List, Optional
+
 import pandas as pd
 import polars as pl
 import pyarrow as pa
 import pyarrow.parquet as pq
-
 import pyranges as pr
 import pysam
 from alive_progress import alive_bar
-from robin.analysis.utilities.ReadBam import ReadBam
-from robin.analysis.utilities.mnp_flex import APIClient as MnpFlexClient
+
 from robin import resources
-import json
+from robin.analysis.utilities.mnp_flex import APIClient as MnpFlexClient
+from robin.analysis.utilities.ReadBam import ReadBam
 
 # Suppress pkg_resources deprecation warnings from sorted_nearest
 warnings.filterwarnings(
@@ -54,16 +57,18 @@ ESSENTIAL_COLS = [
 
 # Per-BAM parquet schema: string columns stored as binary to avoid UTF-8 validation on read
 _PARQUET_STR_COLS = ("chrom", "mod_code", "strand")
-PARQUET_SCHEMA_BINARY = pa.schema([
-    ("chrom", pa.binary()),
-    ("chromStart", pa.int64()),
-    ("mod_code", pa.binary()),
-    ("strand", pa.binary()),
-    ("valid_cov", pa.uint32()),
-    ("percent_modified", pa.float32()),
-    ("n_mod", pa.uint32()),
-    ("n_canonical", pa.uint32()),
-])
+PARQUET_SCHEMA_BINARY = pa.schema(
+    [
+        ("chrom", pa.binary()),
+        ("chromStart", pa.int64()),
+        ("mod_code", pa.binary()),
+        ("strand", pa.binary()),
+        ("valid_cov", pa.uint32()),
+        ("percent_modified", pa.float32()),
+        ("n_mod", pa.uint32()),
+        ("n_canonical", pa.uint32()),
+    ]
+)
 
 # Minimum primary alignment QS (BAM tag "qs") to include a read in methylation analysis.
 # Same rule as fusion_work: only process alignments for reads whose primary has qs >= this.
@@ -150,39 +155,39 @@ def _read_parquet_robust(path: str, columns: list[str]):
 def _ensure_fasta_index(ref_fasta: str) -> None:
     """
     Ensure the reference FASTA file has an index (.fai file).
-    
+
     This function checks if the FASTA file has a corresponding .fai index file.
     If the index is missing or older than the FASTA file, it creates/updates it
     using pysam.faidx.
-    
+
     Args:
         ref_fasta: Path to the reference FASTA file
-        
+
     Raises:
         FileNotFoundError: If the reference FASTA file doesn't exist
         RuntimeError: If the index creation fails
     """
     if not ref_fasta or not os.path.exists(ref_fasta):
         raise FileNotFoundError(f"Reference FASTA file not found: {ref_fasta}")
-    
+
     fai_file = f"{ref_fasta}.fai"
-    
+
     # Check if index exists and is up-to-date
     if os.path.exists(fai_file):
         # Check if index is newer than the FASTA file
         fai_mtime = os.path.getmtime(fai_file)
         fa_mtime = os.path.getmtime(ref_fasta)
-        
+
         if fai_mtime >= fa_mtime:
             # Index exists and is up-to-date, no action needed
             return
-    
+
     # Create or update the index using pysam
     print(f"Creating FASTA index for {ref_fasta}")
     try:
         # pysam.faidx creates the .fai index file
         pysam.faidx(ref_fasta)
-        
+
         # Verify the index was created
         if not os.path.exists(fai_file):
             error_msg = (
@@ -191,9 +196,9 @@ def _ensure_fasta_index(ref_fasta: str) -> None:
             )
             print(f"ERROR: {error_msg}")
             raise RuntimeError(error_msg)
-        
+
         print(f"Successfully created FASTA index: {fai_file}")
-        
+
     except Exception as e:
         error_msg = (
             f"Failed to create FASTA index for {ref_fasta}. "
@@ -257,7 +262,9 @@ def merge_modkit_files(
         if os.path.exists(existing_file):
             try:
                 # Read existing metadata
-                metadata_file = existing_file.removesuffix(".parquet") + "_metadata.json"
+                metadata_file = (
+                    existing_file.removesuffix(".parquet") + "_metadata.json"
+                )
                 if os.path.exists(metadata_file):
                     with open(metadata_file, "r") as f:
                         metadata = json.load(f)
@@ -300,10 +307,16 @@ def merge_modkit_files(
                 )
                 # Map to expected column names (handle chr/start/end) – dict comp inlined in 3.12
                 col_map = {"chr": "Chromosome", "start": "Start", "end": "End"}
-                rename = {c: col_map[c.lower()] for c in bed_df.columns if c.lower() in col_map}
+                rename = {
+                    c: col_map[c.lower()]
+                    for c in bed_df.columns
+                    if c.lower() in col_map
+                }
                 bed_df = bed_df.rename(columns=rename)
                 bed_df["Start"] = bed_df["Start"].astype(int) - 1  # 1-based -> 0-based
-                bed_df["End"] = bed_df["End"].astype(int)  # 1-based end inclusive -> 0-based exclusive
+                bed_df["End"] = bed_df["End"].astype(
+                    int
+                )  # 1-based end inclusive -> 0-based exclusive
             else:
                 bed_df = pd.read_csv(
                     filter_bed_file,
@@ -351,7 +364,9 @@ def merge_modkit_files(
                         sep=r"\s+",
                         header=None,
                         names=full_cols,
-                        dtype={c: str for c in ["chrom", "mod_code", "strand", "color"]},
+                        dtype={
+                            c: str for c in ["chrom", "mod_code", "strand", "color"]
+                        },
                     )
                     missing_cols = set(full_cols) - set(df.columns)
                     if missing_cols:
@@ -405,7 +420,9 @@ def merge_modkit_files(
                 if c in pl_df.columns:
                     pl_df = pl_df.with_columns(pl.col(c).cast(pl.UInt32, strict=False))
             if "percent_modified" in pl_df.columns:
-                pl_df = pl_df.with_columns(pl.col("percent_modified").cast(pl.Float32, strict=False))
+                pl_df = pl_df.with_columns(
+                    pl.col("percent_modified").cast(pl.Float32, strict=False)
+                )
             pl_df.write_parquet(output_file)
 
             # Save metadata with cumulative BAM file count
@@ -437,7 +454,9 @@ def merge_modkit_files(
                 if c in pl_df.columns:
                     pl_df = pl_df.with_columns(pl.col(c).cast(pl.UInt32, strict=False))
             if "percent_modified" in pl_df.columns:
-                pl_df = pl_df.with_columns(pl.col("percent_modified").cast(pl.Float32, strict=False))
+                pl_df = pl_df.with_columns(
+                    pl.col("percent_modified").cast(pl.Float32, strict=False)
+                )
             pl_df.write_parquet(output_file)
             metadata = {
                 "bam_file_count": cumulative_bam_file_count,
@@ -488,14 +507,22 @@ def merge_modkit_files(
         # Cast count/float columns to canonical types so concat never sees Int64 vs UInt32.
         for c in ["valid_cov", "n_mod", "n_canonical"]:
             if c in existing_df.columns:
-                existing_df = existing_df.with_columns(pl.col(c).cast(pl.UInt32, strict=False))
+                existing_df = existing_df.with_columns(
+                    pl.col(c).cast(pl.UInt32, strict=False)
+                )
             if c in pl_new_df.columns:
-                pl_new_df = pl_new_df.with_columns(pl.col(c).cast(pl.UInt32, strict=False))
+                pl_new_df = pl_new_df.with_columns(
+                    pl.col(c).cast(pl.UInt32, strict=False)
+                )
         for c in ["percent_modified"]:
             if c in existing_df.columns:
-                existing_df = existing_df.with_columns(pl.col(c).cast(pl.Float32, strict=False))
+                existing_df = existing_df.with_columns(
+                    pl.col(c).cast(pl.Float32, strict=False)
+                )
             if c in pl_new_df.columns:
-                pl_new_df = pl_new_df.with_columns(pl.col(c).cast(pl.Float32, strict=False))
+                pl_new_df = pl_new_df.with_columns(
+                    pl.col(c).cast(pl.Float32, strict=False)
+                )
 
         # Combine existing and new data
         combined = pl.concat([existing_df, pl_new_df])
@@ -690,9 +717,7 @@ def merge_modkit_files(
                 logging.info("Continuing with processing despite MNP-FLEX error")
                 # Don't re-raise the exception - allow processing to continue
 
-        logging.debug(
-            f"Merged with optimized Polars and cache saved to: {output_file}"
-        )
+        logging.debug(f"Merged with optimized Polars and cache saved to: {output_file}")
 
     except Exception as e:
         logging.error(f"Error in merge_modkit_files: {str(e)}")
@@ -814,7 +839,10 @@ def cpg_cytosine_site(
     try:
         if ref_fasta_obj.fetch(chrom, refpos, refpos + 2).upper() == "CG":
             return refpos, PLUS_STRAND
-        if refpos >= 1 and ref_fasta_obj.fetch(chrom, refpos - 1, refpos + 1).upper() == "CG":
+        if (
+            refpos >= 1
+            and ref_fasta_obj.fetch(chrom, refpos - 1, refpos + 1).upper() == "CG"
+        ):
             return refpos, MINUS_STRAND
     except ValueError:
         return None
@@ -1527,7 +1555,6 @@ def process_bam_counts_improved(
     # This ensures we only output sites that modkit would output
     mod_sites = set()
 
-
     # Load reference genome if provided for validation. Reuse cached handle when the same
     # path is used across calls (e.g. one ref for many BAMs) to avoid re-indexing/re-opening.
     ref_fasta_obj = None
@@ -1601,7 +1628,9 @@ def process_bam_counts_improved(
 
             # Collect per-site max probability per mod_code for this read.
             # Avoids allocating lists of probs when we only ever use max(probs).
-            read_sites: dict[tuple[int, str], dict[str, int]] = {}  # (refpos, strand) -> {mod_code: max_prob_255}
+            read_sites: dict[tuple[int, str], dict[str, int]] = (
+                {}
+            )  # (refpos, strand) -> {mod_code: max_prob_255}
             seen_sites: set[tuple[int, str]] = set()
             ref_map_get = ref_map.get
             read_sites_get = read_sites.get
@@ -1694,7 +1723,9 @@ def process_bam_counts_improved(
                     if local_max_prob_h > c[COUNT_IDX_MAX_PROB_H]:
                         c[COUNT_IDX_MAX_PROB_H] = local_max_prob_h
 
-                    max_prob = max(canonical_prob_255, local_max_prob_m, local_max_prob_h)
+                    max_prob = max(
+                        canonical_prob_255, local_max_prob_m, local_max_prob_h
+                    )
 
                     if max_prob >= thresh:
                         if canonical_prob_255 == max_prob:
@@ -1722,7 +1753,9 @@ def process_bam_counts_improved(
                     if mod_probs is not None:
                         for mod_code, mod_prob in mod_probs.items():
                             if mod_code in ["C", "m", "h"]:
-                                debug_data[debug_key]["probs"][mod_code].append(mod_prob)
+                                debug_data[debug_key]["probs"][mod_code].append(
+                                    mod_prob
+                                )
 
                     debug_data[debug_key]["classification"] = classification
         else:
@@ -1811,7 +1844,6 @@ def process_bam_counts_improved(
                         c[COUNT_IDX_OTHER_MOD] += 1  # Other modification call
                     else:
                         c[COUNT_IDX_FAIL] += 1  # Failed call (0 < prob < threshold)
-
 
     bam.close()
     # Only close the ref handle when we opened it in this call and it is not in the cache.

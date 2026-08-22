@@ -22,12 +22,17 @@ def create_change_password_page(
     user_id = launcher._get_current_user_id()
     username = launcher._get_current_username() or ""
     forced = bool(
-        user_id is not None and launcher.security_store.user_must_change_password(user_id)
+        user_id is not None
+        and launcher.security_store.user_must_change_password(user_id)
     )
     if voluntary and forced:
         voluntary = False
 
-    safe_target = redirect_to if redirect_to and redirect_to not in ("/login", "/change-password") else "/"
+    safe_target = (
+        redirect_to
+        if redirect_to and redirect_to not in ("/login", "/change-password")
+        else "/"
+    )
 
     with theme.frame(
         "R.O.B.I.N - Change password",
@@ -36,7 +41,9 @@ def create_change_password_page(
         center=launcher.center,
         setup_notifications=launcher._setup_notification_system,
     ):
-        with ui.element("div").classes("w-full min-w-0").props("id=change-password-page"):
+        with (
+            ui.element("div").classes("w-full min-w-0").props("id=change-password-page")
+        ):
             with ui.column().classes(
                 "w-full max-w-md mx-auto items-center justify-center min-h-[60vh] p-4 gap-3"
             ):
@@ -65,28 +72,39 @@ def create_change_password_page(
                                 current_input = (
                                     ui.input("Current password")
                                     .classes("w-full")
-                                    .props("outlined dense type=password autocomplete=current-password")
+                                    .props(
+                                        "outlined dense type=password autocomplete=current-password"
+                                    )
                                 )
                             new_input = (
                                 ui.input("New password")
                                 .classes("w-full")
-                                .props("outlined dense type=password autocomplete=new-password")
+                                .props(
+                                    "outlined dense type=password autocomplete=new-password"
+                                )
                             )
                             confirm_input = (
                                 ui.input("Confirm new password")
                                 .classes("w-full")
-                                .props("outlined dense type=password autocomplete=new-password")
+                                .props(
+                                    "outlined dense type=password autocomplete=new-password"
+                                )
                             )
 
                             def _submit() -> None:
                                 if user_id is None:
-                                    ui.notify("Session expired. Please sign in again.", type="negative")
+                                    ui.notify(
+                                        "Session expired. Please sign in again.",
+                                        type="negative",
+                                    )
                                     ui.navigate.to("/login")
                                     return
                                 new_password = str(new_input.value or "")
                                 confirm = str(confirm_input.value or "")
                                 if new_password != confirm:
-                                    ui.notify("New passwords do not match", type="negative")
+                                    ui.notify(
+                                        "New passwords do not match", type="negative"
+                                    )
                                     return
                                 current_password: Optional[str] = None
                                 if current_input is not None:

@@ -192,7 +192,9 @@ def load_itd_hotspots(path: Optional[str | Path] = None) -> Dict[str, ItdHotspot
             min_supporting_reads=int(entry.get("min_supporting_reads", 2)),
             label=str(entry.get("label", "ITD")),
             transcript=(
-                str(entry["transcript"]) if entry.get("transcript") is not None else None
+                str(entry["transcript"])
+                if entry.get("transcript") is not None
+                else None
             ),
         )
     return hotspots
@@ -658,9 +660,7 @@ def filter_hotspots_by_panel(
     """Keep hotspots whose gene symbol appears in the active target panel."""
     symbols = panel_gene_symbols(panel)
     filtered = {
-        gene: hotspot
-        for gene, hotspot in hotspots.items()
-        if gene.upper() in symbols
+        gene: hotspot for gene, hotspot in hotspots.items() if gene.upper() in symbols
     }
     logger.info(
         "ITD hotspots after panel filter (%s): %s (from %d configured)",
@@ -869,7 +869,9 @@ def call_events_from_counts(
                     changed = True
 
         # Representative = highest-support member; support = sum of unique bins.
-        representative = max(members, key=lambda row: (row["support"], -row["position"]))
+        representative = max(
+            members, key=lambda row: (row["support"], -row["position"])
+        )
         support = sum(member["support"] for member in members)
         # Spanning depth at the representative anchor (includes ref + alt reads).
         depth = int(representative["coverage"])
@@ -913,8 +915,8 @@ def call_events_from_counts(
         exon = hotspot.exon_at(int(event["position"]))
         event["exon_number"] = exon.number if exon else None
         event["transcript_id"] = (
-            (exon.transcript_id if exon else None) or hotspot.transcript
-        )
+            exon.transcript_id if exon else None
+        ) or hotspot.transcript
         event["exon_id"] = exon.exon_id if exon else None
         filtered.append(event)
 
@@ -1057,7 +1059,9 @@ def process_bam_itd_with_staging(
     staging_path = os.path.join(staging_dir, f"itd_{counter:06d}.parquet")
 
     if not counts.empty:
-        counts.to_parquet(staging_path, index=False, engine="pyarrow", compression="snappy")
+        counts.to_parquet(
+            staging_path, index=False, engine="pyarrow", compression="snappy"
+        )
         logger.info(
             "ITD staging: wrote %d indel count rows from %s",
             len(counts),
@@ -1065,7 +1069,9 @@ def process_bam_itd_with_staging(
         )
     else:
         # Touch an empty marker so pending accounting stays aligned with fusion.
-        counts.to_parquet(staging_path, index=False, engine="pyarrow", compression="snappy")
+        counts.to_parquet(
+            staging_path, index=False, engine="pyarrow", compression="snappy"
+        )
         logger.debug("ITD staging: no insertions in hotspots for %s", bam_path)
 
     pending = _increment_pending_count(work_dir, sample_id, delta=1)
@@ -1088,10 +1094,9 @@ def _aggregate_count_frames(frames: Iterable[pd.DataFrame]) -> pd.DataFrame:
         return pd.DataFrame(columns=ITD_COUNT_COLUMNS)
 
     combined = pd.concat(pieces, ignore_index=True)
-    grouped = (
-        combined.groupby(["gene", "chrom", "position", "length", "label"], as_index=False)
-        .agg(support=("support", "sum"), coverage=("coverage", "sum"))
-    )
+    grouped = combined.groupby(
+        ["gene", "chrom", "position", "length", "label"], as_index=False
+    ).agg(support=("support", "sum"), coverage=("coverage", "sum"))
     grouped["bam_path"] = ""
     return grouped[ITD_COUNT_COLUMNS]
 
@@ -1184,7 +1189,9 @@ def accumulate_itd_candidates(
         if not batch.empty:
             part_id = len(list(Path(dataset_dir).glob("part_*.parquet")))
             part_path = os.path.join(dataset_dir, f"part_{part_id:06d}.parquet")
-            batch.to_parquet(part_path, index=False, engine="pyarrow", compression="snappy")
+            batch.to_parquet(
+                part_path, index=False, engine="pyarrow", compression="snappy"
+            )
 
         for path in staging_files:
             try:
@@ -1224,8 +1231,12 @@ def accumulate_itd_candidates(
                     "start": hotspot.start,
                     "end": hotspot.end,
                     "n_events": int(len(gene_events)),
-                    "max_support": int(gene_events["support"].max()) if len(gene_events) else 0,
-                    "max_vaf": float(gene_events["vaf"].max()) if len(gene_events) else 0.0,
+                    "max_support": (
+                        int(gene_events["support"].max()) if len(gene_events) else 0
+                    ),
+                    "max_vaf": (
+                        float(gene_events["vaf"].max()) if len(gene_events) else 0.0
+                    ),
                 }
             )
         pd.DataFrame(summary_rows).to_csv(summary_path, index=False)
@@ -1401,7 +1412,9 @@ def collect_supporting_read_qc_for_event(
                 "softclip_left": soft_l,
                 "softclip_right": soft_r,
                 "softclip_frac": round(soft_frac, 4),
-                "mean_ins_baseq": None if mean_ins_q != mean_ins_q else round(mean_ins_q, 2),
+                "mean_ins_baseq": (
+                    None if mean_ins_q != mean_ins_q else round(mean_ins_q, 2)
+                ),
                 "min_ins_baseq": None if min_ins_q != min_ins_q else int(min_ins_q),
                 "nm": int(nm) if nm is not None else None,
             }
@@ -1526,9 +1539,7 @@ def write_itd_read_qc(
     sample_dir = Path(sample_dir)
     if bam_paths is None:
         bam_paths = sorted(
-            str(path)
-            for path in sample_dir.glob("batch_*.bam")
-            if path.is_file()
+            str(path) for path in sample_dir.glob("batch_*.bam") if path.is_file()
         )
     read_qc, event_qc = collect_itd_read_qc(events, list(bam_paths or []))
     read_path = sample_dir / "itd_read_qc.csv"

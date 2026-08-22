@@ -21,7 +21,6 @@ from robin.gui.display_config import (
     effective_section_map,
 )
 from robin.security import get_consent_version
-from robin.security.user_metadata import CLINICAL_ROLE_KEY, EMAIL_KEY, NOTES_KEY
 from robin.security.user_approvals import (
     ADMIN_USER_APPROVALS_UPDATED_EVENT,
     MINKNOW_REMOTE_CONTROL_KEY,
@@ -32,6 +31,7 @@ from robin.security.user_approvals import (
     default_approvals,
     effective_approvals,
 )
+from robin.security.user_metadata import CLINICAL_ROLE_KEY, EMAIL_KEY, NOTES_KEY
 
 if TYPE_CHECKING:
     from robin.gui_launcher import GUILauncher
@@ -69,7 +69,9 @@ def _user_table_rows(launcher: "GUILauncher") -> List[Dict[str, Any]]:
     return rows
 
 
-def _audit_table_rows(launcher: "GUILauncher", filters: Dict[str, Any]) -> List[Dict[str, Any]]:
+def _audit_table_rows(
+    launcher: "GUILauncher", filters: Dict[str, Any]
+) -> List[Dict[str, Any]]:
     events = launcher.security_store.query_audit_events(
         username=str(filters.get("username") or ""),
         event_type=str(filters.get("event_type") or ""),
@@ -107,7 +109,9 @@ def create_admin_page(launcher: "GUILauncher") -> None:
     ):
         with ui.element("div").classes("w-full min-w-0").props("id=admin-page"):
             with ui.column().classes("w-full max-w-6xl mx-auto gap-3 p-2 md:p-3"):
-                with ui.element("div").classes("classification-insight-shell w-full min-w-0"):
+                with ui.element("div").classes(
+                    "classification-insight-shell w-full min-w-0"
+                ):
                     ui.label("Administration").classes(
                         "classification-insight-heading text-headline-small"
                     )
@@ -143,7 +147,9 @@ def create_admin_page(launcher: "GUILauncher") -> None:
 def _build_users_panel(launcher: "GUILauncher", consent_version: str) -> None:
     with ui.element("div").classes("classification-insight-card w-full min-w-0"):
         with ui.column().classes("w-full min-w-0 gap-3 p-2 md:p-3"):
-            with ui.row().classes("w-full items-center justify-between gap-2 flex-wrap"):
+            with ui.row().classes(
+                "w-full items-center justify-between gap-2 flex-wrap"
+            ):
                 ui.label("User accounts").classes("classification-insight-model")
                 with ui.row().classes("gap-2"):
                     refresh_btn = ui.button("Refresh", icon="refresh").props(
@@ -152,11 +158,18 @@ def _build_users_panel(launcher: "GUILauncher", consent_version: str) -> None:
                     ui.button(
                         "Create user",
                         icon="person_add",
-                        on_click=lambda: _open_create_user_dialog(launcher, refresh_users),
+                        on_click=lambda: _open_create_user_dialog(
+                            launcher, refresh_users
+                        ),
                     ).props("color=primary no-caps")
 
             user_columns = [
-                {"name": "username", "label": "Username", "field": "username", "align": "left"},
+                {
+                    "name": "username",
+                    "label": "Username",
+                    "field": "username",
+                    "align": "left",
+                },
                 {"name": "email", "label": "Email", "field": "email", "align": "left"},
                 {
                     "name": "clinical_role",
@@ -183,12 +196,42 @@ def _build_users_panel(launcher: "GUILauncher", consent_version: str) -> None:
                     "align": "left",
                 },
                 {"name": "roles", "label": "Roles", "field": "roles", "align": "left"},
-                {"name": "active", "label": "Active", "field": "active", "align": "left"},
-                {"name": "password", "label": "Password", "field": "password", "align": "left"},
-                {"name": "last_login", "label": "Last login", "field": "last_login", "align": "left"},
-                {"name": "consent", "label": "Consent", "field": "consent", "align": "left"},
-                {"name": "consent_at", "label": "Consent at", "field": "consent_at", "align": "left"},
-                {"name": "actions", "label": "Actions", "field": "actions", "align": "left"},
+                {
+                    "name": "active",
+                    "label": "Active",
+                    "field": "active",
+                    "align": "left",
+                },
+                {
+                    "name": "password",
+                    "label": "Password",
+                    "field": "password",
+                    "align": "left",
+                },
+                {
+                    "name": "last_login",
+                    "label": "Last login",
+                    "field": "last_login",
+                    "align": "left",
+                },
+                {
+                    "name": "consent",
+                    "label": "Consent",
+                    "field": "consent",
+                    "align": "left",
+                },
+                {
+                    "name": "consent_at",
+                    "label": "Consent at",
+                    "field": "consent_at",
+                    "align": "left",
+                },
+                {
+                    "name": "actions",
+                    "label": "Actions",
+                    "field": "actions",
+                    "align": "left",
+                },
             ]
             _, user_table = theme.styled_table(
                 columns=user_columns,
@@ -231,24 +274,60 @@ def _build_audit_panel(launcher: "GUILauncher", audit_filters: Dict[str, Any]) -
             ui.label("Audit events").classes("classification-insight-model")
 
             with ui.row().classes("w-full gap-2 flex-wrap items-end"):
-                username_filter = ui.input("Username").classes("min-w-[10rem]").props(
-                    "dense outlined clearable"
+                username_filter = (
+                    ui.input("Username")
+                    .classes("min-w-[10rem]")
+                    .props("dense outlined clearable")
                 )
-                event_filter = ui.input("Event type").classes("min-w-[12rem]").props(
-                    "dense outlined clearable"
+                event_filter = (
+                    ui.input("Event type")
+                    .classes("min-w-[12rem]")
+                    .props("dense outlined clearable")
                 )
-                limit_filter = ui.number(
-                    "Limit", value=100, min=1, max=5000, step=1
-                ).classes("w-28").props("dense outlined")
+                limit_filter = (
+                    ui.number("Limit", value=100, min=1, max=5000, step=1)
+                    .classes("w-28")
+                    .props("dense outlined")
+                )
 
             audit_columns = [
-                {"name": "occurred_at", "label": "Time (UTC)", "field": "occurred_at", "align": "left"},
-                {"name": "username", "label": "User", "field": "username", "align": "left"},
-                {"name": "event_type", "label": "Event", "field": "event_type", "align": "left"},
-                {"name": "target", "label": "Target", "field": "target", "align": "left"},
-                {"name": "result", "label": "Result", "field": "result", "align": "left"},
+                {
+                    "name": "occurred_at",
+                    "label": "Time (UTC)",
+                    "field": "occurred_at",
+                    "align": "left",
+                },
+                {
+                    "name": "username",
+                    "label": "User",
+                    "field": "username",
+                    "align": "left",
+                },
+                {
+                    "name": "event_type",
+                    "label": "Event",
+                    "field": "event_type",
+                    "align": "left",
+                },
+                {
+                    "name": "target",
+                    "label": "Target",
+                    "field": "target",
+                    "align": "left",
+                },
+                {
+                    "name": "result",
+                    "label": "Result",
+                    "field": "result",
+                    "align": "left",
+                },
                 {"name": "ip", "label": "IP", "field": "ip", "align": "left"},
-                {"name": "details", "label": "Details", "field": "details", "align": "left"},
+                {
+                    "name": "details",
+                    "label": "Details",
+                    "field": "details",
+                    "align": "left",
+                },
             ]
             _, audit_table = theme.styled_table(
                 columns=audit_columns,
@@ -295,7 +374,9 @@ def _build_audit_panel(launcher: "GUILauncher", audit_filters: Dict[str, Any]) -
                 writer.writeheader()
                 for event in events:
                     row = dict(event)
-                    row["details"] = json.dumps(event.get("details") or {}, ensure_ascii=True)
+                    row["details"] = json.dumps(
+                        event.get("details") or {}, ensure_ascii=True
+                    )
                     writer.writerow({k: row.get(k, "") for k in fieldnames})
                 launcher._audit_log(
                     event_type="admin.audit.exported",
@@ -307,9 +388,9 @@ def _build_audit_panel(launcher: "GUILauncher", audit_filters: Dict[str, Any]) -
                 ui.download(buf.getvalue().encode("utf-8"), "robin_audit_export.csv")
 
             with ui.row().classes("w-full gap-2 flex-wrap"):
-                ui.button("Apply filters", icon="filter_alt", on_click=_apply_filters).props(
-                    "color=primary no-caps"
-                )
+                ui.button(
+                    "Apply filters", icon="filter_alt", on_click=_apply_filters
+                ).props("color=primary no-caps")
                 ui.button("Export CSV", icon="download", on_click=_export_csv).props(
                     "flat no-caps outline"
                 )
@@ -324,9 +405,7 @@ def _build_sample_display_panel(launcher: "GUILauncher") -> None:
         if getattr(launcher, "display_config", None) is not None
         else SampleDisplayConfig()
     )
-    checkbox_state: Dict[str, Dict[str, Any]] = {
-        role: {} for role in DISPLAY_ROLES
-    }
+    checkbox_state: Dict[str, Dict[str, Any]] = {role: {} for role in DISPLAY_ROLES}
 
     def _initial_visible(section_id: str, role: str) -> bool:
         return effective_section_map(
@@ -350,7 +429,9 @@ def _build_sample_display_panel(launcher: "GUILauncher") -> None:
                     for role in DISPLAY_ROLES
                 }
 
-            with ui.tab_panels(role_tabs, value=role_tab_items["user"]).classes("w-full"):
+            with ui.tab_panels(role_tabs, value=role_tab_items["user"]).classes(
+                "w-full"
+            ):
                 for role in DISPLAY_ROLES:
                     with ui.tab_panel(role_tab_items[role]):
                         ui.label(
@@ -437,7 +518,9 @@ def _build_sample_display_panel(launcher: "GUILauncher") -> None:
                 )
 
             with ui.row().classes("w-full gap-2 flex-wrap mt-2"):
-                ui.button("Save", icon="save", on_click=_save).props("color=primary no-caps")
+                ui.button("Save", icon="save", on_click=_save).props(
+                    "color=primary no-caps"
+                )
                 ui.button(
                     "Reset active role to workflow defaults",
                     icon="restart_alt",
@@ -505,9 +588,7 @@ def _build_plotting_preferences_panel(launcher: "GUILauncher") -> None:
                 right="Log2",
                 value=current.cnv_report_scale
                 == CNV_REPORT_SCALE_NORMALIZED_DIFFERENCE,
-                tooltip=(
-                    "Left: estimated ploidy · Right: log2(ploidy / expected)"
-                ),
+                tooltip=("Left: estimated ploidy · Right: log2(ploidy / expected)"),
             )
 
             ui.label("CNV coverage genes (GUI)").classes(
@@ -528,9 +609,7 @@ def _build_plotting_preferences_panel(launcher: "GUILauncher") -> None:
                 left="Chromosome",
                 right="Up/Down",
                 value=current.cnv_gui_color_mode == CNV_GUI_COLOR_MODE_VALUE,
-                tooltip=(
-                    "Left: colour by chromosome · Right: gain/loss (up/down)"
-                ),
+                tooltip=("Left: colour by chromosome · Right: gain/loss (up/down)"),
             )
 
             ui.label("CNV breakpoints (GUI)").classes(
@@ -572,14 +651,18 @@ def _build_plotting_preferences_panel(launcher: "GUILauncher") -> None:
                 "Controls which chromosomes and contigs appear in coverage and CNV "
                 "figures in the GUI and PDF reports."
             ).classes("classification-insight-foot mb-2")
-            contig_scope_select = ui.select(
-                {
-                    scope: REFERENCE_CONTIG_SCOPE_LABELS[scope]
-                    for scope in REFERENCE_CONTIG_SCOPES
-                },
-                value=current.reference_contig_scope,
-                label="Contigs shown in plots",
-            ).classes("w-full").props("dense outlined")
+            contig_scope_select = (
+                ui.select(
+                    {
+                        scope: REFERENCE_CONTIG_SCOPE_LABELS[scope]
+                        for scope in REFERENCE_CONTIG_SCOPES
+                    },
+                    value=current.reference_contig_scope,
+                    label="Contigs shown in plots",
+                )
+                .classes("w-full")
+                .props("dense outlined")
+            )
 
             status_label = ui.label("").classes("classification-insight-meta")
 
@@ -636,27 +719,36 @@ def _open_create_user_dialog(
     launcher: "GUILauncher",
     on_created: Callable[[], None] | None = None,
 ) -> None:
-    with ui.dialog() as dialog, ui.card().classes(
-        "robin-dialog-surface p-4 md:p-5 min-w-[18rem] max-w-md w-full"
+    with (
+        ui.dialog() as dialog,
+        ui.card().classes(
+            "robin-dialog-surface p-4 md:p-5 min-w-[18rem] max-w-md w-full"
+        ),
     ):
         ui.label("Create user").classes(
             "classification-insight-heading text-headline-small q-mb-sm"
         )
         username_input = ui.input("Username").classes("w-full").props("outlined dense")
-        password_input = ui.input("Password").classes("w-full").props(
-            "outlined dense type=password"
+        password_input = (
+            ui.input("Password").classes("w-full").props("outlined dense type=password")
         )
-        confirm_input = ui.input("Confirm password").classes("w-full").props(
-            "outlined dense type=password"
+        confirm_input = (
+            ui.input("Confirm password")
+            .classes("w-full")
+            .props("outlined dense type=password")
         )
-        role_select = ui.select(["user", "admin"], value="user", label="Role").classes(
-            "w-full"
-        ).props("outlined dense")
-        email_input = ui.input("Email (optional)").classes("w-full").props(
-            "outlined dense"
+        role_select = (
+            ui.select(["user", "admin"], value="user", label="Role")
+            .classes("w-full")
+            .props("outlined dense")
         )
-        clinical_role_input = ui.input("Clinical role (optional)").classes("w-full").props(
-            "outlined dense"
+        email_input = (
+            ui.input("Email (optional)").classes("w-full").props("outlined dense")
+        )
+        clinical_role_input = (
+            ui.input("Clinical role (optional)")
+            .classes("w-full")
+            .props("outlined dense")
         )
         approval_boxes: Dict[str, Any] = {}
         is_admin_role = {"value": str(role_select.value or "user") == "admin"}
@@ -755,7 +847,9 @@ def _open_create_user_dialog(
 
         with ui.row().classes("w-full justify-end gap-2 mt-3"):
             ui.button("Cancel", on_click=dialog.close).props("flat no-caps outline")
-            ui.button("Create", on_click=_create, icon="check").props("color=primary no-caps")
+            ui.button("Create", on_click=_create, icon="check").props(
+                "color=primary no-caps"
+            )
     dialog.open()
 
 
@@ -772,31 +866,38 @@ def _open_manage_user_dialog(
     roles = store.get_user_roles(user.id)
     is_admin = store.user_has_role(user.id, "admin")
 
-    with ui.dialog() as dialog, ui.card().classes(
-        "robin-dialog-surface p-4 md:p-5 min-w-[18rem] max-w-md w-full"
+    with (
+        ui.dialog() as dialog,
+        ui.card().classes(
+            "robin-dialog-surface p-4 md:p-5 min-w-[18rem] max-w-md w-full"
+        ),
     ):
         ui.label(f"Manage {username}").classes(
             "classification-insight-heading text-headline-small q-mb-sm"
         )
-        ui.label(f"Roles: {', '.join(roles) or 'none'}").classes("classification-insight-foot")
-        ui.label(
-            f"Status: {'active' if user.is_active else 'inactive'}"
-        ).classes("classification-insight-foot q-mb-md")
+        ui.label(f"Roles: {', '.join(roles) or 'none'}").classes(
+            "classification-insight-foot"
+        )
+        ui.label(f"Status: {'active' if user.is_active else 'inactive'}").classes(
+            "classification-insight-foot q-mb-md"
+        )
 
         email_input = ui.input("Email").classes("w-full").props("outlined dense")
         email_input.value = user.metadata.get(EMAIL_KEY, "")
-        clinical_role_input = ui.input("Clinical role").classes("w-full").props(
-            "outlined dense"
+        clinical_role_input = (
+            ui.input("Clinical role").classes("w-full").props("outlined dense")
         )
         clinical_role_input.value = user.metadata.get(CLINICAL_ROLE_KEY, "")
-        notes_input = ui.textarea("Notes").classes("w-full").props("outlined dense autogrow")
+        notes_input = (
+            ui.textarea("Notes").classes("w-full").props("outlined dense autogrow")
+        )
         notes_input.value = user.metadata.get(NOTES_KEY, "")
 
         ui.label("Approvals").classes("classification-insight-meta font-medium mt-2")
         if is_admin:
-            ui.label(
-                "Administrators always have all approvals granted."
-            ).classes("classification-insight-foot q-mb-sm")
+            ui.label("Administrators always have all approvals granted.").classes(
+                "classification-insight-foot q-mb-sm"
+            )
         approval_boxes: Dict[str, Any] = {}
         for field in USER_APPROVAL_FIELDS:
             approval_boxes[field.key] = ui.checkbox(
@@ -807,11 +908,15 @@ def _open_manage_user_dialog(
                 approval_boxes[field.key].set_value(True)
                 approval_boxes[field.key].disable()
 
-        new_password = ui.input("New password (optional)").classes("w-full").props(
-            "outlined dense type=password"
+        new_password = (
+            ui.input("New password (optional)")
+            .classes("w-full")
+            .props("outlined dense type=password")
         )
-        confirm_password = ui.input("Confirm new password").classes("w-full").props(
-            "outlined dense type=password"
+        confirm_password = (
+            ui.input("Confirm new password")
+            .classes("w-full")
+            .props("outlined dense type=password")
         )
 
         def _reset_password() -> None:
@@ -824,7 +929,9 @@ def _open_manage_user_dialog(
                 ui.notify("Passwords do not match", type="negative")
                 return
             new_hash = launcher.auth_service.hash_password(pwd)
-            if not store.set_user_password_hash(username, new_hash, must_change_password=True):
+            if not store.set_user_password_hash(
+                username, new_hash, must_change_password=True
+            ):
                 ui.notify("Password update failed", type="negative")
                 return
             launcher._audit_log(
@@ -854,7 +961,9 @@ def _open_manage_user_dialog(
                 if not store.update_user_metadata(username, metadata):
                     ui.notify("Profile update failed", type="negative")
                     return
-                if not is_admin and not store.update_user_approvals(username, approvals):
+                if not is_admin and not store.update_user_approvals(
+                    username, approvals
+                ):
                     ui.notify("Approvals update failed", type="negative")
                     return
             except ValueError as exc:
@@ -887,8 +996,13 @@ def _open_manage_user_dialog(
 
         def _toggle_active() -> None:
             if user.is_active:
-                if store.user_has_role(user.id, "admin") and store.count_active_admins() <= 1:
-                    ui.notify("Cannot deactivate the last active admin", type="negative")
+                if (
+                    store.user_has_role(user.id, "admin")
+                    and store.count_active_admins() <= 1
+                ):
+                    ui.notify(
+                        "Cannot deactivate the last active admin", type="negative"
+                    )
                     return
                 if not store.set_user_active(username, False):
                     ui.notify("Deactivate failed", type="negative")
@@ -928,8 +1042,13 @@ def _open_manage_user_dialog(
             on_changed()
 
         def _revoke_admin() -> None:
-            if store.user_has_role(user.id, "admin") and store.count_active_admins() <= 1:
-                ui.notify("Cannot revoke admin from the last active admin", type="negative")
+            if (
+                store.user_has_role(user.id, "admin")
+                and store.count_active_admins() <= 1
+            ):
+                ui.notify(
+                    "Cannot revoke admin from the last active admin", type="negative"
+                )
                 return
             if not store.revoke_role(user.id, "admin"):
                 ui.notify("User does not have admin role", type="warning")
@@ -953,21 +1072,21 @@ def _open_manage_user_dialog(
                 "flat no-caps outline"
             )
             if user.is_active:
-                ui.button("Deactivate user", on_click=_toggle_active, icon="person_off").props(
-                    "flat no-caps outline color=negative"
-                )
+                ui.button(
+                    "Deactivate user", on_click=_toggle_active, icon="person_off"
+                ).props("flat no-caps outline color=negative")
             else:
-                ui.button("Activate user", on_click=_toggle_active, icon="person").props(
-                    "flat no-caps outline"
-                )
+                ui.button(
+                    "Activate user", on_click=_toggle_active, icon="person"
+                ).props("flat no-caps outline")
             if "admin" in roles:
-                ui.button("Revoke admin role", on_click=_revoke_admin, icon="shield").props(
-                    "flat no-caps outline"
-                )
+                ui.button(
+                    "Revoke admin role", on_click=_revoke_admin, icon="shield"
+                ).props("flat no-caps outline")
             else:
-                ui.button("Grant admin role", on_click=_grant_admin, icon="shield").props(
-                    "flat no-caps outline"
-                )
+                ui.button(
+                    "Grant admin role", on_click=_grant_admin, icon="shield"
+                ).props("flat no-caps outline")
 
         with ui.row().classes("w-full justify-end gap-2 mt-3"):
             ui.button("Close", on_click=dialog.close).props("flat no-caps outline")

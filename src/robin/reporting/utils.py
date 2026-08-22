@@ -4,8 +4,8 @@ utils.py
 This module contains utility functions for the report generation.
 """
 
-import pandas as pd
 import natsort
+import pandas as pd
 
 
 def convert_to_space_separated_string(array):

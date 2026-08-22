@@ -5,6 +5,7 @@ This module contains the disclaimer section of the report.
 """
 
 from reportlab.platypus import PageBreak, Paragraph, Spacer
+
 from ..sections.base import ReportSection
 from .disclaimer_text import EXTENDED_DISCLAIMER_TEXT
 

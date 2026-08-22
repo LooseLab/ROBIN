@@ -16,6 +16,7 @@ from robin.analysis.itd_work import (
     ITD_EVENT_DISPLAY_COLUMNS,
     normalize_itd_events_df,
 )
+
 from .base import ReportSection
 
 logger = logging.getLogger(__name__)
@@ -108,9 +109,11 @@ class ItdSection(ReportSection):
         n_called_genes = (
             int((summary["n_events"] > 0).sum())
             if not summary.empty and "n_events" in summary.columns
-            else int(events["gene"].nunique())
-            if n_events and "gene" in events.columns
-            else 0
+            else (
+                int(events["gene"].nunique())
+                if n_events and "gene" in events.columns
+                else 0
+            )
         )
 
         if n_events:
@@ -170,4 +173,6 @@ class ItdSection(ReportSection):
                 if "n_events" in summary.columns
                 else summary
             )
-            self.export_frames["itd_summary"] = called.copy() if not called.empty else summary.head(0)
+            self.export_frames["itd_summary"] = (
+                called.copy() if not called.empty else summary.head(0)
+            )

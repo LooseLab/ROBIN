@@ -27,7 +27,6 @@ import re
 from dataclasses import dataclass
 from typing import Any, Iterable, Mapping, Optional
 
-
 PATHOGENIC_TERMS: tuple[str, ...] = (
     "pathogenic/likely_pathogenic",
     "pathogenic/likely pathogenic",

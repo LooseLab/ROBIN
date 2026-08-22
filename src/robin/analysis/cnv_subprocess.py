@@ -4,12 +4,12 @@ Subprocess script for running cnv_from_bam analysis.
 This isolates the cnv_from_bam module from the main process to prevent signal handling issues.
 """
 
-import sys
-import os
-import json
-import pickle
-import logging
 import argparse
+import json
+import logging
+import os
+import pickle
+import sys
 
 # Import cnv_from_bam only in this subprocess
 import cnv_from_bam
@@ -42,7 +42,7 @@ def run_cnv_analysis(
         Dictionary with analysis results
     """
     import time
-    
+
     if os.environ.get("LJ_CNV_SUBPROCESS_DEBUG") == "1":
         print("CNV Subprocess started")
         print(f"BAM path: {bam_path}")
@@ -72,17 +72,25 @@ def run_cnv_analysis(
             # Per-sample file approach (optimized)
             with open(copy_numbers_path, "rb") as f:
                 copy_numbers = pickle.load(f)
-            print(f"Loaded per-sample copy_numbers from {copy_numbers_path} in {time.time() - load_start:.3f}s", file=sys.stderr)
+            print(
+                f"Loaded per-sample copy_numbers from {copy_numbers_path} in {time.time() - load_start:.3f}s",
+                file=sys.stderr,
+            )
         elif update_cnv_dict_path is not None and sample_id is not None:
             # Legacy multi-sample dict approach (deprecated but supported for backward compat)
             if not os.path.exists(update_cnv_dict_path):
                 copy_numbers = {}
-                print(f"No existing copy_numbers found, starting fresh", file=sys.stderr)
+                print(
+                    f"No existing copy_numbers found, starting fresh", file=sys.stderr
+                )
             else:
                 with open(update_cnv_dict_path, "rb") as f:
                     multi_sample_dict = pickle.load(f)
                 copy_numbers = multi_sample_dict.get(sample_id, {})
-                print(f"Loaded copy_numbers from legacy multi-sample dict in {time.time() - load_start:.3f}s", file=sys.stderr)
+                print(
+                    f"Loaded copy_numbers from legacy multi-sample dict in {time.time() - load_start:.3f}s",
+                    file=sys.stderr,
+                )
         else:
             # No existing data
             copy_numbers = {}
@@ -92,10 +100,16 @@ def run_cnv_analysis(
         ref_load_start = time.time()
         with open(ref_cnv_dict_path, "rb") as f:
             ref_cnv_dict = pickle.load(f)
-        print(f"Loaded reference CNV dict in {time.time() - ref_load_start:.3f}s", file=sys.stderr)
+        print(
+            f"Loaded reference CNV dict in {time.time() - ref_load_start:.3f}s",
+            file=sys.stderr,
+        )
 
         # First pass: process sample with accumulated copy numbers
-        print(f"Starting Pass 1: Sample CNV extraction with {threads} threads", file=sys.stderr)
+        print(
+            f"Starting Pass 1: Sample CNV extraction with {threads} threads",
+            file=sys.stderr,
+        )
         pass1_start = time.time()
         result = cnv_from_bam.iterate_bam_file(
             bam_path,
@@ -105,7 +119,10 @@ def run_cnv_analysis(
             log_level=int(logging.ERROR),
         )
         pass1_time = time.time() - pass1_start
-        print(f"Pass 1 completed in {pass1_time:.2f}s (bin_width: {result.bin_width}, variance: {result.variance:.6f})", file=sys.stderr)
+        print(
+            f"Pass 1 completed in {pass1_time:.2f}s (bin_width: {result.bin_width}, variance: {result.variance:.6f})",
+            file=sys.stderr,
+        )
 
         # Uncontaminated reference: rebin control counts only (no sample BAM).
         print(
@@ -118,7 +135,10 @@ def run_cnv_analysis(
         r2_cnv = build_reference_cnv_from_counts(ref_cnv_dict, int(result.bin_width))
         pass2_time = time.time() - pass2_start
         print(f"Pass 2 completed in {pass2_time:.2f}s", file=sys.stderr)
-        print(f"Total CNV extraction time: {pass1_time + pass2_time:.2f}s", file=sys.stderr)
+        print(
+            f"Total CNV extraction time: {pass1_time + pass2_time:.2f}s",
+            file=sys.stderr,
+        )
 
         # Prepare results
         analysis_results = {
@@ -133,7 +153,7 @@ def run_cnv_analysis(
                 "pass1_time": pass1_time,
                 "pass2_time": pass2_time,
                 "total_time": pass1_time + pass2_time,
-            }
+            },
         }
 
         # Save results to output directory

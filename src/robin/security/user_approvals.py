@@ -131,7 +131,9 @@ def user_has_approval(store: "SecurityStore", user_id: Optional[int], key: str) 
     return bool(user.approvals.get(key, False))
 
 
-def effective_approvals(store: "SecurityStore", user_id: Optional[int]) -> Dict[str, bool]:
+def effective_approvals(
+    store: "SecurityStore", user_id: Optional[int]
+) -> Dict[str, bool]:
     """Return effective approval map for display (admins show all granted)."""
     labels = approval_field_labels()
     if user_id is None:

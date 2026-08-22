@@ -73,7 +73,9 @@ def _normalize_chrom(value: object) -> str:
     return f"chr{text}"
 
 
-def load_probe_position_map(probes_bed_path: str | os.PathLike) -> Dict[tuple[str, int], str]:
+def load_probe_position_map(
+    probes_bed_path: str | os.PathLike,
+) -> Dict[tuple[str, int], str]:
     """
     Build (chrom, ref_position) → probe_id from a MARLIN probe BED.
 
@@ -121,18 +123,16 @@ def bedmethyl_to_probe_values(
     start_col = (
         "chromStart"
         if "chromStart" in df.columns
-        else "start_pos"
-        if "start_pos" in df.columns
-        else "start"
+        else "start_pos" if "start_pos" in df.columns else "start"
     )
     value_col = (
         "percent_modified"
         if "percent_modified" in df.columns
-        else "fraction"
-        if "fraction" in df.columns
-        else "score"
-        if "score" in df.columns
-        else None
+        else (
+            "fraction"
+            if "fraction" in df.columns
+            else "score" if "score" in df.columns else None
+        )
     )
     if value_col is None:
         raise ValueError(
@@ -263,9 +263,7 @@ class MarlinAnalysis:
         )
         return self._predictor
 
-    def process_parquet_file(
-        self, parquet_path: str, sample_id: str
-    ) -> MarlinMetadata:
+    def process_parquet_file(self, parquet_path: str, sample_id: str) -> MarlinMetadata:
         logger = logging.getLogger("robin.marlin")
         start_time = time.time()
 
@@ -345,7 +343,9 @@ class MarlinAnalysis:
             return result
 
         except Exception as exc:
-            logger.error("MARLIN analysis failed for %s: %s", sample_id, exc, exc_info=True)
+            logger.error(
+                "MARLIN analysis failed for %s: %s", sample_id, exc, exc_info=True
+            )
             result.error_message = str(exc)
             result.processing_steps.append("analysis_failed")
             return result
@@ -421,7 +421,9 @@ def process_multiple_files(
                 pass
 
         if analysis_result["files_processed"] == 0:
-            analysis_result["error_message"] = "No files could be processed successfully"
+            analysis_result["error_message"] = (
+                "No files could be processed successfully"
+            )
             analysis_result["processing_steps"].append("no_files_processed")
             return analysis_result
 
@@ -493,9 +495,13 @@ def marlin_handler(job, work_dir=None):
                     )
 
             if not parquet_paths:
-                error_msg = "No parquet paths found from bed conversion results in batch"
+                error_msg = (
+                    "No parquet paths found from bed conversion results in batch"
+                )
                 if suppress_expected:
-                    logger.warning("%s (expected for fail-only BAM submission)", error_msg)
+                    logger.warning(
+                        "%s (expected for fail-only BAM submission)", error_msg
+                    )
                     job.context.add_result(
                         "marlin_analysis",
                         {"status": "expected_failure", "reason": error_msg},
@@ -582,7 +588,10 @@ def marlin_handler(job, work_dir=None):
             if suppress_expected:
                 job.context.add_result(
                     "marlin_analysis",
-                    {"status": "expected_failure", "error_message": result.error_message},
+                    {
+                        "status": "expected_failure",
+                        "error_message": result.error_message,
+                    },
                 )
             else:
                 job.context.add_error("marlin_analysis", result.error_message)
@@ -619,7 +628,9 @@ def marlin_handler(job, work_dir=None):
 
     except Exception as exc:
         if suppress_expected:
-            logger.warning("Expected MARLIN failure for fail-only BAM submission: %s", exc)
+            logger.warning(
+                "Expected MARLIN failure for fail-only BAM submission: %s", exc
+            )
             job.context.add_result(
                 "marlin_analysis",
                 {"status": "expected_failure", "error_message": str(exc)},

@@ -137,9 +137,7 @@ def build_sample_lifecycle_panel(launcher: "GUILauncher") -> None:
 
                 async def pick_archive_folder() -> None:
                     start = (
-                        state.get("archive_destination")
-                        or work_dir
-                        or str(Path.home())
+                        state.get("archive_destination") or work_dir or str(Path.home())
                     )
                     picker = local_folder_picker(start, upper_limit=None)
                     result = await picker
@@ -202,7 +200,9 @@ def build_sample_lifecycle_panel(launcher: "GUILauncher") -> None:
                 sample_table.rows = _lifecycle_rows(launcher)
                 sample_table.update()
 
-            with ui.row().classes("w-full items-center justify-between gap-2 flex-wrap"):
+            with ui.row().classes(
+                "w-full items-center justify-between gap-2 flex-wrap"
+            ):
                 ui.button("Refresh", icon="refresh", on_click=refresh_table).props(
                     "flat no-caps outline"
                 )
@@ -218,8 +218,11 @@ def build_sample_lifecycle_panel(launcher: "GUILauncher") -> None:
                         on_click=lambda: None,
                     ).props("color=negative no-caps")
 
-            with ui.dialog() as confirm_dialog, ui.card().classes(
-                "robin-dialog-surface p-4 md:p-5 min-w-[18rem] max-w-md"
+            with (
+                ui.dialog() as confirm_dialog,
+                ui.card().classes(
+                    "robin-dialog-surface p-4 md:p-5 min-w-[18rem] max-w-md"
+                ),
             ):
                 confirm_title = ui.label("").classes(
                     "text-headline-small text-slate-900 dark:text-slate-50"
@@ -388,9 +391,7 @@ def build_sample_lifecycle_panel(launcher: "GUILauncher") -> None:
                     if work_path is None:
                         return
                     try:
-                        dest = validate_archive_destination(
-                            Path(dest_raw), work_path
-                        )
+                        dest = validate_archive_destination(Path(dest_raw), work_path)
                     except ValueError as exc:
                         ui.notify(str(exc), type="warning")
                         return

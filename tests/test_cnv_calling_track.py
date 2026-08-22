@@ -133,7 +133,12 @@ def test_whole_chromosome_event_suppresses_arm_events() -> None:
     cytobands = pd.DataFrame(
         [
             {"chrom": "chr7", "name": "p22", "start_pos": 0, "end_pos": 40_000_000},
-            {"chrom": "chr7", "name": "q31", "start_pos": 40_000_000, "end_pos": 100_000_000},
+            {
+                "chrom": "chr7",
+                "name": "q31",
+                "start_pos": 40_000_000,
+                "end_pos": 100_000_000,
+            },
         ]
     )
     cnv_data = {"chr7": np.full(n_bins, 0.5, dtype=float)}

@@ -2,6 +2,7 @@
 
 # Suppress pkg_resources deprecation warnings from sorted_nearest
 import warnings
+
 warnings.filterwarnings(
     "ignore", message="pkg_resources is deprecated", category=UserWarning
 )

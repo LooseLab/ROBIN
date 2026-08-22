@@ -6,15 +6,18 @@ This module contains the run data summary section of the report.
 
 import logging
 from datetime import datetime
-from reportlab.platypus import Paragraph, Spacer, Table, TableStyle, PageBreak
-from reportlab.lib.units import inch
+
 from reportlab.lib.styles import ParagraphStyle
-from .base import ReportSection
+from reportlab.lib.units import inch
+from reportlab.platypus import PageBreak, Paragraph, Spacer, Table, TableStyle
+
 from robin.analysis.bam_preprocessor import (
     _get_modbase_model_warning,
     _get_modbase_model_warning_level,
     _is_unresolved_modbase_model,
 )
+
+from .base import ReportSection
 
 logger = logging.getLogger(__name__)
 
@@ -187,7 +190,10 @@ class RunDataSection(ReportSection):
             if getattr(self.report, "sample_identifiers", None):
                 si = self.report.sample_identifiers
                 sample_info = [
-                    ("Sample ID", si.get("sample_id", "") or self.report.sample_id or "—"),
+                    (
+                        "Sample ID",
+                        si.get("sample_id", "") or self.report.sample_id or "—",
+                    ),
                     ("Test ID", si.get("test_id", "") or "—"),
                     ("First name", si.get("first_name", "") or "—"),
                     ("Last name", si.get("last_name", "") or "—"),

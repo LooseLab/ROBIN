@@ -11,7 +11,6 @@ from pathlib import Path
 from typing import Iterable, Mapping, MutableMapping, Optional, Sequence
 from zipfile import ZipFile
 
-
 _CG_PATTERN = re.compile(rb"cg\d{8}")
 _XML_NS = {"main": "http://schemas.openxmlformats.org/spreadsheetml/2006/main"}
 
@@ -139,7 +138,9 @@ class MARLINPredictor:
         model = _load_tensorflow_model(model_path, custom_objects=custom_objects)
         probe_names = extract_probe_names_from_rdata(feature_path)
         class_names = (
-            read_class_names_from_xlsx(annotation_path) if annotation_path is not None else None
+            read_class_names_from_xlsx(annotation_path)
+            if annotation_path is not None
+            else None
         )
         return cls(model=model, probe_names=probe_names, class_names=class_names)
 
@@ -171,7 +172,9 @@ class MARLINPredictor:
                 vector[index] = 1 if beta >= 0.5 else -1
         return vector
 
-    def _predict_from_feature_vector(self, feature_vector: Sequence[int]) -> MARLINPrediction:
+    def _predict_from_feature_vector(
+        self, feature_vector: Sequence[int]
+    ) -> MARLINPrediction:
         # Keras 3 / TF 2.16+ rejects bare Python lists; use a float32 batch array.
         # Prefer model(batch, training=False) over model.predict(...): on macOS,
         # predict() can hang indefinitely in the TF data-adapter path.
@@ -188,8 +191,12 @@ class MARLINPredictor:
         except TypeError:
             raw_predictions = self.model.predict(batch, verbose=0)
         row = _coerce_prediction_row(raw_predictions)
-        class_names = self.class_names or [f"class_{idx + 1}" for idx in range(len(row))]
-        scores = OrderedDict((name, float(score)) for name, score in zip(class_names, row))
+        class_names = self.class_names or [
+            f"class_{idx + 1}" for idx in range(len(row))
+        ]
+        scores = OrderedDict(
+            (name, float(score)) for name, score in zip(class_names, row)
+        )
         covered_cpgs = sum(1 for value in feature_vector if value != 0)
         return MARLINPrediction(
             scores=scores,

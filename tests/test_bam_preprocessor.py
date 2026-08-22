@@ -10,13 +10,13 @@ import pytest
 
 from robin.analysis.bam_preprocessor import (
     BamMetadata,
+    _extract_sample_id_from_bam,
+    _get_modbase_model_warning,
+    _get_modbase_model_warning_level,
     calculate_bam_summary,
     extract_bam_metadata,
     get_rg_tags_from_bam,
     process_bam_reads,
-    _extract_sample_id_from_bam,
-    _get_modbase_model_warning,
-    _get_modbase_model_warning_level,
 )
 
 _FIXTURE_DIR = Path(__file__).resolve().parent / "fixtures" / "bam"
@@ -191,6 +191,12 @@ def test_extract_sample_id_from_bam_fixtures() -> None:
 
 
 def test_bam_metadata_dataclass_post_init() -> None:
-    m = BamMetadata(file_path="/x.bam", file_size=1, creation_time=0.0, extracted_data=None, processing_steps=None)
+    m = BamMetadata(
+        file_path="/x.bam",
+        file_size=1,
+        creation_time=0.0,
+        extracted_data=None,
+        processing_steps=None,
+    )
     assert m.extracted_data == {}
     assert m.processing_steps == []

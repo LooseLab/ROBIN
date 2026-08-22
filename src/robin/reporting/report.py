@@ -4,21 +4,24 @@ report.py
 This module contains the main report class that coordinates the generation of the PDF report.
 """
 
-import os
 import json
 import logging
-import pandas as pd
+import os
 from datetime import datetime
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, PageBreak
+
+import pandas as pd
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import inch
-from .styling.styles import ReportStyles
-from robin.gui import fonts
+from reportlab.platypus import PageBreak, Paragraph, SimpleDocTemplate, Spacer
+
 from robin.build_info import get_git_commit
+from robin.gui import fonts
 from robin.utils.clinvar_manager import (
     format_clinvar_version_label,
     load_sample_clinvar_provenance,
 )
+
+from .styling.styles import ReportStyles
 
 logger = logging.getLogger(__name__)
 
@@ -71,8 +74,12 @@ class RobinReport:
 
         self.viewer_role = viewer_role or DEFAULT_VIEWER_ROLE
         self.sample_identifiers = sample_identifiers
-        self.generated_by = (str(generated_by).strip() if generated_by else None) or None
-        self.generated_at = (str(generated_at).strip() if generated_at else None) or None
+        self.generated_by = (
+            str(generated_by).strip() if generated_by else None
+        ) or None
+        self.generated_at = (
+            str(generated_at).strip() if generated_at else None
+        ) or None
         from robin.gui.plotting_preferences import (
             load_plotting_preferences,
             resolve_cnv_summary_normalized,
@@ -121,18 +128,20 @@ class RobinReport:
         # Initialize sections
         self.sections = []
         self._initialize_sections()
-    
+
     def _emit_progress(self, stage: str, message: str, progress: float = None):
         """Emit a progress update if callback is available."""
         if self.progress_callback:
             try:
                 from robin.gui.report_progress import normalize_report_progress
 
-                self.progress_callback({
-                    'stage': stage,
-                    'message': message,
-                    'progress': normalize_report_progress(progress),
-                })
+                self.progress_callback(
+                    {
+                        "stage": stage,
+                        "message": message,
+                        "progress": normalize_report_progress(progress),
+                    }
+                )
             except Exception as e:
                 logger.error(f"Error emitting progress: {e}")
 
@@ -149,8 +158,8 @@ class RobinReport:
 
     def _create_document(self):
         """Create the PDF document with portrait and landscape page templates."""
-        from reportlab.platypus import Frame, PageTemplate
         from reportlab.lib.pagesizes import landscape as rl_landscape
+        from reportlab.platypus import Frame, PageTemplate
 
         left = right = 1.0 * inch
         top = 1.35 * inch
@@ -196,19 +205,20 @@ class RobinReport:
         # Import sections here to avoid circular imports
         from .sections.classification import ClassificationSection
         from .sections.cnv import CNVSection
+        from .sections.coverage import CoverageSection
+        from .sections.disclaimer import DisclaimerSection
         from .sections.fusion import FusionSection
         from .sections.itd import ItdSection
-        from .sections.coverage import CoverageSection
         from .sections.mgmt import MGMTSection
         from .sections.mnpflex import MNPFlexSection
         from .sections.run_data import RunDataSection
-        from .sections.disclaimer import DisclaimerSection
         from .sections.variants import VariantsSection
-        
+
         # Import section visibility helpers
         try:
             from robin.gui.config import any_classification_visible, is_section_visible
         except ImportError:
+
             def is_section_visible(section_id, **kwargs):  # type: ignore[misc]
                 return True
 
@@ -216,7 +226,7 @@ class RobinReport:
                 return True
 
         sections = []
-        
+
         if any_classification_visible(
             self.workflow_steps,
             self.display_config,
@@ -224,7 +234,7 @@ class RobinReport:
             viewer_role=self.viewer_role,
         ):
             sections.append(ClassificationSection(self))
-        
+
         if is_section_visible(
             "cnv",
             workflow_steps=self.workflow_steps,
@@ -233,9 +243,9 @@ class RobinReport:
             viewer_role=self.viewer_role,
         ):
             sections.append(CNVSection(self))
-        
+
         sections.append(VariantsSection(self))
-        
+
         if is_section_visible(
             "fusion",
             workflow_steps=self.workflow_steps,
@@ -253,7 +263,7 @@ class RobinReport:
             viewer_role=self.viewer_role,
         ):
             sections.append(ItdSection(self))
-        
+
         if is_section_visible(
             "target",
             workflow_steps=self.workflow_steps,
@@ -262,7 +272,7 @@ class RobinReport:
             viewer_role=self.viewer_role,
         ):
             sections.append(CoverageSection(self))
-        
+
         if is_section_visible(
             "mgmt",
             workflow_steps=self.workflow_steps,
@@ -280,10 +290,10 @@ class RobinReport:
             viewer_role=self.viewer_role,
         ):
             sections.append(MNPFlexSection(self))
-        
+
         # Run data section (always included)
         sections.append(RunDataSection(self))
-        
+
         # Disclaimer section (always included)
         sections.append(DisclaimerSection(self))
 
@@ -306,7 +316,9 @@ class RobinReport:
         """
         try:
             logger.info("Starting report generation")
-            self._emit_progress("initializing", "Initializing report generation...", 0.0)
+            self._emit_progress(
+                "initializing", "Initializing report generation...", 0.0
+            )
 
             if not self.generated_at:
                 self.generated_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -338,11 +350,13 @@ class RobinReport:
                     summary_lines.append(f"Hospital Number: {si['nhs_number']}<br/>")
                 if si.get("notes"):
                     summary_lines.append(f"Notes: {si['notes']}<br/>")
-            summary_lines.extend([
-                f"Centre ID: {self.centreID if self.centreID else 'Not specified'}<br/>",
-                f"Report Type: {report_type.title()}<br/>",
-                f"Generated: {self.generated_at}<br/>",
-            ])
+            summary_lines.extend(
+                [
+                    f"Centre ID: {self.centreID if self.centreID else 'Not specified'}<br/>",
+                    f"Report Type: {report_type.title()}<br/>",
+                    f"Generated: {self.generated_at}<br/>",
+                ]
+            )
             if self.generated_by:
                 summary_lines.append(f"Generated by: {self.generated_by}")
             if self.robin_commit:
@@ -359,16 +373,24 @@ class RobinReport:
 
             # Process each section
             total_sections = len(self.sections)
-            self._emit_progress("processing_sections", f"Processing {total_sections} report sections...", 0.2)
-            
+            self._emit_progress(
+                "processing_sections",
+                f"Processing {total_sections} report sections...",
+                0.2,
+            )
+
             for i, section in enumerate(self.sections):
                 section_name = section.__class__.__name__.replace("Section", "")
                 progress = 0.2 + (i / total_sections) * 0.5  # 20% to 70%
-                
+
                 try:
-                    self._emit_progress("processing_sections", f"Loading {section_name} data...", progress)
+                    self._emit_progress(
+                        "processing_sections",
+                        f"Loading {section_name} data...",
+                        progress,
+                    )
                     section.add_content()
-                    
+
                     summary_elements, main_elements = section.get_elements()
 
                     # Always include summary elements
@@ -380,9 +402,13 @@ class RobinReport:
                         or section.__class__.__name__ == "DisclaimerSection"
                     ):
                         self.elements.extend(main_elements)
-                    
-                    self._emit_progress("processing_sections", f"Completed {section_name} section", progress + 0.02)
-                    
+
+                    self._emit_progress(
+                        "processing_sections",
+                        f"Completed {section_name} section",
+                        progress + 0.02,
+                    )
+
                 except Exception as e:
                     logger.error(
                         f"Error processing section {section.__class__.__name__}: {e}",
@@ -398,7 +424,11 @@ class RobinReport:
                     self.elements_summary.append(
                         Paragraph(error_content, self.styles.styles["Error"])
                     )
-                    self._emit_progress("processing_sections", f"Skipped {section_name} due to error", progress)
+                    self._emit_progress(
+                        "processing_sections",
+                        f"Skipped {section_name} due to error",
+                        progress,
+                    )
 
             # Add detailed analysis header and elements only for detailed reports
             if report_type == "detailed":
@@ -416,7 +446,7 @@ class RobinReport:
             # Combine all elements
             logger.info("Combining elements for final PDF")
             self._emit_progress("building_pdf", "Combining report sections...", 0.75)
-            
+
             if report_type == "detailed":
                 final_elements = (
                     self.elements_summary + self.elements + self.end_of_report_elements
@@ -459,8 +489,10 @@ class RobinReport:
                             "generated_at": self.generated_at,
                             "generated_by": self.generated_by,
                             "robin_commit": self.robin_commit or None,
-                            "clinvar_release": self.clinvar_metadata.get("file_date") or None,
-                            "clinvar_sha256": self.clinvar_metadata.get("sha256") or None,
+                            "clinvar_release": self.clinvar_metadata.get("file_date")
+                            or None,
+                            "clinvar_sha256": self.clinvar_metadata.get("sha256")
+                            or None,
                             "pdf_filename": os.path.basename(self.filename),
                         },
                         fh,
@@ -493,7 +525,8 @@ class RobinReport:
                         "generated_at": self.generated_at,
                         "generated_by": self.generated_by,
                         "robin_commit": self.robin_commit or None,
-                        "clinvar_release": self.clinvar_metadata.get("file_date") or None,
+                        "clinvar_release": self.clinvar_metadata.get("file_date")
+                        or None,
                         "clinvar_sha256": self.clinvar_metadata.get("sha256") or None,
                         "files": [],
                     }
@@ -503,15 +536,19 @@ class RobinReport:
                     for section in self.sections:
                         frames = getattr(section, "get_export_frames", lambda: {})()
                         total_frames += len(frames)
-                    
+
                     frame_count = 0
                     for section in self.sections:
                         frames = getattr(section, "get_export_frames", lambda: {})()
                         for name, df in frames.items():
                             frame_count += 1
-                            progress = 0.85 + (frame_count / max(total_frames, 1)) * 0.08
-                            self._emit_progress("building_pdf", f"Exporting {name} data...", progress)
-                            
+                            progress = (
+                                0.85 + (frame_count / max(total_frames, 1)) * 0.08
+                            )
+                            self._emit_progress(
+                                "building_pdf", f"Exporting {name} data...", progress
+                            )
+
                             safe_name = name.replace(" ", "_")
                             csv_path = os.path.join(
                                 export_csv_dir,

@@ -7,11 +7,11 @@ import logging
 import os
 import re
 import threading
+import tomllib
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Optional
 
-import tomllib
 import tomli_w
 
 LOGGER = logging.getLogger(__name__)
@@ -274,7 +274,9 @@ class ReadfishLiveRegistry:
             try:
                 path.unlink(missing_ok=True)
             except OSError:
-                LOGGER.debug("Could not remove live session file %s", path, exc_info=True)
+                LOGGER.debug(
+                    "Could not remove live session file %s", path, exc_info=True
+                )
 
     @classmethod
     def get(cls, sample_id: str) -> Optional[ReadfishLiveSession]:
@@ -303,7 +305,13 @@ class ReadfishLiveRegistry:
                             region_name=str(data.get("region_name") or "robin_panel"),
                             last_master_bed_path=data.get("last_master_bed_path"),
                         )
-                    except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError):
+                    except (
+                        OSError,
+                        KeyError,
+                        TypeError,
+                        ValueError,
+                        json.JSONDecodeError,
+                    ):
                         continue
                     by_id.setdefault(session.sample_id, session)
             return sorted(by_id.values(), key=lambda item: item.sample_id)
@@ -382,9 +390,7 @@ class ReadfishLiveRegistry:
             LOGGER.exception(
                 "Failed to write readfish live TOML for sample %s", sample_id
             )
-            _announce(
-                f"Live update FAILED for sample {sample_id!r}: {exc}"
-            )
+            _announce(f"Live update FAILED for sample {sample_id!r}: {exc}")
             return None
 
         _announce(

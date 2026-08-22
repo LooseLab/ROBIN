@@ -8,7 +8,11 @@ from typing import Any, Dict, Optional
 
 from robin.analysis.mnpflex_bed import select_input_bed_for_config
 from robin.analysis.mnpflex_config import MNPFlexConfig, load_mnpflex_config
-from robin.analysis.mnpflex_docker import format_mnpflex_runtime_error, run_docker_mnpflex, validate_docker_runtime
+from robin.analysis.mnpflex_docker import (
+    format_mnpflex_runtime_error,
+    run_docker_mnpflex,
+    validate_docker_runtime,
+)
 from robin.utils.mnpflex_client_standalone import MNPFlexClient
 
 logger = logging.getLogger(__name__)
@@ -23,9 +27,7 @@ def preflight_mnpflex_runtime(
     if err:
         return err
     if cfg.backend == "disabled":
-        return (
-            "MNP-Flex is disabled. Set MNPFLEX_BACKEND to docker or api."
-        )
+        return "MNP-Flex is disabled. Set MNPFLEX_BACKEND to docker or api."
     if cfg.backend == "docker":
         try:
             validate_docker_runtime(cfg)
