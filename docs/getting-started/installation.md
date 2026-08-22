@@ -10,7 +10,7 @@
 
 | You need | Notes |
 |----------|--------|
-| **Git** + **[Git LFS](https://git-lfs.com/)** | Clone includes submodules / LFS assets where used. |
+| **Git** | Used to clone ROBIN and its submodules. Git LFS is not required for the current ROBIN repository. |
 | **[Conda](https://docs.conda.io/)** | Miniconda or Anaconda. |
 | **Python 3.12** | Provided by the `robin` conda env (`robin.yml`). |
 
@@ -87,18 +87,11 @@ This installs the `robin` CLI from your working tree.
 
 ### Step 4: Download models and ClinVar
 
-Assets are SHA256-verified. Set **`GITHUB_TOKEN`** if downloads use private GitHub.
+Model assets are downloaded from public sources defined in the ROBIN assets manifest and are SHA256-verified.
 
 ```bash
 robin utils update-models
 robin utils update-clinvar
-```
-
-Private GitHub:
-
-```bash
-export GITHUB_TOKEN=your_personal_access_token
-robin utils update-models
 ```
 
 Force re-download models:
@@ -121,7 +114,7 @@ robin list-job-types
 | Issue | What to do |
 |-------|------------|
 | Missing submodules | `git submodule update --init --recursive` |
-| Model / ClinVar download failures | Set `GITHUB_TOKEN` if required; retry `robin utils update-models --overwrite` and `robin utils update-clinvar` |
+| Model / ClinVar download failures | Check network access and retry `robin utils update-models --overwrite` and `robin utils update-clinvar` |
 | Wrong conda env | `conda env list` — activate the env created from `robin.yml` |
 
 ---
