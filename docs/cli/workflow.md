@@ -1,12 +1,8 @@
 # `robin workflow`
 
-!!! abstract "What this page covers"
-    Flags and behaviour for **`robin workflow`**: synopsis, workflow string formats, Ray vs threading, GUI, logging, file handling, and links to **job types** and **quickstart**. Startup order (disclaimer, password, when the GUI appears): **[What happens at startup](../getting-started/startup.md)**.
+This command runs the ROBIN workflow engine on BAM files under a watched directory. For a first run, start with the [Quickstart](../getting-started/quickstart.md); this page is the detailed command reference.
 
-Run the **Little John** orchestrated pipeline on BAM files under a watched directory: preprocessing, optional BED conversion, analyses (MGMT, CNV, target, fusion), classifiers (Sturgeon, NanoDX, PanNanoDX, random forest), and optional **NiceGUI** monitoring.
-
-!!! info "Startup sequence"
-    When you run this command, ROBIN checks models, optionally validates `--reference`, asks you to type **`I agree`** to the research disclaimer, then (with the GUI enabled) may prompt for the **default admin password** when no GUI users exist. On the default **Ray** path, the browser UI is only started if **`--work-dir`** is set. Details: **[What happens at startup](../getting-started/startup.md)**.
+ROBIN can run preprocessing, BED conversion, MGMT, CNV, target analysis, fusion/ITD detection and multiple classification jobs, with optional NiceGUI monitoring.
 
 ## Synopsis
 
@@ -14,145 +10,141 @@ Run the **Little John** orchestrated pipeline on BAM files under a watched direc
 robin workflow <PATH> -w <WORKFLOW> --center <ID> --target-panel <PANEL> [OPTIONS]
 ```
 
-Or load settings from a TOML file:
+Or load repeatable settings from TOML:
 
 ```bash
 robin workflow --toml my_settings.toml
 ```
 
-CLI flags override values from the TOML file when you pass them explicitly. You can also mix both — for example, keep a site-specific config file and override the input directory per run:
-
-```bash
-robin workflow /path/to/bams --toml my_settings.toml
-```
+CLI flags override values from the TOML file when passed explicitly.
 
 | Argument / option | Required | Description |
 |-------------------|----------|-------------|
-| `PATH` | Yes* | Directory containing (or receiving) BAM files. Must exist. |
-| `-t` / `--toml` | No | TOML file with workflow settings (see [Configuration file](#configuration-file)). |
-| `-w` / `--workflow` | Yes* | Comma-separated job types or legacy `queue:job` steps (see [Job types](jobs.md)). |
-| `--center` | Yes* | Site or study label (e.g. `Sherwood`, `Auckland`) — used in outputs and reports. |
-| `--target-panel` | Yes* | Panel name: built-in (`rCNS2`, `AML`, …) or custom from `robin add-panel`. Run `robin utils sequencing-files --help` to see choices on your install. |
-| `-d` / `--work-dir` | No | Base directory for all run outputs. |
-| `-r` / `--reference` | No* | Path to reference **FASTA**. If provided, ROBIN validates the file and ensures an index (e.g. `.fai`). Required for analyses that need a reference. |
+| `PATH` | Yes* | Directory containing or receiving BAM files. |
+| `-t` / `--toml` | No | TOML file containing workflow settings. |
+| `-w` / `--workflow` | Yes* | Comma-separated job types or legacy `queue:job` steps. |
+| `--center` | Yes* | Site or study label used in outputs and reports. |
+| `--target-panel` | Yes* | Built-in or custom panel name. |
+| `-d` / `--work-dir` | No | Base directory for run outputs. |
+| `-r` / `--reference` | No* | Reference FASTA; required by analyses that need a reference. |
 
-\* Required on the command line **or** in the TOML file when using `--toml`.
+\* Required on the command line or supplied through TOML where applicable.
 
 ## Configuration file
 
-Use a TOML file to store repeatable run settings. An example ships with the repository at [`examples/workflow.example.toml`](https://github.com/LooseLab/ROBIN/blob/main/examples/workflow.example.toml).
+An example ships at `examples/workflow.example.toml`.
 
 ```toml
 path = "empty_folder"
 workflow = "cnv,fusion,target,mgmt,sturgeon,nanodx,pannanodx,random_forest"
 center = "NUH"
 target_panel = "rCNS2"
-
 work_dir = "../../REF_SAMPLES"
 reference = "~/references/GCA_000001405.15_GRCh38_no_alt_analysis_set.fna"
-
-# Optional
 log_level = "INFO"
 analysis_workers = 2
 with_gui = true
 deduplicate_jobs = ["sturgeon", "mgmt"]
 ```
 
-Run:
+TOML keys use the same names as long-form CLI flags. List-valued options can be TOML arrays. `workflow` can be a comma-separated string or an array of job types.
 
-```bash
-robin workflow --toml my_settings.toml
-```
+## Workflow strings
 
-TOML keys use the same names as long-form CLI flags (`target_panel`, `work_dir`, `no_process_existing`, etc.). List-valued options (`deduplicate_jobs`, `job_log_level`, `commands`, `queue_priority`) can be TOML arrays. `workflow` can be a comma-separated string or a TOML array of job types.
-
-## Workflow string formats
-
-### Simplified (recommended)
-
-Comma-separated **job types** only — queues are assigned automatically:
+### Simplified format — recommended
 
 ```bash
 -w mgmt,sturgeon
 -w target,cnv,fusion,mgmt,sturgeon,nanodx,pannanodx,random_forest
 ```
 
-Behaviour:
+ROBIN inserts required upstream stages such as `preprocessing` and, for classifiers that require it, `bed_conversion`.
 
-- **`preprocessing`** is always inserted as the first step if missing.
-- **`bed_conversion`** is inserted **before** classification jobs when needed (`sturgeon`, `nanodx`, `pannanodx`, `random_forest`).
+See [Job types](jobs.md) for the currently registered jobs and their queue mapping.
 
-### Legacy (explicit queues)
+### Legacy explicit-queue format
 
-Use `queue:job` steps, e.g.:
+Legacy workflows can specify `queue:job` pairs, for example:
 
 ```text
 preprocessing:preprocessing,bed_conversion:bed_conversion,mgmt:mgmt,classification:sturgeon
 ```
 
+Use the simplified format for new configurations unless explicit queue control is required.
+
+## Sequencing input requirements
+
+The supported real-time workflow expects BAMs that:
+
+- are aligned before ROBIN receives them;
+- use a reference compatible with the FASTA supplied through `--reference`;
+- contain the required modified-base tags for methylation analyses;
+- are rotated by read count rather than elapsed time;
+- contain **50,000 reads or fewer per BAM**.
+
+See [MinKNOW configuration](../getting-started/minknow-configuration.md) for instrument-specific setup.
+
 ## Execution engine
 
 | Mode | Flag | Notes |
-|------|------|--------|
-| **Ray** (default) | `--use-ray` | Distributed task execution; optional Ray dashboard (`--ray-dashboard` / `--no-ray-dashboard`). |
-| Threading | `--no-use-ray` | Falls back to threaded workers; analysis worker counts apply per queue mode. |
+|------|------|-------|
+| Ray | `--use-ray` | Default distributed/task-oriented execution path. |
+| Threading | `--no-use-ray` | Threaded fallback execution. |
 
-**Presets** (`--preset`): `p2i`, `standard` (default), `high` — adjust Ray actor grouping and CPU caps for different hardware (e.g. P2i vs server).
+Presets such as `p2i`, `standard` and `high` adjust worker grouping and resource allocation for different hardware profiles.
 
-## GUI (NiceGUI)
+## Web interface
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| `--with-gui` / `--no-gui` | GUI on | Launch workflow monitor in the browser. |
+| `--with-gui` / `--no-gui` | On | Enable or disable NiceGUI monitoring. |
 | `--gui-host` | `0.0.0.0` | Bind address. |
-| `--gui-port` | `8081` | Port for the GUI. |
+| `--gui-port` | `8081` | Port. |
+
+The exact startup sequence, consent and initial-user behaviour are documented under [Starting ROBIN](../getting-started/startup.md).
 
 ## Logging and progress
 
 | Option | Description |
 |--------|-------------|
-| `--log-level` | Global level: `DEBUG`, `INFO`, `WARNING`, `ERROR` (default `ERROR`). |
-| `--job-log-level` | Repeatable, e.g. `preprocessing:DEBUG`, `mgmt:WARNING`. |
-| `--verbose` / `-v` | Verbose CLI and traces. |
-| `--no-progress` | Disable file progress bars. |
+| `--log-level` | Global logging level. |
+| `--job-log-level` | Per-job logging level, e.g. `preprocessing:DEBUG`. |
+| `--verbose` / `-v` | Verbose CLI output and traces. |
+| `--no-progress` | Disable progress bars. |
 
 ## File handling
 
 | Option | Description |
 |--------|-------------|
-| `--no-process-existing` | Only process BAMs that appear **after** startup (skip files already on disk). |
-| `--no-watch` | Do not watch the directory for new files (advanced; default is to watch). |
+| `--no-process-existing` | Ignore BAMs already present at startup and process only newly arriving files. |
+| `--no-watch` | Do not continue watching for new BAM files. |
 
-## Ray tuning
+## Ray and worker tuning
 
-| Option | Description |
-|--------|-------------|
-| `--ray-num-cpus` | Cap CPUs for Ray (auto if omitted). |
-| `--queue-priority` | Repeatable, e.g. `preprocessing:10`, `mgmt:5` (Ray mode). |
-| `--show-priorities` | Print queue priorities and exit. |
-| `--analysis-workers` | Workers per analysis queue (default from code constant, often `1`). |
-| `--preprocessing-workers`, `--bed-workers` | Workers for preprocessing and `bed_conversion`. |
-| `--legacy-analysis-queue` | Single shared analysis queue instead of per-type queues (threading path). |
+Advanced options include `--ray-num-cpus`, `--queue-priority`, `--analysis-workers`, `--preprocessing-workers`, `--bed-workers`, `--show-priorities` and `--legacy-analysis-queue`.
 
-## Deduplication
+Use:
 
-`--deduplicate-jobs` (repeatable) — job types that should run **at most once per sample** even when multiple triggers fire (e.g. `sturgeon`, `mgmt`).
+```bash
+robin workflow --help
+```
 
-## Custom per-job shell commands
+for the definitive option list in the installed version.
 
-`--commands` / `-c` (repeatable) — optional mappings `job_type:shell_command` for custom steps (advanced; see `robin workflow --help`).
+## Deduplication and custom commands
 
-## Inputs and sequencing assumptions
+`--deduplicate-jobs` can restrict selected job types to a single execution per sample where appropriate.
 
-ROBIN expects **real-time** BAMs with **≤ 50,000 reads per file** and **read-count–based** rollover in MinKNOW. See the [README](https://github.com/LooseLab/ROBIN/blob/main/README.md#bam-read-limit-and-minknow-settings).
+`--commands` / `-c` can attach custom shell commands to job types. This is an advanced integration feature; verify behaviour carefully before using it in automated runs.
 
-## Exit
+## Stopping a workflow
 
-Stop with **Ctrl+C** — the runner attempts graceful shutdown; complex runs may not always exit instantly.
+Use **Ctrl+C** to request graceful shutdown. ROBIN attempts to stop watchers, workers, Ray and the GUI cleanly, although complex runs may take a short period to terminate fully.
 
 ## Related
 
-- [Job types and queues](jobs.md)  
-- [Panel commands](panels.md)  
-- [Utilities — reference files](utils.md#robin-utils-sequencing-files)  
-- [Quickstart](../getting-started/quickstart.md)  
+- [Quickstart](../getting-started/quickstart.md)
+- [Starting ROBIN](../getting-started/startup.md)
+- [Job types](jobs.md)
+- [Panel commands](panels.md)
+- [Utilities](utils.md)
