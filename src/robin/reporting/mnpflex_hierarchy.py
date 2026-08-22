@@ -54,7 +54,9 @@ def append_mnpflex_classifier_prediction(
         return
 
     if include_heading:
-        elements.append(Paragraph("Classifier prediction", styles.styles[heading_style]))
+        elements.append(
+            Paragraph("Classifier prediction", styles.styles[heading_style])
+        )
         elements.append(Spacer(1, 4))
 
     label_width = max(page_width - 0.9 * inch, 3.5 * inch)

@@ -117,7 +117,9 @@ class MinKnowClient:
 
         self._apply_status(status, merge_flow_cell_info(status, flow_cell))
 
-    def _populate_output_directories(self, connection: Any, status: PositionStatus) -> None:
+    def _populate_output_directories(
+        self, connection: Any, status: PositionStatus
+    ) -> None:
         try:
             directories = connection.instance.get_output_directories()
         except grpc.RpcError as exc:
@@ -131,7 +133,9 @@ class MinKnowClient:
 
         self._apply_status(status, merge_output_directories(status, directories))
 
-    def _populate_current_protocol_run(self, connection: Any, status: PositionStatus) -> None:
+    def _populate_current_protocol_run(
+        self, connection: Any, status: PositionStatus
+    ) -> None:
         try:
             run = connection.protocol.get_current_protocol_run()
         except grpc.RpcError as exc:

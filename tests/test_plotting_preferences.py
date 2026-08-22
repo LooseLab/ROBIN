@@ -22,9 +22,7 @@ def test_plotting_preferences_defaults() -> None:
 
 
 def test_plotting_preferences_legacy_log2_alias() -> None:
-    config = PlottingPreferencesConfig.from_dict(
-        {"cnv_report_scale": "log2_ratio"}
-    )
+    config = PlottingPreferencesConfig.from_dict({"cnv_report_scale": "log2_ratio"})
     assert config.cnv_report_scale == CNV_REPORT_SCALE_NORMALIZED_DIFFERENCE
 
 
@@ -65,10 +63,17 @@ def test_resolve_cnv_summary_normalized_uses_admin_preference(tmp_path: Path) ->
 
 
 def test_resolve_cnv_summary_normalized_defaults_to_ploidy() -> None:
-    assert resolve_cnv_summary_normalized(None, plotting_preferences=PlottingPreferencesConfig()) is False
+    assert (
+        resolve_cnv_summary_normalized(
+            None, plotting_preferences=PlottingPreferencesConfig()
+        )
+        is False
+    )
 
 
-def test_robin_report_loads_admin_plotting_preferences(tmp_path: Path, monkeypatch) -> None:
+def test_robin_report_loads_admin_plotting_preferences(
+    tmp_path: Path, monkeypatch
+) -> None:
     """When plotting_preferences is omitted, RobinReport must load the store default."""
     from robin.reporting.report import RobinReport
 
@@ -99,7 +104,9 @@ def test_robin_report_loads_admin_plotting_preferences(tmp_path: Path, monkeypat
     )
 
 
-def test_robin_report_respects_explicit_ploidy_override(tmp_path: Path, monkeypatch) -> None:
+def test_robin_report_respects_explicit_ploidy_override(
+    tmp_path: Path, monkeypatch
+) -> None:
     from robin.reporting.report import RobinReport
 
     prefs = PlottingPreferencesConfig(
@@ -126,7 +133,9 @@ def test_robin_report_respects_explicit_ploidy_override(tmp_path: Path, monkeypa
     assert report.cnv_summary_normalized is False
 
 
-def test_robin_report_empty_config_does_not_load_store(tmp_path: Path, monkeypatch) -> None:
+def test_robin_report_empty_config_does_not_load_store(
+    tmp_path: Path, monkeypatch
+) -> None:
     """Explicit empty PlottingPreferencesConfig must not be replaced by store load."""
     from robin.reporting.report import RobinReport
 

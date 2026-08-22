@@ -14,37 +14,36 @@ Features:
 - Error handling and result tracking
 """
 
-import os
-import time
+import gc
+import json
 import logging
+import os
+import sys
+import tempfile
+import time
+import zipfile
 from dataclasses import dataclass, field
-from typing import Dict, Any, Optional, List
-from robin.logging_config import get_job_logger
+from typing import Any, Dict, List, Optional
+
+import numpy as np
+import onnxruntime
+import pandas as pd
+import sturgeon
+from sturgeon.constants import NOMEASURE_VALUE
+
+# Sturgeon-related imports (must be installed)
+from sturgeon.prediction import bed_to_numpy
+from sturgeon.utils import load_bed_file, softmax
+
+from robin import models
 from robin.analysis.utilities.merge_bedmethyl import (
     load_modkit_data,
     modkit_pileup_file_to_bed,
 )
-import tempfile
-import gc
-import pandas as pd
-import numpy as np
+from robin.logging_config import get_job_logger
 
 # from robin.subpages.Sturgeon_object import predict_sample_from_dataframe
 
-import sturgeon
-
-# Sturgeon-related imports (must be installed)
-from sturgeon.prediction import bed_to_numpy
-
-import sys
-
-import zipfile
-import json
-import onnxruntime
-from sturgeon.utils import load_bed_file, softmax
-from sturgeon.constants import NOMEASURE_VALUE
-
-from robin import models
 
 logger = logging.getLogger(__name__)
 
@@ -191,7 +190,7 @@ class SturgeonAnalysis:
 def process_multiple_files(parquet_paths, metadata_list, work_dir, logger):
     """
     Process multiple parquet files for sturgeon analysis.
-    
+
     This function processes multiple parquet files for the same sample.
     Each file is processed individually and results are accumulated in
     the same sturgeon_scores.csv file.
@@ -207,16 +206,16 @@ def process_multiple_files(parquet_paths, metadata_list, work_dir, logger):
     """
     if not parquet_paths or not metadata_list:
         raise ValueError("parquet_paths and metadata_list must not be empty")
-    
+
     if len(parquet_paths) != len(metadata_list):
         raise ValueError("parquet_paths and metadata_list must have the same length")
-    
+
     # Get sample ID from first metadata (assuming all parquet files are from same sample)
     sample_id = metadata_list[0].get("sample_id", "unknown")
-    
+
     logger.info(f"🐟 Starting multi-file sturgeon analysis for sample: {sample_id}")
     logger.info(f"Processing {len(parquet_paths)} parquet files for sample {sample_id}")
-    
+
     # Log essential metadata only
     for i, (parquet_path, metadata) in enumerate(zip(parquet_paths, metadata_list)):
         logger.debug(f"Parquet file {i+1}: {os.path.basename(parquet_path)}")
@@ -238,14 +237,16 @@ def process_multiple_files(parquet_paths, metadata_list, work_dir, logger):
         output_dir = os.path.join(work_dir, sample_id)
         os.makedirs(output_dir, exist_ok=True)
         analysis_result["output_dir"] = output_dir
-        analysis_result["sturgeon_scores_path"] = os.path.join(output_dir, "sturgeon_scores.csv")
-        
+        analysis_result["sturgeon_scores_path"] = os.path.join(
+            output_dir, "sturgeon_scores.csv"
+        )
+
         logger.info(f"Created output directory: {output_dir}")
         analysis_result["processing_steps"].append("directory_created")
 
         # Initialize sturgeon analysis
         sturgeon_analyzer = SturgeonAnalysis(work_dir=work_dir)
-        
+
         # Get reference genome and probes file (shared across all files)
         reference_genome = "hg38"
         probes_file = sturgeon_analyzer._get_probes_file(reference_genome)
@@ -255,33 +256,41 @@ def process_multiple_files(parquet_paths, metadata_list, work_dir, logger):
         # Process each parquet file individually
         logger.info("Processing parquet files individually")
         processed_files = 0
-        
+
         for i, (parquet_path, metadata) in enumerate(zip(parquet_paths, metadata_list)):
-            logger.info(f"Processing parquet file {i+1}/{len(parquet_paths)}: {os.path.basename(parquet_path)}")
-            
+            logger.info(
+                f"Processing parquet file {i+1}/{len(parquet_paths)}: {os.path.basename(parquet_path)}"
+            )
+
             try:
                 # Check if parquet file exists
                 if not os.path.exists(parquet_path):
                     logger.warning(f"Parquet file not found: {parquet_path}")
                     continue
-                
+
                 # Get current timestamp in milliseconds
                 current_time = time.time() * 1000
-                
+
                 # Run sturgeon analysis for this file
                 sturgeon_analyzer._run_sturgeon_analysis(
                     parquet_path, output_dir, probes_file, current_time
                 )
-                
+
                 processed_files += 1
-                logger.debug(f"Successfully processed file {i+1}: {os.path.basename(parquet_path)}")
-                
+                logger.debug(
+                    f"Successfully processed file {i+1}: {os.path.basename(parquet_path)}"
+                )
+
             except Exception as e:
-                logger.warning(f"Error processing {os.path.basename(parquet_path)}: {e}")
+                logger.warning(
+                    f"Error processing {os.path.basename(parquet_path)}: {e}"
+                )
                 continue
 
         if processed_files == 0:
-            analysis_result["error_message"] = "No files could be processed successfully"
+            analysis_result["error_message"] = (
+                "No files could be processed successfully"
+            )
             analysis_result["processing_steps"].append("no_files_processed")
             return analysis_result
 
@@ -291,15 +300,19 @@ def process_multiple_files(parquet_paths, metadata_list, work_dir, logger):
         # Check if sturgeon_scores.csv was created
         if os.path.exists(analysis_result["sturgeon_scores_path"]):
             analysis_result["processing_steps"].append("sturgeon_scores_created")
-            logger.info(f"Sturgeon scores accumulated in: {analysis_result['sturgeon_scores_path']}")
+            logger.info(
+                f"Sturgeon scores accumulated in: {analysis_result['sturgeon_scores_path']}"
+            )
         else:
             logger.warning("No sturgeon_scores.csv file was created")
 
         analysis_result["processing_steps"].append("analysis_complete")
         logger.info(f"Multi-file sturgeon analysis completed for {sample_id}")
-        logger.info(f"Files successfully processed: {analysis_result['files_processed']}/{analysis_result['total_files']}")
+        logger.info(
+            f"Files successfully processed: {analysis_result['files_processed']}/{analysis_result['total_files']}"
+        )
         logger.info(f"Output directory: {analysis_result['output_dir']}")
-        
+
         return analysis_result
 
     except Exception as e:
@@ -322,55 +335,69 @@ def sturgeon_handler(job, work_dir=None):
         # Get job-specific logger
         logger = get_job_logger(str(job.job_id), job.job_type, job.context.filepath)
         suppress_expected = _is_fail_only_expected(job)
-        
+
         # Check if this is a batched job
         batched_job = job.context.metadata.get("_batched_job")
         if batched_job:
             batch_size = batched_job.get_file_count()
             sample_id = batched_job.get_sample_id()
             batch_id = batched_job.batch_id
-            logger.info(f"Processing sturgeon analysis batch: {batch_size} files for sample '{sample_id}' (batch_id: {batch_id})")
-            
+            logger.info(
+                f"Processing sturgeon analysis batch: {batch_size} files for sample '{sample_id}' (batch_id: {batch_id})"
+            )
+
             # Get all filepaths in the batch
             filepaths = batched_job.get_filepaths()
-            
+
             # Log individual files in the batch
             for i, filepath in enumerate(filepaths):
-                logger.info(f"  Batch file {i+1}/{batch_size}: {os.path.basename(filepath)}")
-            
+                logger.info(
+                    f"  Batch file {i+1}/{batch_size}: {os.path.basename(filepath)}"
+                )
+
             # Prepare metadata list and extract parquet paths from bed conversion results
             metadata_list = []
             parquet_paths = []
-            
+
             for i, bam_path in enumerate(filepaths):
                 # Get metadata from preprocessing for this specific file
                 file_metadata = batched_job.contexts[i].metadata.get("bam_metadata", {})
-                
+
                 # Get sample ID from preprocessing results for this specific file
                 file_context = batched_job.contexts[i]
                 file_sample_id = file_context.get_sample_id()
-                
+
                 # Use the sample ID from the file's context (which should have preprocessing results)
                 if file_sample_id != "unknown":
                     file_metadata["sample_id"] = file_sample_id
                 else:
                     file_metadata["sample_id"] = sample_id
-                
+
                 # Get parquet path from bed conversion results for this file
-                bed_conversion_result = batched_job.contexts[i].results.get("bed_conversion", {})
+                bed_conversion_result = batched_job.contexts[i].results.get(
+                    "bed_conversion", {}
+                )
                 parquet_path = bed_conversion_result.get("parquet_path")
-                
+
                 if parquet_path:
                     parquet_paths.append(parquet_path)
                     metadata_list.append(file_metadata)
-                    logger.debug(f"Found parquet path for file {i+1}: {os.path.basename(parquet_path)}")
+                    logger.debug(
+                        f"Found parquet path for file {i+1}: {os.path.basename(parquet_path)}"
+                    )
                 else:
-                    logger.warning(f"No parquet path found for file {i+1}: {os.path.basename(bam_path)}")
-            
+                    logger.warning(
+                        f"No parquet path found for file {i+1}: {os.path.basename(bam_path)}"
+                    )
+
             if not parquet_paths:
-                error_msg = "No parquet paths found from bed conversion results in batch"
+                error_msg = (
+                    "No parquet paths found from bed conversion results in batch"
+                )
                 if suppress_expected:
-                    logger.warning(f"{error_msg} (expected for fail-only BAM submission)")
+                    logger.warning(
+                        f"{error_msg} (expected for fail-only BAM submission)"
+                    )
                     job.context.add_result(
                         "sturgeon_analysis",
                         {"status": "expected_failure", "reason": error_msg},
@@ -379,7 +406,7 @@ def sturgeon_handler(job, work_dir=None):
                     logger.error(error_msg)
                     job.context.add_error("sturgeon_analysis", error_msg)
                 return
-            
+
             # Determine work directory for the batch
             if work_dir is None:
                 # Default to first parquet file directory
@@ -389,29 +416,40 @@ def sturgeon_handler(job, work_dir=None):
                 os.makedirs(work_dir, exist_ok=True)
                 batch_work_dir = work_dir
                 logger.debug(f"Using specified work directory: {batch_work_dir}")
-            
+
             # Process all parquet files in the batch using the new aggregated function
-            logger.info(f"Processing {len(parquet_paths)} parquet files as aggregated batch for sample '{sample_id}'")
+            logger.info(
+                f"Processing {len(parquet_paths)} parquet files as aggregated batch for sample '{sample_id}'"
+            )
             batch_result = process_multiple_files(
                 parquet_paths=parquet_paths,
                 metadata_list=metadata_list,
                 work_dir=batch_work_dir,
-                logger=logger
+                logger=logger,
             )
-            
+
             # Store batch results in job context (maintain compatibility with existing structure)
-            job.context.add_metadata("sturgeon_analysis", {
-                "batch_result": batch_result,  # Single aggregated result
-                "batch_size": batch_size,
-                "sample_id": sample_id,
-                "batch_id": batch_id,
-                "files_processed": batch_result.get("files_processed", len(parquet_paths)),
-                "total_files": batch_result.get("total_files", len(parquet_paths))
-            })
-            
-            logger.info(f"Completed sturgeon analysis batch processing: {batch_size} files for sample '{sample_id}'")
-            logger.info(f"Files successfully processed: {batch_result.get('files_processed', len(parquet_paths))}/{batch_result.get('total_files', len(parquet_paths))}")
-            
+            job.context.add_metadata(
+                "sturgeon_analysis",
+                {
+                    "batch_result": batch_result,  # Single aggregated result
+                    "batch_size": batch_size,
+                    "sample_id": sample_id,
+                    "batch_id": batch_id,
+                    "files_processed": batch_result.get(
+                        "files_processed", len(parquet_paths)
+                    ),
+                    "total_files": batch_result.get("total_files", len(parquet_paths)),
+                },
+            )
+
+            logger.info(
+                f"Completed sturgeon analysis batch processing: {batch_size} files for sample '{sample_id}'"
+            )
+            logger.info(
+                f"Files successfully processed: {batch_result.get('files_processed', len(parquet_paths))}/{batch_result.get('total_files', len(parquet_paths))}"
+            )
+
             if batch_result.get("error_message"):
                 if suppress_expected:
                     logger.warning(
@@ -429,9 +467,13 @@ def sturgeon_handler(job, work_dir=None):
                     logger.error(
                         f"Batch processing completed with errors: {batch_result['error_message']}"
                     )
-                    job.context.add_error("sturgeon_analysis", batch_result["error_message"])
+                    job.context.add_error(
+                        "sturgeon_analysis", batch_result["error_message"]
+                    )
             else:
-                logger.info("Batch processing completed successfully with aggregated sturgeon analysis")
+                logger.info(
+                    "Batch processing completed successfully with aggregated sturgeon analysis"
+                )
                 job.context.add_result(
                     "sturgeon_analysis",
                     {
@@ -440,14 +482,20 @@ def sturgeon_handler(job, work_dir=None):
                         "analysis_time": batch_result.get("analysis_timestamp", 0),
                         "output_dir": batch_result.get("output_dir", ""),
                         "processing_steps": batch_result.get("processing_steps", []),
-                        "sturgeon_scores_path": batch_result.get("sturgeon_scores_path", ""),
-                        "files_processed": batch_result.get("files_processed", len(parquet_paths)),
-                        "total_files": batch_result.get("total_files", len(parquet_paths)),
+                        "sturgeon_scores_path": batch_result.get(
+                            "sturgeon_scores_path", ""
+                        ),
+                        "files_processed": batch_result.get(
+                            "files_processed", len(parquet_paths)
+                        ),
+                        "total_files": batch_result.get(
+                            "total_files", len(parquet_paths)
+                        ),
                     },
                 )
-            
+
             return
-            
+
         else:
             # Single file processing (backward compatibility)
             logger.info(
@@ -490,8 +538,12 @@ def sturgeon_handler(job, work_dir=None):
             )
 
             if sturgeon_result.error_message:
-                job.context.add_error("sturgeon_analysis", sturgeon_result.error_message)
-                logger.error(f"Sturgeon analysis failed: {sturgeon_result.error_message}")
+                job.context.add_error(
+                    "sturgeon_analysis", sturgeon_result.error_message
+                )
+                logger.error(
+                    f"Sturgeon analysis failed: {sturgeon_result.error_message}"
+                )
             else:
                 job.context.add_result(
                     "sturgeon_analysis",
@@ -519,7 +571,9 @@ def sturgeon_handler(job, work_dir=None):
         except Exception:
             suppress_expected = False
         if suppress_expected:
-            logger.warning(f"Expected Sturgeon failure for fail-only BAM submission: {e}")
+            logger.warning(
+                f"Expected Sturgeon failure for fail-only BAM submission: {e}"
+            )
             job.context.add_result(
                 "sturgeon_analysis",
                 {"status": "expected_failure", "error_message": str(e)},
@@ -622,8 +676,8 @@ def predict_sample_from_dataframe(
     Returns:
         pd.DataFrame: The prediction results.
     """
-    import subprocess
     import json
+    import subprocess
     import tempfile
 
     # Alternative multiprocessing approach (uncomment to use):

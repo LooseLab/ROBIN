@@ -84,7 +84,9 @@ def test_auth_bootstrap_from_legacy_hash(tmp_path: Path) -> None:
 
 def test_bootstrap_admin_explicit_no_must_change(tmp_path: Path) -> None:
     store, auth = _store_and_auth(tmp_path)
-    user_id = auth.create_user("admin", "setup-pass", role="admin", must_change_password=False)
+    user_id = auth.create_user(
+        "admin", "setup-pass", role="admin", must_change_password=False
+    )
     user = store.get_user_by_id(user_id)
     assert user is not None
     assert not user.must_change_password

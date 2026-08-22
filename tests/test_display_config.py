@@ -16,16 +16,22 @@ from robin.security import SecurityStore
 
 def test_display_config_hides_admin_override() -> None:
     config = SampleDisplayConfig(sections={"sturgeon": False})
-    assert is_section_visible(
-        "sturgeon",
-        workflow_steps=["sturgeon", "cnv"],
-        display_config=config,
-    ) is False
-    assert is_section_visible(
-        "cnv",
-        workflow_steps=["sturgeon", "cnv"],
-        display_config=config,
-    ) is True
+    assert (
+        is_section_visible(
+            "sturgeon",
+            workflow_steps=["sturgeon", "cnv"],
+            display_config=config,
+        )
+        is False
+    )
+    assert (
+        is_section_visible(
+            "cnv",
+            workflow_steps=["sturgeon", "cnv"],
+            display_config=config,
+        )
+        is True
+    )
 
 
 def test_display_config_respects_workflow_steps() -> None:
@@ -35,11 +41,14 @@ def test_display_config_respects_workflow_steps() -> None:
 
 def test_fusion_child_hidden_when_parent_hidden() -> None:
     config = SampleDisplayConfig(sections={"fusion": False})
-    assert is_section_visible(
-        "fusion_target",
-        workflow_steps=["fusion"],
-        display_config=config,
-    ) is False
+    assert (
+        is_section_visible(
+            "fusion_target",
+            workflow_steps=["fusion"],
+            display_config=config,
+        )
+        is False
+    )
 
 
 def test_classification_visible_set() -> None:
@@ -75,12 +84,15 @@ def test_migrate_stale_snp_false_to_active() -> None:
     assert config.schema_version == 3
     assert "snp" not in config.role_sections["user"]
     assert config.role_sections["user"]["cnv"] is False
-    assert is_section_visible(
-        "snp",
-        workflow_steps=["cnv"],
-        display_config=config,
-        surface="sample_details",
-    ) is True
+    assert (
+        is_section_visible(
+            "snp",
+            workflow_steps=["cnv"],
+            display_config=config,
+            surface="sample_details",
+        )
+        is True
+    )
 
 
 def test_role_sections_use_viewer_role() -> None:
@@ -119,30 +131,44 @@ def test_legacy_sections_migrate_to_user_role() -> None:
 
 
 def test_any_sample_details_visible() -> None:
-    config = SampleDisplayConfig(sections={"target": False, "snp": False, "fusion": False})
-    assert any_sample_details_visible(["target", "fusion", "snp_analysis"], config) is False
+    config = SampleDisplayConfig(
+        sections={"target": False, "snp": False, "fusion": False}
+    )
+    assert (
+        any_sample_details_visible(["target", "fusion", "snp_analysis"], config)
+        is False
+    )
 
     config2 = SampleDisplayConfig(sections={"fusion": True, "fusion_target": True})
     assert any_sample_details_visible(["fusion"], config2) is True
 
-    assert is_section_visible(
-        "snp",
-        workflow_steps=["snp_analysis"],
-        surface="sample_details",
-    ) is True
+    assert (
+        is_section_visible(
+            "snp",
+            workflow_steps=["snp_analysis"],
+            surface="sample_details",
+        )
+        is True
+    )
     # SNP is optional (on-demand) analysis; visibility is admin-controlled, not workflow-gated.
-    assert is_section_visible(
-        "snp",
-        workflow_steps=["cnv"],
-        surface="sample_details",
-    ) is True
+    assert (
+        is_section_visible(
+            "snp",
+            workflow_steps=["cnv"],
+            surface="sample_details",
+        )
+        is True
+    )
     config_hide_snp = SampleDisplayConfig(sections={"snp": False})
-    assert is_section_visible(
-        "snp",
-        workflow_steps=["cnv"],
-        display_config=config_hide_snp,
-        surface="sample_details",
-    ) is False
+    assert (
+        is_section_visible(
+            "snp",
+            workflow_steps=["cnv"],
+            display_config=config_hide_snp,
+            surface="sample_details",
+        )
+        is False
+    )
 
 
 def test_effective_section_map_includes_sample_details_sections() -> None:
@@ -153,7 +179,11 @@ def test_effective_section_map_includes_sample_details_sections() -> None:
 
 
 def test_mnpflex_grouped_under_v12_classifier() -> None:
-    from robin.gui.display_config import DISPLAY_GROUP_LABELS, DISPLAY_GROUP_ORDER, DISPLAY_SECTIONS
+    from robin.gui.display_config import (
+        DISPLAY_GROUP_LABELS,
+        DISPLAY_GROUP_ORDER,
+        DISPLAY_SECTIONS,
+    )
 
     assert DISPLAY_SECTIONS["mnpflex"].group == "v12_classifier"
     assert DISPLAY_GROUP_ORDER.index("v12_classifier") == 1
@@ -169,8 +199,11 @@ def test_security_store_gui_settings_roundtrip(tmp_path: Path) -> None:
     assert loaded is not None
     assert loaded["sections"]["cnv"] is False
     restored = SampleDisplayConfig.from_dict(loaded)
-    assert is_section_visible(
-        "cnv",
-        workflow_steps=["cnv"],
-        display_config=restored,
-    ) is False
+    assert (
+        is_section_visible(
+            "cnv",
+            workflow_steps=["cnv"],
+            display_config=restored,
+        )
+        is False
+    )

@@ -5,9 +5,9 @@ This module contains PDF-specific styling utilities and helper functions
 for implementing Material Design 3 and Apple HIG principles in PDF reports.
 """
 
-from reportlab.platypus import Paragraph, Spacer, Table, TableStyle
-from reportlab.lib.units import inch
 from reportlab.lib import colors
+from reportlab.lib.units import inch
+from reportlab.platypus import Paragraph, Spacer, Table, TableStyle
 
 
 class PDFStyleUtils:
@@ -129,9 +129,7 @@ class PDFStyleUtils:
             for item in content:
                 if isinstance(item, str):
                     if styles_dict and "Normal" in styles_dict:
-                        elements.append(
-                            Paragraph(f"• {item}", styles_dict["Normal"])
-                        )
+                        elements.append(Paragraph(f"• {item}", styles_dict["Normal"]))
                     else:
                         # Fallback to default style
                         from reportlab.lib.styles import getSampleStyleSheet
@@ -219,8 +217,8 @@ class PDFStyleUtils:
             table.setStyle(style)
         else:
             # Fallback to basic table styling
-            from reportlab.platypus import TableStyle
             from reportlab.lib import colors
+            from reportlab.platypus import TableStyle
 
             basic_style = TableStyle(
                 [

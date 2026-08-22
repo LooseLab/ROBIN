@@ -70,9 +70,10 @@ def rewrite_vcf_chromosomes(
     dst_path.parent.mkdir(parents=True, exist_ok=True)
 
     variant_count = 0
-    with src_path.open("r", encoding="utf-8", errors="replace") as fin, dst_path.open(
-        "w", encoding="utf-8"
-    ) as fout:
+    with (
+        src_path.open("r", encoding="utf-8", errors="replace") as fin,
+        dst_path.open("w", encoding="utf-8") as fout,
+    ):
         variant_count = _stream_rewrite_vcf(fin, fout, transform)
     return variant_count
 

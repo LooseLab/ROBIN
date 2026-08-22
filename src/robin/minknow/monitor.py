@@ -81,9 +81,7 @@ def format_poll_summary(
         return f"MinKNOW ({host}): no data"
 
     active = sum(
-        1
-        for position in result.status.positions
-        if position_has_active_run(position)
+        1 for position in result.status.positions if position_has_active_run(position)
     )
     parts = [
         f"MinKNOW Core {result.status.core_version}",

@@ -9,8 +9,8 @@ import logging
 import os
 from typing import Any, Dict, List, Optional
 
-from reportlab.platypus import Paragraph, Spacer
 from reportlab.lib.units import inch
+from reportlab.platypus import Paragraph, Spacer
 
 from robin.analysis.mnpflex_docker import hierarchy_aggregate_display
 from robin.analysis.mnpflex_hierarchy import (
@@ -203,17 +203,27 @@ class MNPFlexSection(ReportSection):
                     [
                         {
                             "score": item.get("score"),
-                            "subclass": (item.get("reference_group") or {}).get("molecular_subclass")
+                            "subclass": (item.get("reference_group") or {}).get(
+                                "molecular_subclass"
+                            )
                             or (item.get("reference_group") or {}).get("name"),
-                            "class": (item.get("reference_group") or {}).get("molecular_class"),
-                            "family": (item.get("reference_group") or {}).get("molecular_family"),
-                            "superfamily": (item.get("reference_group") or {}).get("molecular_superfamily"),
+                            "class": (item.get("reference_group") or {}).get(
+                                "molecular_class"
+                            ),
+                            "family": (item.get("reference_group") or {}).get(
+                                "molecular_family"
+                            ),
+                            "superfamily": (item.get("reference_group") or {}).get(
+                                "molecular_superfamily"
+                            ),
                         }
                         for item in top_scores
                     ]
                 )
         except Exception as ex:
-            logger.error("Error building MNP-Flex export DataFrames: %s", ex, exc_info=True)
+            logger.error(
+                "Error building MNP-Flex export DataFrames: %s", ex, exc_info=True
+            )
 
         # Top 10 classifier scores
         scores = classifier_summary.get("scores") or []
@@ -238,25 +248,31 @@ class MNPFlexSection(ReportSection):
                         ref.get("molecular_superfamily") or "",
                     ]
                 )
-            self.elements.append(Paragraph("Top 10 classifier scores", self.styles.styles["Heading3"]))
+            self.elements.append(
+                Paragraph("Top 10 classifier scores", self.styles.styles["Heading3"])
+            )
             self.elements.append(self.create_table(top_rows))
             self.elements.append(Spacer(1, 4))
 
         hierarchy_preds = hierarchy_aggregate_display(classifier_summary)
         if hierarchy_preds or scores:
             if hierarchy_preds:
-                top_subclass = hierarchy_preds.get("molecular_subclass", {}).get("label")
+                top_subclass = hierarchy_preds.get("molecular_subclass", {}).get(
+                    "label"
+                )
                 top_class = hierarchy_preds.get("molecular_class", {}).get("label")
                 top_family = hierarchy_preds.get("molecular_family", {}).get("label")
-                top_superfamily = hierarchy_preds.get(
-                    "molecular_superfamily", {}
-                ).get("label")
-                subclass_sum = hierarchy_preds.get("molecular_subclass", {}).get("score")
+                top_superfamily = hierarchy_preds.get("molecular_superfamily", {}).get(
+                    "label"
+                )
+                subclass_sum = hierarchy_preds.get("molecular_subclass", {}).get(
+                    "score"
+                )
                 class_sum = hierarchy_preds.get("molecular_class", {}).get("score")
                 family_sum = hierarchy_preds.get("molecular_family", {}).get("score")
-                superfamily_sum = hierarchy_preds.get(
-                    "molecular_superfamily", {}
-                ).get("score")
+                superfamily_sum = hierarchy_preds.get("molecular_superfamily", {}).get(
+                    "score"
+                )
             else:
                 top = sorted(
                     scores,
@@ -286,9 +302,17 @@ class MNPFlexSection(ReportSection):
                 ["Subclass", top_subclass or "N/A", self._format_score(subclass_sum)],
                 ["Class", top_class or "N/A", self._format_score(class_sum)],
                 ["Family", top_family or "N/A", self._format_score(family_sum)],
-                ["Superfamily", top_superfamily or "N/A", self._format_score(superfamily_sum)],
+                [
+                    "Superfamily",
+                    top_superfamily or "N/A",
+                    self._format_score(superfamily_sum),
+                ],
             ]
-            self.elements.append(Paragraph("Aggregate scores for top entry", self.styles.styles["Heading3"]))
+            self.elements.append(
+                Paragraph(
+                    "Aggregate scores for top entry", self.styles.styles["Heading3"]
+                )
+            )
             if not has_hierarchical_summary:
                 self.elements.append(
                     Paragraph(
@@ -303,7 +327,10 @@ class MNPFlexSection(ReportSection):
         # Plots (if available)
         plot_specs = [
             ("QC coverage plot", os.path.join(results_dir, "qc_coverage_plot.png")),
-            ("QC methylation density plot", os.path.join(results_dir, "qc_methylation_density_plot.png")),
+            (
+                "QC methylation density plot",
+                os.path.join(results_dir, "qc_methylation_density_plot.png"),
+            ),
             ("MGMT region plot", os.path.join(results_dir, "mgmt_region_plot.png")),
         ]
         for title, path in plot_specs:

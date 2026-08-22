@@ -4,16 +4,17 @@ header_footer.py
 This module contains the class for adding headers and footers to the PDF report.
 """
 
-from reportlab.pdfgen import canvas
+import os
+from datetime import datetime
+
+from PIL import Image as PILImage
+from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import inch
-from datetime import datetime
-import os
-from robin.gui import images
-from reportlab.lib import colors
-from PIL import Image as PILImage
+from reportlab.pdfgen import canvas
 
 from robin.__init__ import __version__
+from robin.gui import images
 
 VERSION = __version__
 

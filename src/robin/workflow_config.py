@@ -10,7 +10,11 @@ from typing import Any, Mapping, MutableMapping, Optional, Sequence
 import click
 from click.core import ParameterSource
 
-from robin.minknow.toml_config import MinKnowWorkflowConfig, extract_minknow_config, load_minknow_toml
+from robin.minknow.toml_config import (
+    MinKnowWorkflowConfig,
+    extract_minknow_config,
+    load_minknow_toml,
+)
 
 WORKFLOW_REQUIRED_KEYS = ("path", "workflow", "center", "target_panel")
 
@@ -98,7 +102,9 @@ def load_workflow_toml(path: Path) -> dict[str, Any]:
         raise click.BadParameter(f"Invalid TOML in {path}: {exc}") from exc
 
     if not isinstance(raw, dict):
-        raise click.BadParameter(f"TOML config must be a table at the top level: {path}")
+        raise click.BadParameter(
+            f"TOML config must be a table at the top level: {path}"
+        )
 
     return _normalize_config(raw)
 
@@ -357,15 +363,10 @@ def _parameter_from_commandline(ctx: click.Context, param_name: str) -> bool:
 
 
 def _validate_required_params(params: Mapping[str, Any]) -> None:
-    missing = [
-        key
-        for key in WORKFLOW_REQUIRED_KEYS
-        if params.get(key) in (None, "")
-    ]
+    missing = [key for key in WORKFLOW_REQUIRED_KEYS if params.get(key) in (None, "")]
     if missing:
         readable = ", ".join(
-            key.replace("_", "-") if key != "path" else "PATH"
-            for key in missing
+            key.replace("_", "-") if key != "path" else "PATH" for key in missing
         )
         raise click.BadParameter(
             f"Missing required workflow setting(s): {readable}. "

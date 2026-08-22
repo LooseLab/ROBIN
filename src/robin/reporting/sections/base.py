@@ -4,12 +4,13 @@ base.py
 This module contains the base class for report sections.
 """
 
-from abc import ABC, abstractmethod
 import logging
-from reportlab.platypus import Paragraph, Spacer, Table, TableStyle, Image
+from abc import ABC, abstractmethod
+
 from reportlab.lib import colors
-from reportlab.lib.units import inch
 from reportlab.lib.styles import ParagraphStyle
+from reportlab.lib.units import inch
+from reportlab.platypus import Image, Paragraph, Spacer, Table, TableStyle
 
 logger = logging.getLogger(__name__)
 
@@ -140,9 +141,7 @@ class ReportSection(ABC):
             Table object with applied styling
         """
         # Convert all data to Paragraphs with proper styling
-        cell_style = (
-            self.COMPACT_TABLE_CELL_STYLE if compact else self.TABLE_CELL_STYLE
-        )
+        cell_style = self.COMPACT_TABLE_CELL_STYLE if compact else self.TABLE_CELL_STYLE
         header_style = self.TABLE_HEADER_STYLE
         if font_size is not None:
             # Use leading slightly larger than font size for readable line spacing

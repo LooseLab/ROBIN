@@ -9,13 +9,13 @@ from typing import Any, Dict, List, Optional
 
 from .constants import get_security_db_path
 from .models import User, UserPublic
-from .user_metadata import metadata_to_json, normalize_metadata, parse_metadata_json
 from .user_approvals import (
     approvals_to_json,
     default_approvals,
     normalize_approvals,
     parse_approvals_json,
 )
+from .user_metadata import metadata_to_json, normalize_metadata, parse_metadata_json
 
 
 def utc_now_iso() -> str:
@@ -44,8 +44,7 @@ class SecurityStore:
 
     def _init_schema(self) -> None:
         with self._lock:
-            self._conn.executescript(
-                """
+            self._conn.executescript("""
                 CREATE TABLE IF NOT EXISTS users (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     username TEXT NOT NULL UNIQUE,
@@ -112,8 +111,7 @@ class SecurityStore:
                     updated_by_user_id INTEGER,
                     FOREIGN KEY(updated_by_user_id) REFERENCES users(id)
                 );
-                """
-            )
+                """)
             self._migrate_schema()
 
     def _migrate_schema(self) -> None:
@@ -369,12 +367,10 @@ class SecurityStore:
 
     def list_users(self) -> List[UserPublic]:
         with self._lock:
-            rows = self._conn.execute(
-                f"""
+            rows = self._conn.execute(f"""
                 SELECT {self._user_public_select_columns()}
                 FROM users ORDER BY username
-                """
-            ).fetchall()
+                """).fetchall()
             return [self._row_to_user_public(row) for row in rows]
 
     def user_has_role(self, user_id: int, role_name: str) -> bool:
@@ -407,15 +403,13 @@ class SecurityStore:
 
     def count_active_admins(self) -> int:
         with self._lock:
-            row = self._conn.execute(
-                """
+            row = self._conn.execute("""
                 SELECT COUNT(*) AS c
                 FROM users u
                 INNER JOIN user_roles ur ON ur.user_id = u.id
                 INNER JOIN roles r ON r.id = ur.role_id
                 WHERE u.is_active = 1 AND r.name = 'admin'
-                """
-            ).fetchone()
+                """).fetchone()
             return int(row["c"]) if row else 0
 
     def set_last_login(self, user_id: int) -> None:
@@ -478,7 +472,14 @@ class SecurityStore:
                 INSERT INTO consents(user_id, consent_version, agreed_at, ip, user_agent, session_id)
                 VALUES (?, ?, ?, ?, ?, ?)
                 """,
-                (int(user_id), consent_version, utc_now_iso(), ip, user_agent, session_id),
+                (
+                    int(user_id),
+                    consent_version,
+                    utc_now_iso(),
+                    ip,
+                    user_agent,
+                    session_id,
+                ),
             )
 
     def list_consent_status(self, consent_version: str) -> List[Dict[str, Any]]:
@@ -532,7 +533,9 @@ class SecurityStore:
         request_id: str = "",
         error_code: str = "",
     ) -> None:
-        details_json = json.dumps(details or {}, separators=(",", ":"), ensure_ascii=True)
+        details_json = json.dumps(
+            details or {}, separators=(",", ":"), ensure_ascii=True
+        )
         with self._lock:
             self._conn.execute(
                 """
@@ -635,7 +638,9 @@ class SecurityStore:
                 {
                     "id": int(row["id"]),
                     "occurred_at": str(row["occurred_at"]),
-                    "user_id": int(row["user_id"]) if row["user_id"] is not None else None,
+                    "user_id": (
+                        int(row["user_id"]) if row["user_id"] is not None else None
+                    ),
                     "username": str(row["username"] or ""),
                     "event_type": str(row["event_type"] or ""),
                     "target_type": str(row["target_type"] or ""),

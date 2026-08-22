@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+import json
+import logging
 import os
 import threading
-from typing import Any, Callable, Dict, List, Optional
 from pathlib import Path
-import logging
-import json
+from typing import Any, Callable, Dict, List, Optional
+
 from robin.analysis.snp_processing import parse_vcf
 from robin.utils.clinvar_manager import compare_sample_clinvar_to_installed
 
@@ -95,7 +96,7 @@ def _apply_variant_column_labels(columns: List[Dict[str, Any]]) -> None:
 def navigate_igv_to_snp(chrom: str, pos: int, flank: int = 100) -> None:
     """
     Navigate IGV browser to a specific SNP location.
-    
+
     Args:
         chrom: Chromosome name (e.g., "chr1")
         pos: Position on the chromosome
@@ -105,16 +106,16 @@ def navigate_igv_to_snp(chrom: str, pos: int, flank: int = 100) -> None:
         # Ensure chromosome name has 'chr' prefix if needed
         if not chrom.startswith("chr"):
             chrom = f"chr{chrom}"
-        
+
         # Calculate window around the SNP
         start = max(1, pos - flank)
         end = pos + flank
-        
+
         region = f"{chrom}:{start}-{end}"
-        
+
         # Escape region string for JavaScript
         escaped_region = region.replace('"', '\\"').replace("'", "\\'")
-        
+
         js_navigate = f"""
             (function() {{
                 try {{
@@ -134,9 +135,9 @@ def navigate_igv_to_snp(chrom: str, pos: int, flank: int = 100) -> None:
                 }}
             }})();
         """
-        
+
         ui.run_javascript(js_navigate, timeout=5.0)
-        
+
     except Exception as e:
         logger.error(f"Error navigating IGV to SNP {chrom}:{pos}: {e}")
 
@@ -205,7 +206,9 @@ def _submit_snp_workflow_job(
     )
 
     workflow_runner = getattr(launcher, "workflow_runner", None)
-    if workflow_runner is not None and hasattr(workflow_runner, "submit_snp_analysis_job"):
+    if workflow_runner is not None and hasattr(
+        workflow_runner, "submit_snp_analysis_job"
+    ):
         try:
             success = workflow_runner.submit_snp_analysis_job(
                 sample_dir=str(sample_dir),
@@ -256,7 +259,9 @@ def _add_clinvar_annotation_controls(
         if not compact
         else "w-full gap-2 mb-2 flex-wrap items-center"
     ):
-        ui.label(f"Annotated with: {sample_label}").classes("classification-insight-meta")
+        ui.label(f"Annotated with: {sample_label}").classes(
+            "classification-insight-meta"
+        )
         ui.label(f"Installed: {installed_label}").classes(
             "classification-insight-level classification-insight-level--low w-auto"
             if is_stale
@@ -311,12 +316,12 @@ def add_snp_section(launcher: Any, sample_dir: Path) -> None:
     """
     if not sample_dir or not sample_dir.exists():
         return
-    
+
     # Look for VCF files in clair3 directory
     clair3_dir = sample_dir / "clair3"
     if not clair3_dir.exists():
         return
-    
+
     # Look for snpsift_output.vcf (preferred) or other VCF files
     display_file = clair3_dir / "snpsift_output_display.json"
 
@@ -325,7 +330,9 @@ def add_snp_section(launcher: Any, sample_dir: Path) -> None:
             ui.label("SNP analysis").classes(
                 "classification-insight-heading text-headline-small"
             )
-            with ui.element("div").classes("classification-insight-card w-full min-w-0"):
+            with ui.element("div").classes(
+                "classification-insight-card w-full min-w-0"
+            ):
                 with ui.column().classes("w-full min-w-0 gap-2 p-2 md:p-3"):
                     ui.label(
                         "Precomputed SNP display data was not found. "
@@ -342,11 +349,15 @@ def add_snp_section(launcher: Any, sample_dir: Path) -> None:
             ui.label("SNP analysis").classes(
                 "classification-insight-heading text-headline-small"
             )
-            with ui.element("div").classes("classification-insight-card w-full min-w-0"):
+            with ui.element("div").classes(
+                "classification-insight-card w-full min-w-0"
+            ):
                 with ui.column().classes("w-full min-w-0 gap-2 p-2 md:p-3"):
                     ui.label(
                         "Could not load SNP variant data. Check logs for details."
-                    ).classes("classification-insight-level classification-insight-level--low w-full")
+                    ).classes(
+                        "classification-insight-level classification-insight-level--low w-full"
+                    )
         return
 
     columns: List[Dict[str, Any]] = snp_display.get("columns", [])
@@ -420,7 +431,9 @@ def add_snp_section(launcher: Any, sample_dir: Path) -> None:
     max_field_length = 80
 
     column_lookup = {
-        col.get("field"): col for col in columns if isinstance(col, dict) and col.get("field")
+        col.get("field"): col
+        for col in columns
+        if isinstance(col, dict) and col.get("field")
     }
 
     visible_fields = [
@@ -428,7 +441,9 @@ def add_snp_section(launcher: Any, sample_dir: Path) -> None:
     ]
     if not visible_fields:
         visible_fields = [
-            col.get("field") for col in columns[:12] if isinstance(col, dict) and col.get("field")
+            col.get("field")
+            for col in columns[:12]
+            if isinstance(col, dict) and col.get("field")
         ]
 
     display_columns = [column_lookup[field].copy() for field in visible_fields]
@@ -514,7 +529,9 @@ def add_snp_section(launcher: Any, sample_dir: Path) -> None:
                     "(only the current page is sent to the browser)."
                 ).classes("classification-insight-meta w-full")
             if significant_count > 0:
-                ui.label(f"ClinVar significant variants: {significant_count:,}").classes(
+                ui.label(
+                    f"ClinVar significant variants: {significant_count:,}"
+                ).classes(
                     "classification-insight-level classification-insight-level--low w-auto"
                 )
             elif pathogenic_count > 0:
@@ -532,19 +549,27 @@ def add_snp_section(launcher: Any, sample_dir: Path) -> None:
 
         with ui.row().classes("w-full gap-2 mb-2 flex-wrap items-end"):
             snp_pass_only = ui.checkbox("PASS only").props("dense")
-            snp_significant_only = ui.checkbox("ClinVar significant only").props("dense")
-            snp_min_qual = ui.number("Min QUAL", value=None).props(
-                "dense outlined clearable"
-            ).classes("w-32")
+            snp_significant_only = ui.checkbox("ClinVar significant only").props(
+                "dense"
+            )
+            snp_min_qual = (
+                ui.number("Min QUAL", value=None)
+                .props("dense outlined clearable")
+                .classes("w-32")
+            )
             if snp_has_dp:
-                snp_min_dp = ui.number("Min DP", value=None).props(
-                    "dense outlined clearable"
-                ).classes("w-32")
+                snp_min_dp = (
+                    ui.number("Min DP", value=None)
+                    .props("dense outlined clearable")
+                    .classes("w-32")
+                )
             else:
                 snp_min_dp = None
-            snp_search = ui.input("Search (gene/variant)").props(
-                "dense outlined clearable debounce=400"
-            ).classes("w-64")
+            snp_search = (
+                ui.input("Search (gene/variant)")
+                .props("dense outlined clearable debounce=400")
+                .classes("w-64")
+            )
             snp_reset_button = ui.button("Reset").props("dense no-caps")
 
         _snp_total_filtered = len(page_state["filtered_indices"])
@@ -590,9 +615,7 @@ def add_snp_section(launcher: Any, sample_dir: Path) -> None:
                 rows_out[-1]["__row_idx"] = idx
             snp_table.rows = rows_out
             snp_table.pagination = pag
-            snp_filtered_count_label.text = (
-                f"{total_filtered:,} variants match filters (of {snp_total_rows:,} total)"
-            )
+            snp_filtered_count_label.text = f"{total_filtered:,} variants match filters (of {snp_total_rows:,} total)"
             snp_table.update()
 
         wire_qtable_server_pagination_handlers(snp_table, _fill_snp_from_pagination)
@@ -601,15 +624,22 @@ def add_snp_section(launcher: Any, sample_dir: Path) -> None:
             pass_only = bool(getattr(snp_pass_only, "value", False))
             significant_only = bool(getattr(snp_significant_only, "value", False))
             min_qual = _to_float(getattr(snp_min_qual, "value", None))
-            min_dp = _to_float(getattr(snp_min_dp, "value", None)) if snp_has_dp else None
+            min_dp = (
+                _to_float(getattr(snp_min_dp, "value", None)) if snp_has_dp else None
+            )
             search_text = str(getattr(snp_search, "value", "") or "").strip().lower()
 
             filtered_indices: List[int] = []
             for idx, full_row in enumerate(snp_rows_source):
-                if pass_only and str(full_row.get("FILTER", "")).strip().upper() != "PASS":
+                if (
+                    pass_only
+                    and str(full_row.get("FILTER", "")).strip().upper() != "PASS"
+                ):
                     continue
                 if significant_only and not _is_truthy(
-                    full_row.get("is_clinvar_significant", full_row.get("is_pathogenic", ""))
+                    full_row.get(
+                        "is_clinvar_significant", full_row.get("is_pathogenic", "")
+                    )
                 ):
                     continue
 
@@ -662,9 +692,12 @@ def add_snp_section(launcher: Any, sample_dir: Path) -> None:
 
         if any(col.get("field") in {"action", "details"} for col in display_columns):
             try:
-                with ui.dialog() as details_dialog, ui.card().classes(
-                    "robin-dialog-surface w-[95vw] max-w-6xl max-h-[85vh] overflow-auto "
-                    "p-4 md:p-5"
+                with (
+                    ui.dialog() as details_dialog,
+                    ui.card().classes(
+                        "robin-dialog-surface w-[95vw] max-w-6xl max-h-[85vh] overflow-auto "
+                        "p-4 md:p-5"
+                    ),
                 ):
                     ui.label("Variant details").classes(
                         "classification-insight-heading text-headline-small"
@@ -691,7 +724,8 @@ def add_snp_section(launcher: Any, sample_dir: Path) -> None:
                         [
                             k
                             for k in row_data.keys()
-                            if k not in VARIANT_DETAIL_FIELDS and k not in ui_only_fields
+                            if k not in VARIANT_DETAIL_FIELDS
+                            and k not in ui_only_fields
                         ]
                     )
                     with details_container:
@@ -699,7 +733,9 @@ def add_snp_section(launcher: Any, sample_dir: Path) -> None:
                             value = row_data.get(field, "")
                             if value is None or str(value) == "":
                                 continue
-                            label = VARIANT_COLUMN_LABELS.get(field, field.replace("_", " "))
+                            label = VARIANT_COLUMN_LABELS.get(
+                                field, field.replace("_", " ")
+                            )
                             with ui.row().classes("w-full items-start gap-2"):
                                 ui.label(f"{label}:").classes(
                                     "text-xs font-semibold min-w-[180px]"
@@ -779,9 +815,11 @@ def add_snp_section(launcher: Any, sample_dir: Path) -> None:
             col["sortable"] = False
         _fill_snp_from_pagination(snp_init_pagination)
         try:
+
             def _cleanup_snp_page() -> None:
                 page_state["filtered_indices"] = []
                 snp_table.rows = []
+
             ui.context.client.on_disconnect(_cleanup_snp_page)
         except Exception:
             pass
@@ -804,9 +842,9 @@ def add_snp_section(launcher: Any, sample_dir: Path) -> None:
 
         indel_df = parse_vcf(indel_vcf)
         if indel_df is None:
-            ui.label(
-                "Could not parse INDEL VCF data. Check logs for details."
-            ).classes("classification-insight-level classification-insight-level--low w-full")
+            ui.label("Could not parse INDEL VCF data. Check logs for details.").classes(
+                "classification-insight-level classification-insight-level--low w-full"
+            )
             return
 
         if indel_df.empty:
@@ -868,13 +906,15 @@ def add_snp_section(launcher: Any, sample_dir: Path) -> None:
             # Normalize boolean display consistency for filtering and details.
             row_data["is_clinvar_significant"] = (
                 "Yes"
-                if _is_truthy(row_data.get("is_clinvar_significant", row_data.get("is_pathogenic", "")))
+                if _is_truthy(
+                    row_data.get(
+                        "is_clinvar_significant", row_data.get("is_pathogenic", "")
+                    )
+                )
                 else "No"
             )
             row_data["is_pathogenic"] = (
-                "Yes"
-                if _is_truthy(row_data.get("is_pathogenic", ""))
-                else "No"
+                "Yes" if _is_truthy(row_data.get("is_pathogenic", "")) else "No"
             )
             return row_data
 
@@ -939,9 +979,7 @@ def add_snp_section(launcher: Any, sample_dir: Path) -> None:
                     "classification-insight-level classification-insight-level--low w-auto"
                 )
             elif pathogenic_indel_count:
-                ui.label(
-                    f"Pathogenic variants: {pathogenic_indel_count:,}"
-                ).classes(
+                ui.label(f"Pathogenic variants: {pathogenic_indel_count:,}").classes(
                     "classification-insight-level classification-insight-level--low w-auto"
                 )
 
@@ -955,19 +993,27 @@ def add_snp_section(launcher: Any, sample_dir: Path) -> None:
 
         with ui.row().classes("w-full gap-2 mb-2 flex-wrap items-end"):
             indel_pass_only = ui.checkbox("PASS only").props("dense")
-            indel_significant_only = ui.checkbox("ClinVar significant only").props("dense")
-            indel_min_qual = ui.number("Min QUAL", value=None).props(
-                "dense outlined clearable"
-            ).classes("w-32")
+            indel_significant_only = ui.checkbox("ClinVar significant only").props(
+                "dense"
+            )
+            indel_min_qual = (
+                ui.number("Min QUAL", value=None)
+                .props("dense outlined clearable")
+                .classes("w-32")
+            )
             if indel_has_dp:
-                indel_min_dp = ui.number("Min DP", value=None).props(
-                    "dense outlined clearable"
-                ).classes("w-32")
+                indel_min_dp = (
+                    ui.number("Min DP", value=None)
+                    .props("dense outlined clearable")
+                    .classes("w-32")
+                )
             else:
                 indel_min_dp = None
-            indel_search = ui.input("Search (gene/variant)").props(
-                "dense outlined clearable debounce=400"
-            ).classes("w-64")
+            indel_search = (
+                ui.input("Search (gene/variant)")
+                .props("dense outlined clearable debounce=400")
+                .classes("w-64")
+            )
             indel_reset_button = ui.button("Reset").props("dense no-caps")
 
         indel_page_state: Dict[str, Any] = {
@@ -1012,9 +1058,7 @@ def add_snp_section(launcher: Any, sample_dir: Path) -> None:
                 _compact_indel_row(idx) for idx in filtered_indices[start:end]
             ]
             indel_table.pagination = pag
-            indel_filtered_count_label.text = (
-                f"{total_filtered:,} variants match filters (of {total_indel_rows:,} total)"
-            )
+            indel_filtered_count_label.text = f"{total_filtered:,} variants match filters (of {total_indel_rows:,} total)"
             indel_table.update()
 
         wire_qtable_server_pagination_handlers(indel_table, _fill_indel_from_pagination)
@@ -1024,7 +1068,9 @@ def add_snp_section(launcher: Any, sample_dir: Path) -> None:
             significant_only = bool(getattr(indel_significant_only, "value", False))
             min_qual = _to_float(getattr(indel_min_qual, "value", None))
             min_dp = (
-                _to_float(getattr(indel_min_dp, "value", None)) if indel_has_dp else None
+                _to_float(getattr(indel_min_dp, "value", None))
+                if indel_has_dp
+                else None
             )
             search_text = str(getattr(indel_search, "value", "") or "").strip().lower()
 
@@ -1032,10 +1078,15 @@ def add_snp_section(launcher: Any, sample_dir: Path) -> None:
             for idx in range(total_indel_rows):
                 full_row = _indel_row_text_map(idx)
 
-                if pass_only and str(full_row.get("FILTER", "")).strip().upper() != "PASS":
+                if (
+                    pass_only
+                    and str(full_row.get("FILTER", "")).strip().upper() != "PASS"
+                ):
                     continue
                 if significant_only and not _is_truthy(
-                    full_row.get("is_clinvar_significant", full_row.get("is_pathogenic", ""))
+                    full_row.get(
+                        "is_clinvar_significant", full_row.get("is_pathogenic", "")
+                    )
                 ):
                     continue
 
@@ -1070,7 +1121,9 @@ def add_snp_section(launcher: Any, sample_dir: Path) -> None:
             _fill_indel_from_pagination(pag)
 
         indel_pass_only.on("update:model-value", lambda _e: _apply_indel_filters())
-        indel_significant_only.on("update:model-value", lambda _e: _apply_indel_filters())
+        indel_significant_only.on(
+            "update:model-value", lambda _e: _apply_indel_filters()
+        )
         indel_min_qual.on("update:model-value", lambda _e: _apply_indel_filters())
         if indel_has_dp and indel_min_dp is not None:
             indel_min_dp.on("update:model-value", lambda _e: _apply_indel_filters())
@@ -1086,9 +1139,12 @@ def add_snp_section(launcher: Any, sample_dir: Path) -> None:
             )
         )
 
-        with ui.dialog() as indel_details_dialog, ui.card().classes(
-            "robin-dialog-surface w-[95vw] max-w-6xl max-h-[85vh] overflow-auto "
-            "p-4 md:p-5"
+        with (
+            ui.dialog() as indel_details_dialog,
+            ui.card().classes(
+                "robin-dialog-surface w-[95vw] max-w-6xl max-h-[85vh] overflow-auto "
+                "p-4 md:p-5"
+            ),
         ):
             ui.label("INDEL details").classes(
                 "classification-insight-heading text-headline-small"
@@ -1121,8 +1177,12 @@ def add_snp_section(launcher: Any, sample_dir: Path) -> None:
                         continue
                     label = VARIANT_COLUMN_LABELS.get(field, field.replace("_", " "))
                     with ui.row().classes("w-full items-start gap-2"):
-                        ui.label(f"{label}:").classes("text-xs font-semibold min-w-[180px]")
-                        ui.label(str(value)).classes("text-xs whitespace-pre-wrap break-all flex-1")
+                        ui.label(f"{label}:").classes(
+                            "text-xs font-semibold min-w-[180px]"
+                        )
+                        ui.label(str(value)).classes(
+                            "text-xs whitespace-pre-wrap break-all flex-1"
+                        )
             indel_details_dialog.open()
 
         indel_table.add_slot(
@@ -1200,9 +1260,11 @@ def add_snp_section(launcher: Any, sample_dir: Path) -> None:
             col["sortable"] = False
         _fill_indel_from_pagination(indel_init_pagination)
         try:
+
             def _cleanup_indel_page() -> None:
                 indel_page_state["filtered_indices"] = []
                 indel_table.rows = []
+
             ui.context.client.on_disconnect(_cleanup_indel_page)
         except Exception:
             pass

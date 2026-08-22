@@ -175,10 +175,16 @@ def _resolve_readfish_context(
     target_panel: Optional[str],
     reference: Optional[str],
 ) -> Optional[tuple[Any, Any]]:
-    from robin.minknow.config import preset_path_from_environ, workflow_toml_from_environ
+    from robin.minknow.config import (
+        preset_path_from_environ,
+        workflow_toml_from_environ,
+    )
     from robin.minknow.toml_config import load_minknow_toml
     from robin.readfish.config import ReadfishConfig
-    from robin.workflow_config import load_minknow_from_workflow_toml, load_workflow_toml
+    from robin.workflow_config import (
+        load_minknow_from_workflow_toml,
+        load_workflow_toml,
+    )
 
     for path in _workflow_toml_candidates(work_dir):
         if not path.is_file():

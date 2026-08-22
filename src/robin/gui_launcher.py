@@ -8,6 +8,7 @@ workflow execution to avoid any blocking.
 
 # Suppress pkg_resources deprecation warnings from sorted_nearest
 import warnings
+
 warnings.filterwarnings(
     "ignore", message="pkg_resources is deprecated", category=UserWarning
 )
@@ -17,53 +18,48 @@ warnings.filterwarnings(
 )
 
 import asyncio
-from contextlib import contextmanager
+import csv
+import getpass
+import json
 import logging
+import os
+import pickle
 import queue
+import secrets
+import sys
+import tempfile
 import threading
 import time
+import uuid
+import zipfile
 from collections import deque
-import csv
+from contextlib import contextmanager
+from dataclasses import asdict, dataclass, field
 from datetime import datetime
+from enum import Enum
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Set
+from urllib.parse import quote
+
 from robin.analysis.master_csv_manager import MasterCSVManager
 from robin.analysis.mnpflex_eligibility import (
     DEFAULT_MNPFLEX_IDLE_SECONDS,
     sample_ready_for_mnpflex_auto_run,
     sample_ready_for_mnpflex_auto_run_from_dir,
 )
-
-from typing import Optional, Dict, Any, List, Set
-from pathlib import Path
-from dataclasses import dataclass, field, asdict
-from enum import Enum
-import os
-import secrets
-import sys
-import tempfile
-import zipfile
-import json
-import pickle
-import getpass
-import uuid
-from urllib.parse import quote
-
-from robin.gui import theme, images
-from robin.gui.session import clear_auth_session_fields, is_authenticated_session
-
 from robin.build_info import get_git_commit
-
+from robin.gui import images, theme
 from robin.gui.components.news_feed import NewsFeed
+from robin.gui.config import resolve_viewer_role
+from robin.gui.session import clear_auth_session_fields, is_authenticated_session
+from robin.reporting.report import create_pdf
+from robin.reporting.sections.disclaimer_text import EXTENDED_DISCLAIMER_TEXT
 from robin.security import (
     AuditService,
     AuthService,
-    get_consent_version,
     SecurityStore,
+    get_consent_version,
 )
-
-from robin.reporting.report import create_pdf
-from robin.gui.config import resolve_viewer_role
-from robin.reporting.sections.disclaimer_text import EXTENDED_DISCLAIMER_TEXT
-
 
 # Files that indicate an analysis step is complete.
 COMPLETION_JOB_PATTERNS: Dict[str, List[str]] = {
@@ -86,7 +82,11 @@ COMPLETION_JOB_PATTERNS: Dict[str, List[str]] = {
     "target": ["coverage_main.csv", "bed_coverage_main.csv"],
     "sturgeon": ["sturgeon_scores.csv", "sturgeon_results.csv", "sturgeon_summary.csv"],
     "nanodx": ["NanoDX_scores.csv", "nanodx_results.csv", "nanodx_summary.csv"],
-    "pannanodx": ["PanNanoDX_scores.csv", "pannanodx_results.csv", "pannanodx_summary.csv"],
+    "pannanodx": [
+        "PanNanoDX_scores.csv",
+        "pannanodx_results.csv",
+        "pannanodx_summary.csv",
+    ],
     "random_forest": [
         "random_forest_scores.csv",
         "random_forest_results.csv",
@@ -111,9 +111,17 @@ COMPLETION_JOB_PATTERNS: Dict[str, List[str]] = {
 from robin.minknow.sample_id import (
     SAMPLE_IDENTIFIER_MANIFEST_FILENAME,
     build_sample_registration,
+)
+from robin.minknow.sample_id import (
     decrypt_identifier_manifest_field as _decrypt_identifier_manifest_field,
+)
+from robin.minknow.sample_id import (
     get_test_id_from_manifest as _get_test_id_from_manifest,
+)
+from robin.minknow.sample_id import (
     load_manifest_encrypted_fields as _load_manifest_encrypted_fields,
+)
+from robin.minknow.sample_id import (
     normalize_dob,
     save_sample_identifier_manifest,
     save_sample_registration,
@@ -138,7 +146,7 @@ def _sample_page_section_timer(page: str, sample_id: str, section: str):
 
 
 try:
-    from nicegui import ui, app, background_tasks
+    from nicegui import app, background_tasks, ui
 except ImportError:
     ui = None
     app = None
@@ -146,7 +154,7 @@ except ImportError:
 
 try:
     from fastapi import Request
-    from fastapi.responses import RedirectResponse, FileResponse
+    from fastapi.responses import FileResponse, RedirectResponse
     from starlette.middleware.base import BaseHTTPMiddleware
 except ImportError:  # pragma: no cover
     Request = None
@@ -156,7 +164,7 @@ except ImportError:  # pragma: no cover
 
 try:
     from argon2 import PasswordHasher
-    from argon2.exceptions import VerifyMismatchError, InvalidHashError
+    from argon2.exceptions import InvalidHashError, VerifyMismatchError
 except ImportError:  # pragma: no cover
     PasswordHasher = None
     VerifyMismatchError = Exception
@@ -182,7 +190,9 @@ def ensure_gui_password_set() -> bool:
     False otherwise (caller should exit). Requires a TTY to set a new password.
     """
     if PasswordHasher is None:
-        logging.error("argon2-cffi is required for GUI password hashing. Install it with: pip install argon2-cffi")
+        logging.error(
+            "argon2-cffi is required for GUI password hashing. Install it with: pip install argon2-cffi"
+        )
         return False
 
     path = _get_gui_password_hash_path()
@@ -195,7 +205,9 @@ def ensure_gui_password_set() -> bool:
             logging.error("Could not read GUI password hash file: %s", e)
             return False
         if not stored:
-            logging.error("GUI password hash file is empty. Delete it and run again to set a new password.")
+            logging.error(
+                "GUI password hash file is empty. Delete it and run again to set a new password."
+            )
             return False
         if sys.stdin.isatty():
             try:
@@ -275,7 +287,9 @@ def ensure_default_admin_password_set(auth_service: "AuthService") -> bool:
         print("Password cannot be empty.", file=sys.stderr)
         return False
 
-    if not auth_service.bootstrap_default_admin("".join(pwd1), username=DEFAULT_ADMIN_USERNAME):
+    if not auth_service.bootstrap_default_admin(
+        "".join(pwd1), username=DEFAULT_ADMIN_USERNAME
+    ):
         logging.error("Could not create the default admin user.")
         return False
     logging.info("Bootstrapped default admin user 'admin'")
@@ -456,7 +470,9 @@ class SampleRecord:
             "last_seen": self.last_seen,
             "files_seen": self.files_seen,
             "files_processed": self.files_processed,
-            "file_progress": self.files_processed / self.files_seen if self.files_seen > 0 else 0.0,
+            "file_progress": (
+                self.files_processed / self.files_seen if self.files_seen > 0 else 0.0
+            ),
             "actions": "View",
             "_last_seen_raw": self._last_seen_raw,
         }
@@ -552,7 +568,9 @@ class GUILauncher:
         # RLock: _merge_job_types_with_persisted and other helpers acquire this while callers
         # (e.g. _update_master_record_from_workflow) may already hold it — plain Lock deadlocks.
         self._samples_record_lock = threading.RLock()
-        self._master_record_cache_file: Optional[Path] = None  # Set when monitored_directory is known
+        self._master_record_cache_file: Optional[Path] = (
+            None  # Set when monitored_directory is known
+        )
         self._background_scan_interval: float = 10.0  # Scan every 10 seconds
         self._background_scan_in_progress: bool = False
         # Sequential bulk SNP (one sample at a time; guard concurrent runs)
@@ -570,6 +588,7 @@ class GUILauncher:
 
         # Progress notification event
         from nicegui import Event
+
         self.progress_notification_event = Event[Dict[str, Any]]()
         # CNV per-sample cache
         self._cnv_state: Dict[str, Dict[str, Any]] = {}
@@ -644,7 +663,9 @@ class GUILauncher:
         try:
             return {
                 "ip": str(app.storage.user.get("_request_ip", "") or ""),
-                "user_agent": str(app.storage.user.get("_request_user_agent", "") or ""),
+                "user_agent": str(
+                    app.storage.user.get("_request_user_agent", "") or ""
+                ),
                 "session_id": str(app.storage.user.get("_session_id", "") or ""),
                 "request_id": str(app.storage.user.get("_request_id", "") or ""),
             }
@@ -715,9 +736,9 @@ class GUILauncher:
                 ui.label("Access denied").classes(
                     "classification-insight-heading text-headline-small"
                 )
-                ui.label(
-                    "This page is available to admin users only."
-                ).classes("classification-insight-foot")
+                ui.label("This page is available to admin users only.").classes(
+                    "classification-insight-foot"
+                )
                 ui.button(
                     "Back to home",
                     on_click=lambda: ui.navigate.to("/"),
@@ -725,7 +746,10 @@ class GUILauncher:
                 ).props("color=primary no-caps")
 
     def _current_user_has_training(self) -> bool:
-        from robin.security.user_approvals import TRAINING_RECEIVED_KEY, user_has_approval
+        from robin.security.user_approvals import (
+            TRAINING_RECEIVED_KEY,
+            user_has_approval,
+        )
 
         return user_has_approval(
             self.security_store, self._get_current_user_id(), TRAINING_RECEIVED_KEY
@@ -752,7 +776,9 @@ class GUILauncher:
 
     def minknow_gui_accessible(self) -> bool:
         """MinKNOW is configured and the signed-in user may use remote control."""
-        return self.minknow_gui_enabled and self._current_user_can_remote_control_minknow()
+        return (
+            self.minknow_gui_enabled and self._current_user_can_remote_control_minknow()
+        )
 
     def _notify_export_denied(self) -> None:
         from robin.security.user_approvals import EXPORT_DENIED_MESSAGE
@@ -784,7 +810,9 @@ class GUILauncher:
                 ui.label("Training approval required").classes(
                     "classification-insight-heading text-headline-small"
                 )
-                ui.label(TRAINING_REQUIRED_MESSAGE).classes("classification-insight-foot")
+                ui.label(TRAINING_REQUIRED_MESSAGE).classes(
+                    "classification-insight-foot"
+                )
                 ui.button(
                     "Back to samples",
                     on_click=lambda: ui.navigate.to("/live_data"),
@@ -917,9 +945,15 @@ class GUILauncher:
                     forwarded_for = request.headers.get("x-forwarded-for", "")
                     real_ip = request.headers.get("x-real-ip", "")
                     client_host = request.client.host if request.client else ""
-                    ip = (forwarded_for.split(",")[0].strip() if forwarded_for else "") or real_ip or client_host
+                    ip = (
+                        (forwarded_for.split(",")[0].strip() if forwarded_for else "")
+                        or real_ip
+                        or client_host
+                    )
                     app.storage.user["_request_ip"] = ip
-                    app.storage.user["_request_user_agent"] = request.headers.get("user-agent", "")
+                    app.storage.user["_request_user_agent"] = request.headers.get(
+                        "user-agent", ""
+                    )
                     app.storage.user["_request_id"] = uuid.uuid4().hex
                     if not app.storage.user.get("_session_id"):
                         app.storage.user["_session_id"] = uuid.uuid4().hex
@@ -939,7 +973,11 @@ class GUILauncher:
                 ):
                     return await call_next(request)
                 gen = app.storage.general.get("_auth_generation")
-                if not app.storage.user.get("authenticated", False) or gen is None or app.storage.user.get("_auth_generation") != gen:
+                if (
+                    not app.storage.user.get("authenticated", False)
+                    or gen is None
+                    or app.storage.user.get("_auth_generation") != gen
+                ):
                     clear_auth_session_fields()
                     requested_path = path
                     if request.url.query:
@@ -949,7 +987,9 @@ class GUILauncher:
                 user_id = app.storage.user.get("user_id")
                 if user_id is not None and path != "/change-password":
                     try:
-                        if launcher.security_store.user_must_change_password(int(user_id)):
+                        if launcher.security_store.user_must_change_password(
+                            int(user_id)
+                        ):
                             requested_path = path
                             if request.url.query:
                                 requested_path = f"{requested_path}?{request.url.query}"
@@ -976,7 +1016,9 @@ class GUILauncher:
         except OSError:
             return None
 
-    def _verify_user_login(self, username: str, password: str) -> Optional[Dict[str, Any]]:
+    def _verify_user_login(
+        self, username: str, password: str
+    ) -> Optional[Dict[str, Any]]:
         user = self.auth_service.verify_login(username, password)
         if user is None:
             return None
@@ -1002,7 +1044,9 @@ class GUILauncher:
             else "/"
         )
         if self.security_store.user_must_change_password(user_id):
-            ui.navigate.to(f"/change-password?redirect_to={quote(safe_target, safe='/?=&')}")
+            ui.navigate.to(
+                f"/change-password?redirect_to={quote(safe_target, safe='/?=&')}"
+            )
             return
 
         has_consent = self.security_store.has_consent(user_id, self.consent_version)
@@ -1014,13 +1058,18 @@ class GUILauncher:
             ui.navigate.to(safe_target)
             return
 
-        with ui.dialog().props("persistent") as consent_dialog, ui.card().classes(
-            "robin-dialog-surface p-4 md:p-5 min-w-[18rem] max-w-2xl"
+        with (
+            ui.dialog().props("persistent") as consent_dialog,
+            ui.card().classes(
+                "robin-dialog-surface p-4 md:p-5 min-w-[18rem] max-w-2xl"
+            ),
         ):
             ui.label("Research use agreement").classes(
                 "classification-insight-heading text-headline-small q-mb-sm"
             )
-            ui.label(EXTENDED_DISCLAIMER_TEXT).classes("classification-insight-foot q-mb-md")
+            ui.label(EXTENDED_DISCLAIMER_TEXT).classes(
+                "classification-insight-foot q-mb-md"
+            )
 
             def _accept_consent() -> None:
                 ctx = self._get_request_context()
@@ -1056,7 +1105,9 @@ class GUILauncher:
             return True
         legacy_path = _get_gui_password_hash_path()
         if self.auth_service.bootstrap_admin_from_legacy_hash(legacy_path):
-            logging.info("Bootstrapped default admin user from legacy GUI password hash")
+            logging.info(
+                "Bootstrapped default admin user from legacy GUI password hash"
+            )
             return True
         return False
 
@@ -1070,17 +1121,22 @@ class GUILauncher:
                 if base.exists():
                     # Store cache in the monitored directory
                     self._master_record_cache_file = base / ".samples_master_record.pkl"
-                    logging.info(f"Master record cache file: {self._master_record_cache_file}")
+                    logging.info(
+                        f"Master record cache file: {self._master_record_cache_file}"
+                    )
         except Exception as e:
             logging.debug(f"Error setting up cache file: {e}")
 
     def _load_master_record_cache(self) -> bool:
         """Load master record from cache file. Returns True if successful."""
         try:
-            if not self._master_record_cache_file or not self._master_record_cache_file.exists():
+            if (
+                not self._master_record_cache_file
+                or not self._master_record_cache_file.exists()
+            ):
                 return False
 
-            with open(self._master_record_cache_file, 'rb') as f:
+            with open(self._master_record_cache_file, "rb") as f:
                 cached_data = pickle.load(f)
 
             if isinstance(cached_data, dict):
@@ -1090,7 +1146,9 @@ class GUILauncher:
                         sid: SampleRecord(**data) if isinstance(data, dict) else data
                         for sid, data in cached_data.items()
                     }
-                logging.info(f"Loaded {len(self._samples_master_record)} samples from cache")
+                logging.info(
+                    f"Loaded {len(self._samples_master_record)} samples from cache"
+                )
                 # Mark all as dirty to trigger UI refresh
                 for record in self._samples_master_record.values():
                     record._dirty = True
@@ -1113,8 +1171,8 @@ class GUILauncher:
                 }
 
             # Save to temporary file first, then rename (atomic operation)
-            temp_file = self._master_record_cache_file.with_suffix('.pkl.tmp')
-            with open(temp_file, 'wb') as f:
+            temp_file = self._master_record_cache_file.with_suffix(".pkl.tmp")
+            with open(temp_file, "wb") as f:
                 pickle.dump(cache_data, f)
             temp_file.replace(self._master_record_cache_file)
             logging.debug(f"Saved master record cache ({len(cache_data)} samples)")
@@ -1292,6 +1350,7 @@ class GUILauncher:
         self._background_scan_in_progress = True
         try:
             import asyncio
+
             updated_any = await asyncio.to_thread(self._background_scan_samples_sync)
             if updated_any and hasattr(self, "samples_table"):
                 self._refresh_table_from_master()
@@ -1365,13 +1424,18 @@ class GUILauncher:
                                 record.run_start = self._format_timestamp_for_display(
                                     first_row.get("run_info_run_time", "")
                                 )
-                                record.device = first_row.get("run_info_device", "") or ""
-                                record.flowcell = first_row.get("run_info_flow_cell", "") or ""
+                                record.device = (
+                                    first_row.get("run_info_device", "") or ""
+                                )
+                                record.flowcell = (
+                                    first_row.get("run_info_flow_cell", "") or ""
+                                )
 
                                 # Update last_seen from saved value or use file mtime
                                 try:
                                     saved_last = float(
-                                        first_row.get("samples_overview_last_seen", 0.0) or 0.0
+                                        first_row.get("samples_overview_last_seen", 0.0)
+                                        or 0.0
                                     )
                                     if saved_last > 0:
                                         record._last_seen_raw = saved_last
@@ -1382,22 +1446,27 @@ class GUILauncher:
 
                                 # Update job counts from persisted overview
                                 record.active_jobs = int(
-                                    first_row.get("samples_overview_active_jobs", 0) or 0
+                                    first_row.get("samples_overview_active_jobs", 0)
+                                    or 0
                                 )
                                 record.pending_jobs = int(
-                                    first_row.get("samples_overview_pending_jobs", 0) or 0
+                                    first_row.get("samples_overview_pending_jobs", 0)
+                                    or 0
                                 )
                                 record.total_jobs = int(
                                     first_row.get("samples_overview_total_jobs", 0) or 0
                                 )
                                 record.completed_jobs = int(
-                                    first_row.get("samples_overview_completed_jobs", 0) or 0
+                                    first_row.get("samples_overview_completed_jobs", 0)
+                                    or 0
                                 )
                                 record.failed_jobs = int(
-                                    first_row.get("samples_overview_failed_jobs", 0) or 0
+                                    first_row.get("samples_overview_failed_jobs", 0)
+                                    or 0
                                 )
                                 record.job_types = str(
-                                    first_row.get("samples_overview_job_types", "") or ""
+                                    first_row.get("samples_overview_job_types", "")
+                                    or ""
                                 )
                         except Exception as e:
                             logging.debug(f"Error reading master.csv for {sid}: {e}")
@@ -1412,7 +1481,11 @@ class GUILauncher:
                         # Do not leave new records as default "Live" when this folder is already
                         # finished on disk — that would look like a Live→Complete transition and
                         # re-run target.bam finalization on every restart.
-                        if record.origin == "Live" and (now_ts - record._last_seen_raw) >= self.completion_timeout_seconds:
+                        if (
+                            record.origin == "Live"
+                            and (now_ts - record._last_seen_raw)
+                            >= self.completion_timeout_seconds
+                        ):
                             if record.active_jobs == 0 and record.pending_jobs == 0:
                                 expected = self._get_expected_completion_job_types()
                                 if expected:
@@ -1420,12 +1493,12 @@ class GUILauncher:
                                         sample_dir, expected
                                     )
                                 else:
-                                    complete_on_disk = self._is_target_bam_finalize_redundant(
-                                        sid
+                                    complete_on_disk = (
+                                        self._is_target_bam_finalize_redundant(sid)
                                     )
                                 if not complete_on_disk:
-                                    complete_on_disk = self._is_target_bam_finalize_redundant(
-                                        sid
+                                    complete_on_disk = (
+                                        self._is_target_bam_finalize_redundant(sid)
                                     )
                                 if complete_on_disk:
                                     record.origin = "Complete"
@@ -1434,21 +1507,37 @@ class GUILauncher:
                         # Update origin based on inactivity timeout AND active jobs status
                         prev_origin = record.origin
                         # Only mark as Complete if timeout passed AND no active jobs
-                        if record.origin == "Live" and (now_ts - record._last_seen_raw) >= self.completion_timeout_seconds:
+                        if (
+                            record.origin == "Live"
+                            and (now_ts - record._last_seen_raw)
+                            >= self.completion_timeout_seconds
+                        ):
                             if record.active_jobs == 0 and record.pending_jobs == 0:
                                 record.origin = "Complete"
                                 record._dirty = True
                                 # Trigger finalization if transitioning from Live to Complete
-                                if prev_origin == "Live" and sid not in self._finalized_samples:
+                                if (
+                                    prev_origin == "Live"
+                                    and sid not in self._finalized_samples
+                                ):
                                     self._trigger_target_bam_finalization(sid)
                                     self._finalized_samples.add(sid)
                             # If there are active jobs, keep as Live even if timeout passed
-                        elif record.origin == "Pre-existing" and (now_ts - record._last_seen_raw) >= self.completion_timeout_seconds:
+                        elif (
+                            record.origin == "Pre-existing"
+                            and (now_ts - record._last_seen_raw)
+                            >= self.completion_timeout_seconds
+                        ):
                             # Keep as Pre-existing if it was pre-existing and still inactive
                             pass
                         elif record.origin == "Complete":
                             # Reactivate if file was modified recently OR if there are active jobs
-                            if (now_ts - record._last_seen_raw) < self.completion_timeout_seconds or record.active_jobs > 0 or record.pending_jobs > 0:
+                            if (
+                                (now_ts - record._last_seen_raw)
+                                < self.completion_timeout_seconds
+                                or record.active_jobs > 0
+                                or record.pending_jobs > 0
+                            ):
                                 record.origin = "Live"
                                 record._dirty = True
 
@@ -1480,7 +1569,9 @@ class GUILauncher:
                     for sid in to_remove:
                         del self._samples_master_record[sid]
                     updated_any = True
-                    logging.debug(f"Removed {len(to_remove)} deleted samples from master record")
+                    logging.debug(
+                        f"Removed {len(to_remove)} deleted samples from master record"
+                    )
 
             # Save cache if anything changed
             if updated_any:
@@ -1516,7 +1607,9 @@ class GUILauncher:
         except Exception as e:
             logging.error(f"Error refreshing table from master: {e}")
 
-    def _update_master_record_from_workflow(self, samples_data: List[Dict[str, Any]]) -> None:
+    def _update_master_record_from_workflow(
+        self, samples_data: List[Dict[str, Any]]
+    ) -> None:
         """Update master record from workflow polling data.
         This merges workflow stats into the master record without doing file I/O."""
         try:
@@ -1535,7 +1628,9 @@ class GUILauncher:
                         record = SampleRecord(
                             sample_id=sid,
                             _last_seen_raw=last_seen,
-                            last_seen=time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(last_seen)),
+                            last_seen=time.strftime(
+                                "%Y-%m-%d %H:%M:%S", time.localtime(last_seen)
+                            ),
                         )
                         if sid in self._preexisting_sample_ids:
                             record.origin = "Pre-existing"
@@ -1575,7 +1670,11 @@ class GUILauncher:
 
                 # Persist updates to master.csv
                 try:
-                    base = Path(self.monitored_directory) if self.monitored_directory else None
+                    base = (
+                        Path(self.monitored_directory)
+                        if self.monitored_directory
+                        else None
+                    )
                     if base and base.exists():
                         manager = MasterCSVManager(str(base))
                         for record in self._samples_master_record.values():
@@ -1589,7 +1688,9 @@ class GUILauncher:
                                     "job_types": record.job_types,
                                     "last_seen": float(record._last_seen_raw),
                                 }
-                                manager.update_sample_overview(record.sample_id, persist_payload)
+                                manager.update_sample_overview(
+                                    record.sample_id, persist_payload
+                                )
                                 record._dirty = False
                 except Exception as e:
                     logging.debug(f"Error persisting workflow updates: {e}")
@@ -1679,7 +1780,9 @@ class GUILauncher:
             self._setup_master_record_cache()
             # Try to load cache immediately for fast startup
             if self._load_master_record_cache():
-                logging.info("Loaded samples from cache - table will populate immediately")
+                logging.info(
+                    "Loaded samples from cache - table will populate immediately"
+                )
             # Skip spurious target.bam finalization on restart when outputs already exist
             self._seed_finalized_samples_from_disk()
 
@@ -1748,7 +1851,10 @@ class GUILauncher:
             # Rate limiting: Skip low-priority updates if queue is getting too large
             if queue_size > threshold and priority < 5:
                 # Only log when queue size changes significantly to reduce log spam
-                if abs(queue_size - self._last_queue_size_logged) > 50 or (current_time - self._last_log_time) > 10.0:
+                if (
+                    abs(queue_size - self._last_queue_size_logged) > 50
+                    or (current_time - self._last_log_time) > 10.0
+                ):
                     logging.warning(
                         f"[GUI] Skipping low-priority update due to queue size: "
                         f"{queue_size} (threshold: {threshold})"
@@ -1822,9 +1928,9 @@ class GUILauncher:
     def _show_notification_in_container(self, container, data: Dict[str, Any]):
         """Show notification in the dedicated container."""
         try:
-            message = data.get('message', '')
-            notification_type = data.get('type', 'info')
-            timeout = data.get('timeout', 5000)
+            message = data.get("message", "")
+            notification_type = data.get("type", "info")
+            timeout = data.get("timeout", 5000)
 
             # Create notification in the container
             with container:
@@ -1832,7 +1938,7 @@ class GUILauncher:
                     message,
                     type=notification_type,
                     timeout=timeout,
-                    position="top-right"
+                    position="top-right",
                 )
 
         except Exception as e:
@@ -1843,16 +1949,13 @@ class GUILauncher:
         try:
             from nicegui import ui
 
-            message = event_data.get('message', '')
-            notification_type = event_data.get('type', 'info')
-            timeout = event_data.get('timeout', 5000)
+            message = event_data.get("message", "")
+            notification_type = event_data.get("type", "info")
+            timeout = event_data.get("timeout", 5000)
 
             # Show notification in the proper UI context
             ui.notify(
-                message,
-                type=notification_type,
-                timeout=timeout,
-                position="top-right"
+                message, type=notification_type, timeout=timeout, position="top-right"
             )
 
         except Exception as e:
@@ -1863,41 +1966,47 @@ class GUILauncher:
         try:
             from nicegui import ui
 
-            sample_id = update['sample_id']
-            update_type = update['type']
+            sample_id = update["sample_id"]
+            update_type = update["type"]
 
-            if update_type == 'start':
+            if update_type == "start":
                 # Emit event for initial notification
-                self.progress_notification_event.emit({
-                    'sample_id': sample_id,
-                    'message': f"[{sample_id}] Starting report generation...",
-                    'type': 'info',
-                    'timeout': 3000  # 3 seconds
-                })
+                self.progress_notification_event.emit(
+                    {
+                        "sample_id": sample_id,
+                        "message": f"[{sample_id}] Starting report generation...",
+                        "type": "info",
+                        "timeout": 3000,  # 3 seconds
+                    }
+                )
 
                 logging.debug(f"Started report generation for {sample_id}")
 
-            elif update_type == 'update':
-                stage = update['stage']
-                message = update['message']
-                progress = update.get('progress')
+            elif update_type == "update":
+                stage = update["stage"]
+                message = update["message"]
+                progress = update.get("progress")
 
                 # Calculate progress percentage
-                progress_percent = int((progress or 0.0) * 100) if progress is not None else ""
+                progress_percent = (
+                    int((progress or 0.0) * 100) if progress is not None else ""
+                )
                 progress_text = f" ({progress_percent}%)" if progress_percent else ""
 
                 # Emit event for progress notification
-                self.progress_notification_event.emit({
-                    'sample_id': sample_id,
-                    'message': f"[{sample_id}] {message}{progress_text}",
-                    'type': 'info',
-                    'timeout': 2000  # 2 seconds for progress updates
-                })
+                self.progress_notification_event.emit(
+                    {
+                        "sample_id": sample_id,
+                        "message": f"[{sample_id}] {message}{progress_text}",
+                        "type": "info",
+                        "timeout": 2000,  # 2 seconds for progress updates
+                    }
+                )
 
                 logging.debug(f"Updated progress for {sample_id}: {stage} - {message}")
 
-            elif update_type == 'complete':
-                filename = update.get('filename')
+            elif update_type == "complete":
+                filename = update.get("filename")
 
                 # Show completion notification
                 completion_message = f"[{sample_id}] Report generation completed"
@@ -1905,27 +2014,33 @@ class GUILauncher:
                     completion_message += f": {filename}"
 
                 # Emit event for completion notification
-                self.progress_notification_event.emit({
-                    'sample_id': sample_id,
-                    'message': completion_message,
-                    'type': 'positive',
-                    'timeout': 5000
-                })
+                self.progress_notification_event.emit(
+                    {
+                        "sample_id": sample_id,
+                        "message": completion_message,
+                        "type": "positive",
+                        "timeout": 5000,
+                    }
+                )
 
                 logging.info(f"Completed report generation for {sample_id}")
 
-            elif update_type == 'error':
-                error_message = update['error_message']
+            elif update_type == "error":
+                error_message = update["error_message"]
 
                 # Emit event for error notification
-                self.progress_notification_event.emit({
-                    'sample_id': sample_id,
-                    'message': f"[{sample_id}] Report generation failed: {error_message}",
-                    'type': 'negative',
-                    'timeout': 10000
-                })
+                self.progress_notification_event.emit(
+                    {
+                        "sample_id": sample_id,
+                        "message": f"[{sample_id}] Report generation failed: {error_message}",
+                        "type": "negative",
+                        "timeout": 10000,
+                    }
+                )
 
-                logging.error(f"Report generation failed for {sample_id}: {error_message}")
+                logging.error(
+                    f"Report generation failed for {sample_id}: {error_message}"
+                )
 
         except Exception as e:
             logging.error(f"Error handling progress update: {e}")
@@ -2244,7 +2359,9 @@ class GUILauncher:
     def _update_file_progress(self):
         """Update file progress display in workflow monitor from current samples data."""
         try:
-            if not hasattr(self, "sample_files_progress_container") or not hasattr(self, "_last_samples_rows"):
+            if not hasattr(self, "sample_files_progress_container") or not hasattr(
+                self, "_last_samples_rows"
+            ):
                 return
 
             rows = self._last_samples_rows or []
@@ -2261,18 +2378,30 @@ class GUILauncher:
                 if files_seen > 0:
                     total_files_seen += files_seen
                     total_files_processed += files_processed
-                    sample_progress_data.append({
-                        "sample_id": sample_id,
-                        "files_seen": files_seen,
-                        "files_processed": files_processed,
-                        "progress": files_processed / files_seen if files_seen > 0 else 0.0
-                    })
+                    sample_progress_data.append(
+                        {
+                            "sample_id": sample_id,
+                            "files_seen": files_seen,
+                            "files_processed": files_processed,
+                            "progress": (
+                                files_processed / files_seen if files_seen > 0 else 0.0
+                            ),
+                        }
+                    )
 
             # Update overall progress
-            if hasattr(self, "overall_files_progress") and hasattr(self, "overall_files_label"):
-                overall_progress = total_files_processed / total_files_seen if total_files_seen > 0 else 0.0
+            if hasattr(self, "overall_files_progress") and hasattr(
+                self, "overall_files_label"
+            ):
+                overall_progress = (
+                    total_files_processed / total_files_seen
+                    if total_files_seen > 0
+                    else 0.0
+                )
                 self.overall_files_progress.set_value(round(overall_progress, 2))
-                self.overall_files_label.set_text(f"{total_files_processed}/{total_files_seen} files processed")
+                self.overall_files_label.set_text(
+                    f"{total_files_processed}/{total_files_seen} files processed"
+                )
 
             # Update per-sample progress bars (limit to first 20 to avoid UI overload)
             if hasattr(self, "sample_files_progress_container"):
@@ -2310,9 +2439,9 @@ class GUILauncher:
                     else:
                         # Show placeholder when no data
                         with self.sample_files_progress_container:
-                            ui.label(
-                                "No file progress data available yet."
-                            ).classes("classification-insight-foot italic")
+                            ui.label("No file progress data available yet.").classes(
+                                "classification-insight-foot italic"
+                            )
                 except Exception as e:
                     logging.debug(f"Error updating per-sample file progress: {e}")
 
@@ -2416,14 +2545,18 @@ class GUILauncher:
             def login_page(redirect_to: str = "/"):
                 """Authenticate user session before allowing access."""
                 if self._is_authenticated():
-                    safe_target = redirect_to if redirect_to and redirect_to != "/login" else "/"
+                    safe_target = (
+                        redirect_to if redirect_to and redirect_to != "/login" else "/"
+                    )
                     return RedirectResponse(safe_target)
 
                 clear_auth_session_fields()
 
                 def try_login() -> None:
                     username_value = str(username.value or "").strip()
-                    login_result = self._verify_user_login(username_value, password.value)
+                    login_result = self._verify_user_login(
+                        username_value, password.value
+                    )
                     if login_result is None:
                         self._audit_log(
                             event_type="auth.login.failure",
@@ -2439,7 +2572,9 @@ class GUILauncher:
                     app.storage.user.update(
                         {
                             "authenticated": True,
-                            "_auth_generation": app.storage.general.get("_auth_generation"),
+                            "_auth_generation": app.storage.general.get(
+                                "_auth_generation"
+                            ),
                             "user_id": login_result["user_id"],
                             "username": login_result["username"],
                             "roles": login_result["roles"],
@@ -2461,7 +2596,9 @@ class GUILauncher:
                         },
                     )
 
-                    safe_target = redirect_to if redirect_to and redirect_to != "/login" else "/"
+                    safe_target = (
+                        redirect_to if redirect_to and redirect_to != "/login" else "/"
+                    )
                     self._complete_post_login_navigation(
                         int(login_result["user_id"]),
                         safe_target,
@@ -2474,8 +2611,10 @@ class GUILauncher:
                     batphone=self.batman_mode,
                     center=self.center,
                 ):
-                    with ui.element("div").classes("w-full min-w-0").props(
-                        "id=login-page"
+                    with (
+                        ui.element("div")
+                        .classes("w-full min-w-0")
+                        .props("id=login-page")
                     ):
                         with ui.column().classes(
                             "w-full min-h-[70vh] items-center justify-center "
@@ -2513,7 +2652,9 @@ class GUILauncher:
                                         )
                                         username = (
                                             ui.input("Username")
-                                            .props("autocomplete=username outlined dense")
+                                            .props(
+                                                "autocomplete=username outlined dense"
+                                            )
                                             .classes("w-full")
                                             .on("keydown.enter", try_login)
                                         )
@@ -2777,7 +2918,8 @@ class GUILauncher:
                         return
                     # Security: Only allow alphanumeric characters and common file extensions
                     import re
-                    if not re.match(r'^[a-zA-Z0-9._-]+$', filename):
+
+                    if not re.match(r"^[a-zA-Z0-9._-]+$", filename):
                         self._audit_log(
                             event_type="report.exported",
                             result="failure",
@@ -2791,7 +2933,11 @@ class GUILauncher:
                         return
 
                     # Find the sample directory
-                    base_dir = Path(self.monitored_directory) if self.monitored_directory else None
+                    base_dir = (
+                        Path(self.monitored_directory)
+                        if self.monitored_directory
+                        else None
+                    )
                     if not base_dir or not base_dir.exists():
                         self._audit_log(
                             event_type="report.exported",
@@ -2872,15 +3018,13 @@ class GUILauncher:
             # Setup global CSS and static files - moved to a helper function
             def _setup_global_resources():
                 """Setup global CSS and static file resources."""
-                ui.add_css(
-                    """
+                ui.add_css("""
                     .shadows-into light-regular {
                         font-family: "Shadows Into Light", cursive;
                         font-weight: 800;
                         font-style: normal;
                     }
-                """
-                )
+                """)
                 # Register fonts from the GUI package if available
                 try:
                     fonts_dir = Path(__file__).parent / "gui" / "fonts"
@@ -2910,7 +3054,11 @@ class GUILauncher:
                         once=True,
                     )
                     # Subsequent scans every 10 seconds
-                    app.timer(self._background_scan_interval, self._background_scan_samples, active=True)
+                    app.timer(
+                        self._background_scan_interval,
+                        self._background_scan_samples,
+                        active=True,
+                    )
 
                     # If cache was not loaded, do initial preexisting scan after GUI is ready
                     if not self._samples_master_record:
@@ -2941,11 +3089,10 @@ class GUILauncher:
 
             try:
                 from robin_native_api import attach_native_api
+
                 attach_native_api(app, self)
             except Exception as e:
                 logging.warning("Native API not mounted: %s", e)
-
-
 
             # Start the GUI
             ui.run(
@@ -3102,7 +3249,9 @@ class GUILauncher:
                         ui.label("All tracked samples").classes(
                             "text-headline-medium text-slate-900 dark:text-slate-50 shrink-0"
                         )
-                        ui.label("A=Active  P=Pending  T=Total  C=Completed  F=Failed").classes(
+                        ui.label(
+                            "A=Active  P=Pending  T=Total  C=Completed  F=Failed"
+                        ).classes(
                             "text-[11px] text-slate-600 dark:text-slate-400 shrink-0"
                         )
                         with ui.row().classes(
@@ -3121,32 +3270,40 @@ class GUILauncher:
                                     "Clear selection",
                                     on_click=lambda: self._samples_clear_export_selection(),
                                 ).props("flat dense no-caps outline")
-                            self.bulk_snp_button = ui.button(
-                                "SNP: all missing",
-                                icon="biotech",
-                                on_click=lambda: None,
-                            ).props("color=secondary dense no-caps").classes(
-                                "border border-slate-300 dark:border-slate-600"
+                            self.bulk_snp_button = (
+                                ui.button(
+                                    "SNP: all missing",
+                                    icon="biotech",
+                                    on_click=lambda: None,
+                                )
+                                .props("color=secondary dense no-caps")
+                                .classes(
+                                    "border border-slate-300 dark:border-slate-600"
+                                )
                             )
                             # Optional bulk MNP-Flex action (Docker or API backend)
                             if self._is_mnpflex_enabled_for_gui():
-                                self.bulk_mnpflex_button = ui.button(
-                                    "mnpflex run all",
-                                    on_click=lambda: None,
-                                ).props(
-                                    "color=secondary dense no-caps"
-                                ).classes(
-                                    "border border-slate-300 dark:border-slate-600"
+                                self.bulk_mnpflex_button = (
+                                    ui.button(
+                                        "mnpflex run all",
+                                        on_click=lambda: None,
+                                    )
+                                    .props("color=secondary dense no-caps")
+                                    .classes(
+                                        "border border-slate-300 dark:border-slate-600"
+                                    )
                                 )
                             else:
                                 self.bulk_mnpflex_button = None
 
                             if can_export_reports:
-                                self.export_reports_button = ui.button(
-                                    "Export reports",
-                                    on_click=lambda: None,
-                                ).props("color=primary").classes(
-                                    "rounded-lg px-4 text-title-medium"
+                                self.export_reports_button = (
+                                    ui.button(
+                                        "Export reports",
+                                        on_click=lambda: None,
+                                    )
+                                    .props("color=primary")
+                                    .classes("rounded-lg px-4 text-title-medium")
                                 )
                                 self.export_reports_button.disable()
                             else:
@@ -3180,7 +3337,9 @@ class GUILauncher:
                                         (self._samples_filters or {}).get("query", "")
                                     ),
                                     "origin": str(
-                                        (self._samples_filters or {}).get("origin", "All")
+                                        (self._samples_filters or {}).get(
+                                            "origin", "All"
+                                        )
                                     )
                                     or "All",
                                     "job_type": "All",
@@ -3208,7 +3367,8 @@ class GUILauncher:
                                 self.samples_search.value = current_query
                         except Exception as e:
                             logging.debug(
-                                "[samples_overview] could not preset search filter: %s", e
+                                "[samples_overview] could not preset search filter: %s",
+                                e,
                             )
 
                         # Origin filter
@@ -3250,7 +3410,9 @@ class GUILauncher:
                         ui.label("Loading samples…").classes(
                             "ml-2 text-title-medium text-slate-800 dark:text-slate-100"
                         )
-                        ui.label("This may take a moment for large directories").classes(
+                        ui.label(
+                            "This may take a moment for large directories"
+                        ).classes(
                             "text-body-small text-slate-500 dark:text-slate-400 mt-2"
                         )
 
@@ -3259,118 +3421,118 @@ class GUILauncher:
 
                     # Create samples table
                     _samples_table_columns = [
-                            {
-                                "name": "actions",
-                                "label": "Actions",
-                                "field": "actions",
-                            },
-                            {
-                                "name": "sample_id",
-                                "label": "Library ID",
-                                "field": "sample_id",
-                                "sortable": True,
-                            },
-                            {
-                                "name": "test_id",
-                                "label": "Test ID",
-                                "field": "test_id",
-                                "sortable": True,
-                            },
-                            {
-                                "name": "origin",
-                                "label": "Origin",
-                                "field": "origin",
-                                "sortable": True,
-                            },
-                            {
-                                "name": "run_start",
-                                "label": "Run Start",
-                                "field": "run_start",
-                                "sortable": True,
-                            },
-                            {
-                                "name": "device",
-                                "label": "Device",
-                                "field": "device",
-                                "sortable": True,
-                            },
-                            {
-                                "name": "flowcell",
-                                "label": "Flowcell",
-                                "field": "flowcell",
-                                "sortable": True,
-                            },
-                            {
-                                "name": "file_progress",
-                                "label": "Job Progress",
-                                "field": "file_progress",
-                                "sortable": True,
-                            },
-                            {
-                                "name": "pipeline_progress",
-                                "label": "Finalize/SNP",
-                                "field": "pipeline_progress",
-                                "sortable": True,
-                            },
-                            {
-                                "name": "active_jobs",
-                                "label": "A",
-                                "field": "active_jobs",
-                                "sortable": True,
-                                "align": "center",
-                                "style": "width:52px; max-width:52px;",
-                                "headerStyle": "width:52px; max-width:52px;",
-                            },
-                            {
-                                "name": "pending_jobs",
-                                "label": "P",
-                                "field": "pending_jobs",
-                                "sortable": True,
-                                "align": "center",
-                                "style": "width:52px; max-width:52px;",
-                                "headerStyle": "width:52px; max-width:52px;",
-                            },
-                            {
-                                "name": "total_jobs",
-                                "label": "T",
-                                "field": "total_jobs",
-                                "sortable": True,
-                                "align": "center",
-                                "style": "width:52px; max-width:52px;",
-                                "headerStyle": "width:52px; max-width:52px;",
-                            },
-                            {
-                                "name": "completed_jobs",
-                                "label": "C",
-                                "field": "completed_jobs",
-                                "sortable": True,
-                                "align": "center",
-                                "style": "width:52px; max-width:52px;",
-                                "headerStyle": "width:52px; max-width:52px;",
-                            },
-                            {
-                                "name": "failed_jobs",
-                                "label": "F",
-                                "field": "failed_jobs",
-                                "sortable": True,
-                                "align": "center",
-                                "style": "width:52px; max-width:52px;",
-                                "headerStyle": "width:52px; max-width:52px;",
-                            },
-                            {
-                                "name": "job_types",
-                                "label": "Job Types",
-                                "field": "job_types",
-                                "sortable": True,
-                                "style": "min-width: 11rem;",
-                                "headerStyle": "min-width: 11rem;",
-                            },
-                            {
-                                "name": "last_seen",
-                                "label": "Last Activity",
-                                "field": "last_seen",
-                                "sortable": True,
-                            },
+                        {
+                            "name": "actions",
+                            "label": "Actions",
+                            "field": "actions",
+                        },
+                        {
+                            "name": "sample_id",
+                            "label": "Library ID",
+                            "field": "sample_id",
+                            "sortable": True,
+                        },
+                        {
+                            "name": "test_id",
+                            "label": "Test ID",
+                            "field": "test_id",
+                            "sortable": True,
+                        },
+                        {
+                            "name": "origin",
+                            "label": "Origin",
+                            "field": "origin",
+                            "sortable": True,
+                        },
+                        {
+                            "name": "run_start",
+                            "label": "Run Start",
+                            "field": "run_start",
+                            "sortable": True,
+                        },
+                        {
+                            "name": "device",
+                            "label": "Device",
+                            "field": "device",
+                            "sortable": True,
+                        },
+                        {
+                            "name": "flowcell",
+                            "label": "Flowcell",
+                            "field": "flowcell",
+                            "sortable": True,
+                        },
+                        {
+                            "name": "file_progress",
+                            "label": "Job Progress",
+                            "field": "file_progress",
+                            "sortable": True,
+                        },
+                        {
+                            "name": "pipeline_progress",
+                            "label": "Finalize/SNP",
+                            "field": "pipeline_progress",
+                            "sortable": True,
+                        },
+                        {
+                            "name": "active_jobs",
+                            "label": "A",
+                            "field": "active_jobs",
+                            "sortable": True,
+                            "align": "center",
+                            "style": "width:52px; max-width:52px;",
+                            "headerStyle": "width:52px; max-width:52px;",
+                        },
+                        {
+                            "name": "pending_jobs",
+                            "label": "P",
+                            "field": "pending_jobs",
+                            "sortable": True,
+                            "align": "center",
+                            "style": "width:52px; max-width:52px;",
+                            "headerStyle": "width:52px; max-width:52px;",
+                        },
+                        {
+                            "name": "total_jobs",
+                            "label": "T",
+                            "field": "total_jobs",
+                            "sortable": True,
+                            "align": "center",
+                            "style": "width:52px; max-width:52px;",
+                            "headerStyle": "width:52px; max-width:52px;",
+                        },
+                        {
+                            "name": "completed_jobs",
+                            "label": "C",
+                            "field": "completed_jobs",
+                            "sortable": True,
+                            "align": "center",
+                            "style": "width:52px; max-width:52px;",
+                            "headerStyle": "width:52px; max-width:52px;",
+                        },
+                        {
+                            "name": "failed_jobs",
+                            "label": "F",
+                            "field": "failed_jobs",
+                            "sortable": True,
+                            "align": "center",
+                            "style": "width:52px; max-width:52px;",
+                            "headerStyle": "width:52px; max-width:52px;",
+                        },
+                        {
+                            "name": "job_types",
+                            "label": "Job Types",
+                            "field": "job_types",
+                            "sortable": True,
+                            "style": "min-width: 11rem;",
+                            "headerStyle": "min-width: 11rem;",
+                        },
+                        {
+                            "name": "last_seen",
+                            "label": "Last Activity",
+                            "field": "last_seen",
+                            "sortable": True,
+                        },
                     ]
                     if can_export_reports:
                         _samples_table_columns.append(
@@ -3579,12 +3741,18 @@ class GUILauncher:
                     def _on_finalize_target(event):
                         try:
                             logging.debug("finalize-target event: %r", event)
-                            sample_id = getattr(event, "args", None) if hasattr(event, "args") else None
+                            sample_id = (
+                                getattr(event, "args", None)
+                                if hasattr(event, "args")
+                                else None
+                            )
                             logging.debug("finalize-target sample_id=%r", sample_id)
                             if isinstance(sample_id, str):
                                 # Keep this UI callback non-blocking.
                                 # All heavyweight checks/submissions run in background logic.
-                                self._trigger_target_bam_finalization(sample_id, trigger_snp=True)
+                                self._trigger_target_bam_finalization(
+                                    sample_id, trigger_snp=True
+                                )
                                 logging.debug(
                                     "finalize-target queued: sample_id=%s trigger_snp=True",
                                     sample_id,
@@ -3597,7 +3765,9 @@ class GUILauncher:
                             else:
                                 ui.notify("Invalid sample ID", type="warning")
                         except Exception as e:
-                            ui.notify(f"Error triggering finalization: {e}", type="negative")
+                            ui.notify(
+                                f"Error triggering finalization: {e}", type="negative"
+                            )
 
                     try:
                         self.samples_table.on("finalize-target", _on_finalize_target)
@@ -3624,13 +3794,17 @@ class GUILauncher:
                                         sid = payload.get("id")
                                         val = bool(payload.get("value"))
                                         if sid:
-                                            selected_ids = self._get_selected_sample_ids()
+                                            selected_ids = (
+                                                self._get_selected_sample_ids()
+                                            )
                                             if val:
                                                 selected_ids.add(str(sid))
                                             else:
                                                 selected_ids.discard(str(sid))
-                                            selected_ids = self._set_selected_sample_ids(
-                                                selected_ids
+                                            selected_ids = (
+                                                self._set_selected_sample_ids(
+                                                    selected_ids
+                                                )
                                             )
                                             # reflect state back into rows
                                             try:
@@ -3647,7 +3821,10 @@ class GUILauncher:
                                                     exc_info=True,
                                                 )
                                             if selected_ids:
-                                                if self.export_reports_button is not None:
+                                                if (
+                                                    self.export_reports_button
+                                                    is not None
+                                                ):
                                                     self.export_reports_button.enable()
                                             elif self.export_reports_button is not None:
                                                 self.export_reports_button.disable()
@@ -3671,9 +3848,11 @@ class GUILauncher:
                                 try:
                                     logging.info(
                                         "[samples_overview] export-header-toggle raw_args=%r",
-                                        getattr(event, "args", None)
-                                        if hasattr(event, "args")
-                                        else event,
+                                        (
+                                            getattr(event, "args", None)
+                                            if hasattr(event, "args")
+                                            else event
+                                        ),
                                     )
                                     val = True
                                     if hasattr(event, "args"):
@@ -3753,7 +3932,9 @@ class GUILauncher:
                                 with ui.card().classes(
                                     "robin-dialog-surface w-96 max-w-[95vw] p-4"
                                 ):
-                                    ui.label("Run SNP for all missing samples?").classes(
+                                    ui.label(
+                                        "Run SNP for all missing samples?"
+                                    ).classes(
                                         "classification-insight-heading text-headline-small mb-2"
                                     )
                                     ui.label(
@@ -3761,7 +3942,9 @@ class GUILauncher:
                                         "(same as triggering SNP manually each time). "
                                         "This may take a long time overall."
                                     ).classes("text-sm text-gray-600 mb-4")
-                                    with ui.row().classes("justify-end gap-2 flex-wrap"):
+                                    with ui.row().classes(
+                                        "justify-end gap-2 flex-wrap"
+                                    ):
                                         ui.button(
                                             "Cancel",
                                             on_click=lambda: dlg.submit(False),
@@ -3857,18 +4040,14 @@ class GUILauncher:
                                             ui.label(
                                                 f"{n} sample(s) will be processed one after another. "
                                                 "This can take a long time overall."
-                                            ).classes(
-                                                "text-sm text-gray-600 mb-4"
-                                            )
+                                            ).classes("text-sm text-gray-600 mb-4")
                                             with ui.row().classes(
                                                 "justify-end gap-2 flex-wrap"
                                             ):
                                                 ui.button(
                                                     "Cancel",
                                                     on_click=lambda: dlg.submit(False),
-                                                ).props(
-                                                    "flat no-caps outline"
-                                                )
+                                                ).props("flat no-caps outline")
                                                 ui.button(
                                                     "Start",
                                                     on_click=lambda: dlg.submit(True),
@@ -3901,11 +4080,16 @@ class GUILauncher:
                                 exc_info=True,
                             )
 
-                        async def _export_selected_reports(state: Dict[str, Any], progress_dialog, files_to_download, download_complete, progress_callback, progress_updates):
+                        async def _export_selected_reports(
+                            state: Dict[str, Any],
+                            progress_dialog,
+                            files_to_download,
+                            download_complete,
+                            progress_callback,
+                            progress_updates,
+                        ):
                             try:
-                                selected = list(
-                                    self._get_selected_sample_ids() or []
-                                )
+                                selected = list(self._get_selected_sample_ids() or [])
                                 if not selected:
                                     ui.notify("No samples selected", type="warning")
                                     return
@@ -3928,12 +4112,14 @@ class GUILauncher:
 
                                         # Emit progress update showing current sample and mark as starting
                                         current_sample_msg = f"Generating {idx + 1}/{total_samples} - {sid}"
-                                        progress_updates.put({
-                                            'stage': 'processing_sections',
-                                            'message': 'Starting...',
-                                            'progress': 0.0,
-                                            'sample_id': sid
-                                        })
+                                        progress_updates.put(
+                                            {
+                                                "stage": "processing_sections",
+                                                "message": "Starting...",
+                                                "progress": 0.0,
+                                                "sample_id": sid,
+                                            }
+                                        )
 
                                         sample_dir = (
                                             Path(self.monitored_directory) / sid
@@ -3967,13 +4153,17 @@ class GUILauncher:
                                                 )
 
                                             sample_outputs: List[str] = []
-                                            report_meta = self._report_generation_metadata()
+                                            report_meta = (
+                                                self._report_generation_metadata()
+                                            )
 
                                             # Don't use the notification system - use only our dialog callback
                                             if ng_run is not None:
                                                 # Use custom callback that updates dialog only
-                                                def sample_progress_callback(data: Dict[str, Any]):
-                                                    data['sample_id'] = sid
+                                                def sample_progress_callback(
+                                                    data: Dict[str, Any],
+                                                ):
+                                                    data["sample_id"] = sid
                                                     progress_callback(data)
 
                                                 pdf_file = await ng_run.io_bound(
@@ -3981,42 +4171,86 @@ class GUILauncher:
                                                     pdf_path,
                                                     str(sample_dir),
                                                     self.center or "Unknown",
-                                                    report_type=state.get("type", "detailed"),
+                                                    report_type=state.get(
+                                                        "type", "detailed"
+                                                    ),
                                                     export_csv_dir=export_csv_dir,
                                                     export_xlsx=False,
                                                     export_zip=bool(
                                                         state.get("export_csv", False)
                                                     ),
                                                     progress_callback=sample_progress_callback,
-                                                    workflow_steps=self.workflow_steps if hasattr(self, 'workflow_steps') else None,
-                                                    display_config=self.display_config if hasattr(self, 'display_config') else None,
-                                                    viewer_role=resolve_viewer_role(self),
-                                                    generated_by=report_meta["generated_by"] or None,
-                                                    generated_at=report_meta["generated_at"],
+                                                    workflow_steps=(
+                                                        self.workflow_steps
+                                                        if hasattr(
+                                                            self, "workflow_steps"
+                                                        )
+                                                        else None
+                                                    ),
+                                                    display_config=(
+                                                        self.display_config
+                                                        if hasattr(
+                                                            self, "display_config"
+                                                        )
+                                                        else None
+                                                    ),
+                                                    viewer_role=resolve_viewer_role(
+                                                        self
+                                                    ),
+                                                    generated_by=report_meta[
+                                                        "generated_by"
+                                                    ]
+                                                    or None,
+                                                    generated_at=report_meta[
+                                                        "generated_at"
+                                                    ],
                                                     plotting_preferences=self.plotting_preferences,
                                                 )
                                             else:
                                                 # Use custom callback that updates dialog only
-                                                def sample_progress_callback(data: Dict[str, Any]):
-                                                    data['sample_id'] = sid
+                                                def sample_progress_callback(
+                                                    data: Dict[str, Any],
+                                                ):
+                                                    data["sample_id"] = sid
                                                     progress_callback(data)
 
                                                 pdf_file = create_pdf(
                                                     pdf_path,
                                                     str(sample_dir),
                                                     self.center or "Unknown",
-                                                    report_type=state.get("type", "detailed"),
+                                                    report_type=state.get(
+                                                        "type", "detailed"
+                                                    ),
                                                     export_csv_dir=export_csv_dir,
                                                     export_xlsx=False,
                                                     export_zip=bool(
                                                         state.get("export_csv", False)
                                                     ),
                                                     progress_callback=sample_progress_callback,
-                                                    workflow_steps=self.workflow_steps if hasattr(self, 'workflow_steps') else None,
-                                                    display_config=self.display_config if hasattr(self, 'display_config') else None,
-                                                    viewer_role=resolve_viewer_role(self),
-                                                    generated_by=report_meta["generated_by"] or None,
-                                                    generated_at=report_meta["generated_at"],
+                                                    workflow_steps=(
+                                                        self.workflow_steps
+                                                        if hasattr(
+                                                            self, "workflow_steps"
+                                                        )
+                                                        else None
+                                                    ),
+                                                    display_config=(
+                                                        self.display_config
+                                                        if hasattr(
+                                                            self, "display_config"
+                                                        )
+                                                        else None
+                                                    ),
+                                                    viewer_role=resolve_viewer_role(
+                                                        self
+                                                    ),
+                                                    generated_by=report_meta[
+                                                        "generated_by"
+                                                    ]
+                                                    or None,
+                                                    generated_at=report_meta[
+                                                        "generated_at"
+                                                    ],
                                                     plotting_preferences=self.plotting_preferences,
                                                 )
 
@@ -4030,7 +4264,8 @@ class GUILauncher:
                                                 and export_csv_dir
                                             ):
                                                 zip_path = os.path.join(
-                                                    export_csv_dir, f"{sid}_report_data.zip"
+                                                    export_csv_dir,
+                                                    f"{sid}_report_data.zip",
                                                 )
                                                 if os.path.exists(zip_path):
                                                     files_to_download.append(zip_path)
@@ -4040,24 +4275,30 @@ class GUILauncher:
                                                 state=state,
                                                 target_id=sid,
                                                 output_files=sample_outputs,
-                                                generated_at=report_meta["generated_at"],
+                                                generated_at=report_meta[
+                                                    "generated_at"
+                                                ],
                                                 extra_details={"bulk_export": True},
                                             )
                                         else:
-                                            progress_updates.put({
-                                                'stage': 'processing_sections',
-                                                'message': 'No PDF/CSV selected; skipping report build',
-                                                'progress': 1.0,
-                                                'sample_id': sid
-                                            })
+                                            progress_updates.put(
+                                                {
+                                                    "stage": "processing_sections",
+                                                    "message": "No PDF/CSV selected; skipping report build",
+                                                    "progress": 1.0,
+                                                    "sample_id": sid,
+                                                }
+                                            )
 
                                         # Mark sample as complete
-                                        progress_updates.put({
-                                            'stage': 'completed',
-                                            'message': 'Completed',
-                                            'progress': 1.0,
-                                            'sample_id': sid
-                                        })
+                                        progress_updates.put(
+                                            {
+                                                "stage": "completed",
+                                                "message": "Completed",
+                                                "progress": 1.0,
+                                                "sample_id": sid,
+                                            }
+                                        )
 
                                     except Exception as e:
                                         # Report generation failed
@@ -4071,16 +4312,20 @@ class GUILauncher:
                                             extra_details={"bulk_export": True},
                                         )
                                         # Mark sample as failed
-                                        progress_updates.put({
-                                            'stage': 'error',
-                                            'message': f'Failed: {str(e)[:50]}',
-                                            'progress': 1.0,
-                                            'sample_id': sid
-                                        })
+                                        progress_updates.put(
+                                            {
+                                                "stage": "error",
+                                                "message": f"Failed: {str(e)[:50]}",
+                                                "progress": 1.0,
+                                                "sample_id": sid,
+                                            }
+                                        )
 
                                 # Mark as complete
                                 download_complete["done"] = True
-                                logging.info(f"Bulk export complete. {len(files_to_download)} file(s) ready for download.")
+                                logging.info(
+                                    f"Bulk export complete. {len(files_to_download)} file(s) ready for download."
+                                )
                             except Exception as e:
                                 logging.error(f"Error in bulk export: {e}")
                                 download_complete["done"] = True
@@ -4163,14 +4408,20 @@ class GUILauncher:
                                             f"Are you sure you want to export reports for {num_selected} sample(s)?"
                                         ).classes("classification-insight-foot mb-4")
 
-                                        with ui.row().classes("justify-end gap-2 flex-wrap"):
+                                        with ui.row().classes(
+                                            "justify-end gap-2 flex-wrap"
+                                        ):
                                             ui.button(
                                                 "Cancel",
-                                                on_click=lambda: dialog.submit("Cancel"),
+                                                on_click=lambda: dialog.submit(
+                                                    "Cancel"
+                                                ),
                                             ).props("flat no-caps outline")
                                             ui.button(
                                                 "Export",
-                                                on_click=lambda: dialog.submit("Export"),
+                                                on_click=lambda: dialog.submit(
+                                                    "Export"
+                                                ),
                                                 icon="download",
                                             ).props("color=primary no-caps")
 
@@ -4181,9 +4432,7 @@ class GUILauncher:
                                             if num_selected > 3
                                             else ""
                                         )
-                                    ).classes(
-                                        "text-sm font-medium text-gray-700 mt-4"
-                                    )
+                                    ).classes("text-sm font-medium text-gray-700 mt-4")
 
                             dialog_result = await dialog
                             if dialog_result != "Export":
@@ -4202,11 +4451,15 @@ class GUILauncher:
                             tsv_export_path = None
                             if bool(state.get("export_tsv", True)):
                                 report_meta = self._report_generation_metadata()
-                                tsv_export_path = self._build_sample_tracking_tsv_export(
-                                    selected_ids,
-                                    generated_by=report_meta["generated_by"] or None,
-                                    generated_at=report_meta["generated_at"],
-                                    robin_commit=report_meta.get("robin_commit") or None,
+                                tsv_export_path = (
+                                    self._build_sample_tracking_tsv_export(
+                                        selected_ids,
+                                        generated_by=report_meta["generated_by"]
+                                        or None,
+                                        generated_at=report_meta["generated_at"],
+                                        robin_commit=report_meta.get("robin_commit")
+                                        or None,
+                                    )
                                 )
                                 if tsv_export_path and os.path.exists(tsv_export_path):
                                     self._audit_report_generated(
@@ -4230,9 +4483,9 @@ class GUILauncher:
                                         "classification-insight-heading text-headline-small mb-3"
                                     )
 
-                                    ui.label(f"Exporting {num_selected} report(s)").classes(
-                                        "text-sm font-medium text-gray-700 mb-4"
-                                    )
+                                    ui.label(
+                                        f"Exporting {num_selected} report(s)"
+                                    ).classes("text-sm font-medium text-gray-700 mb-4")
 
                                     # Report type and output displays
                                     ui.label(
@@ -4257,14 +4510,24 @@ class GUILauncher:
                                     with ui.column().classes("w-full"):
                                         for sid in selected_ids:
                                             with ui.column().classes("mb-3 w-full"):
-                                                ui.label(sid).classes("text-xs font-medium text-gray-700 mb-1")
-                                                progress_bar = ui.linear_progress(0.0).classes("mb-1")
-                                                progress_label = ui.label("Waiting...").classes("text-xs text-gray-500")
+                                                ui.label(sid).classes(
+                                                    "text-xs font-medium text-gray-700 mb-1"
+                                                )
+                                                progress_bar = ui.linear_progress(
+                                                    0.0
+                                                ).classes("mb-1")
+                                                progress_label = ui.label(
+                                                    "Waiting..."
+                                                ).classes("text-xs text-gray-500")
                                                 sample_progress_bars[sid] = progress_bar
-                                                sample_progress_labels[sid] = progress_label
+                                                sample_progress_labels[sid] = (
+                                                    progress_label
+                                                )
 
                                     # Messages container - use label with newlines for multiple messages
-                                    messages_label = ui.label("").classes("text-xs text-gray-500")
+                                    messages_label = ui.label("").classes(
+                                        "text-xs text-gray-500"
+                                    )
 
                                     # Track messages
                                     progress_updates = queue.Queue()
@@ -4285,15 +4548,31 @@ class GUILauncher:
                                                 sample_id = update.get("sample_id")
 
                                                 # Update the current sample's progress bar
-                                                if sample_id and sample_id in sample_progress_bars:
+                                                if (
+                                                    sample_id
+                                                    and sample_id
+                                                    in sample_progress_bars
+                                                ):
                                                     if progress is not None:
-                                                        from robin.gui.report_progress import normalize_report_progress
+                                                        from robin.gui.report_progress import (
+                                                            normalize_report_progress,
+                                                        )
 
-                                                        progress = normalize_report_progress(progress)
-                                                        sample_progress_bars[sample_id].value = progress
-                                                        sample_progress_labels[sample_id].text = f"{int(progress * 100)}% - {message}"
+                                                        progress = (
+                                                            normalize_report_progress(
+                                                                progress
+                                                            )
+                                                        )
+                                                        sample_progress_bars[
+                                                            sample_id
+                                                        ].value = progress
+                                                        sample_progress_labels[
+                                                            sample_id
+                                                        ].text = f"{int(progress * 100)}% - {message}"
                                                     else:
-                                                        sample_progress_labels[sample_id].text = message
+                                                        sample_progress_labels[
+                                                            sample_id
+                                                        ].text = message
                                                     current_sample["id"] = sample_id
 
                                                 # Add message to messages list
@@ -4303,35 +4582,50 @@ class GUILauncher:
                                                     messages_list.pop(0)
 
                                                 # Update messages label
-                                                messages_label.text = "\n".join(messages_list[-5:])
+                                                messages_label.text = "\n".join(
+                                                    messages_list[-5:]
+                                                )
 
                                         except queue.Empty:
                                             pass
                                         except Exception as e:
-                                            logging.debug(f"Error processing progress updates: {e}")
+                                            logging.debug(
+                                                f"Error processing progress updates: {e}"
+                                            )
 
                                     # Set up timer to process updates
-                                    update_timer = ui.timer(0.1, process_progress_updates)
+                                    update_timer = ui.timer(
+                                        0.1, process_progress_updates
+                                    )
 
-                                    def progress_callback(progress_data: Dict[str, Any]):
+                                    def progress_callback(
+                                        progress_data: Dict[str, Any],
+                                    ):
                                         """Custom progress callback to update dialog (called from background thread)."""
                                         try:
                                             # Queue the update instead of directly updating UI
                                             progress_updates.put(progress_data)
                                         except Exception as e:
-                                            logging.debug(f"Error in progress callback: {e}")
+                                            logging.debug(
+                                                f"Error in progress callback: {e}"
+                                            )
 
                                     # Track if still generating
                                     is_generating = {"active": True}
 
                                     # Storage for the files to download
-                                    files_to_download = [tsv_export_path] if tsv_export_path else []
+                                    files_to_download = (
+                                        [tsv_export_path] if tsv_export_path else []
+                                    )
                                     download_complete = {"done": False}
 
                                     # Timer to handle downloads once background task is done
                                     def handle_downloads():
                                         """Handle downloads in UI context once generation is complete."""
-                                        if download_complete["done"] and files_to_download:
+                                        if (
+                                            download_complete["done"]
+                                            and files_to_download
+                                        ):
                                             # Log that export is complete
                                             valid_files = [
                                                 f
@@ -4342,25 +4636,37 @@ class GUILauncher:
                                                 f"Bulk export complete. {len(valid_files)} file(s) ready for download."
                                             )
                                             # Safari blocks multiple programmatic downloads; use one ZIP when needed.
-                                            bundle = self._zip_paths_for_bulk_download(valid_files)
+                                            bundle = self._zip_paths_for_bulk_download(
+                                                valid_files
+                                            )
                                             if bundle:
                                                 if len(valid_files) > 1:
                                                     ui.notify(
                                                         "Downloading a single ZIP (works in Safari; multiple separate downloads are blocked there).",
                                                         type="info",
                                                     )
-                                                logging.debug(f"Initiating download: {bundle}")
+                                                logging.debug(
+                                                    f"Initiating download: {bundle}"
+                                                )
                                                 ui.download(bundle)
-                                                if bundle.endswith(".zip") and "robin_reports_" in os.path.basename(
+                                                if bundle.endswith(
+                                                    ".zip"
+                                                ) and "robin_reports_" in os.path.basename(
                                                     bundle
                                                 ):
                                                     ui.timer(
                                                         120.0,
-                                                        lambda p=bundle: self._unlink_quiet(p),
+                                                        lambda p=bundle: self._unlink_quiet(
+                                                            p
+                                                        ),
                                                         once=True,
                                                     )
                                             # Close dialog after 3 seconds
-                                            ui.timer(3.0, lambda: progress_dialog.submit(None), once=True)
+                                            ui.timer(
+                                                3.0,
+                                                lambda: progress_dialog.submit(None),
+                                                once=True,
+                                            )
                                             download_timer.deactivate()
 
                                     download_timer = ui.timer(0.1, handle_downloads)
@@ -4369,7 +4675,14 @@ class GUILauncher:
                                     async def complete_export():
                                         """Complete the export and close dialog."""
                                         try:
-                                            await _export_selected_reports(state, progress_dialog, files_to_download, download_complete, progress_callback, progress_updates)
+                                            await _export_selected_reports(
+                                                state,
+                                                progress_dialog,
+                                                files_to_download,
+                                                download_complete,
+                                                progress_callback,
+                                                progress_updates,
+                                            )
                                         finally:
                                             # Clean up timer
                                             update_timer.deactivate()
@@ -4388,7 +4701,10 @@ class GUILauncher:
                             await progress_dialog
 
                         # Wire the button now that handlers exist
-                        if can_export_reports and self.export_reports_button is not None:
+                        if (
+                            can_export_reports
+                            and self.export_reports_button is not None
+                        ):
                             self.export_reports_button.on_click(_confirm_bulk_export)
                         logging.info(
                             "[samples_overview] bulk SNP and Export reports buttons "
@@ -4417,7 +4733,6 @@ class GUILauncher:
                         if hasattr(self, "samples_loading_container"):
                             self.samples_loading_container.set_visibility(True)
 
-
     def _update_samples_table_sync(self, data: Dict[str, Any]) -> None:
         """Synchronous version of samples table update"""
         try:
@@ -4425,9 +4740,7 @@ class GUILauncher:
                 return
             samples = data.get("samples", [])
             expected_job_types = self._get_expected_completion_job_types()
-            base = (
-                Path(self.monitored_directory) if self.monitored_directory else None
-            )
+            base = Path(self.monitored_directory) if self.monitored_directory else None
 
             # Deduplicate by sample_id taking the newest last_seen
             by_id: Dict[str, Dict[str, Any]] = {}
@@ -4438,7 +4751,8 @@ class GUILauncher:
                 if not existing or last_seen >= existing.get("_last_seen_raw", 0):
                     origin_value = (
                         "Pre-existing"
-                        if sid in self._preexisting_sample_ids and (time.time() - last_seen) >= self.completion_timeout_seconds
+                        if sid in self._preexisting_sample_ids
+                        and (time.time() - last_seen) >= self.completion_timeout_seconds
                         else "Live"
                     )
                     # Flip Live samples to Complete if inactive for configured timeout
@@ -4465,12 +4779,12 @@ class GUILauncher:
                                     sample_dir, expected_job_types
                                 )
                             else:
-                                complete_on_disk = self._is_target_bam_finalize_redundant(
-                                    sid
+                                complete_on_disk = (
+                                    self._is_target_bam_finalize_redundant(sid)
                                 )
                             if not complete_on_disk:
-                                complete_on_disk = self._is_target_bam_finalize_redundant(
-                                    sid
+                                complete_on_disk = (
+                                    self._is_target_bam_finalize_redundant(sid)
                                 )
                             if complete_on_disk:
                                 origin_value = "Complete"
@@ -4478,7 +4792,11 @@ class GUILauncher:
                         active_jobs_count = merged["active_jobs"]
                         pending_jobs_count = merged["pending_jobs"]
                         # Only mark as Complete if timeout passed AND no active jobs
-                        if origin_value == "Live" and (time.time() - last_seen) >= self.completion_timeout_seconds:
+                        if (
+                            origin_value == "Live"
+                            and (time.time() - last_seen)
+                            >= self.completion_timeout_seconds
+                        ):
                             if active_jobs_count == 0 and pending_jobs_count == 0:
                                 should_complete = True
                                 if expected_job_types and base is not None:
@@ -4501,7 +4819,9 @@ class GUILauncher:
                     # Set file progress directly from job counts (same data source as other columns)
                     files_seen = total_jobs
                     files_processed = completed_jobs
-                    file_progress = completed_jobs / total_jobs if total_jobs > 0 else 0.0
+                    file_progress = (
+                        completed_jobs / total_jobs if total_jobs > 0 else 0.0
+                    )
 
                     by_id[sid] = {
                         "sample_id": sid,
@@ -4699,7 +5019,9 @@ class GUILauncher:
                     return str(default)
                 if isinstance(args, dict):
                     return str(
-                        args.get("value", args.get("label", args.get("modelValue", default)))
+                        args.get(
+                            "value", args.get("label", args.get("modelValue", default))
+                        )
                     )
                 if isinstance(args, (list, tuple)) and len(args) > 0:
                     first = args[0]
@@ -4815,18 +5137,21 @@ class GUILauncher:
             # Origin filter, compute dynamic 'Complete' for display if needed
             now_ts = time.time()
             for r in rows:
-                    try:
-                        if r.get("origin") == "Live":
-                            last_raw = float(r.get("_last_seen_raw", 0))
-                            active_jobs_count = r.get("active_jobs", 0)
-                            pending_jobs_count = r.get("pending_jobs", 0)
-                            # Only mark as Complete if timeout passed AND no active jobs
-                            if last_raw and (now_ts - last_raw) >= self.completion_timeout_seconds:
-                                if active_jobs_count == 0 and pending_jobs_count == 0:
-                                    r["origin"] = "Complete"
-                                # If there are active jobs, keep as Live even if timeout passed
-                    except Exception:
-                        pass
+                try:
+                    if r.get("origin") == "Live":
+                        last_raw = float(r.get("_last_seen_raw", 0))
+                        active_jobs_count = r.get("active_jobs", 0)
+                        pending_jobs_count = r.get("pending_jobs", 0)
+                        # Only mark as Complete if timeout passed AND no active jobs
+                        if (
+                            last_raw
+                            and (now_ts - last_raw) >= self.completion_timeout_seconds
+                        ):
+                            if active_jobs_count == 0 and pending_jobs_count == 0:
+                                r["origin"] = "Complete"
+                            # If there are active jobs, keep as Live even if timeout passed
+                except Exception:
+                    pass
 
             origin = (self._samples_filters or {}).get("origin", "All")
             if origin and origin != "All":
@@ -4857,6 +5182,7 @@ class GUILauncher:
             # Job type filter (exact token match in comma-separated job_types field)
             selected_job_type = (self._samples_filters or {}).get("job_type", "All")
             if selected_job_type and selected_job_type != "All":
+
                 def _row_has_job_type(r: Dict[str, Any]) -> bool:
                     jt = str(r.get("job_types", "") or "").strip()
                     if not jt:
@@ -5033,8 +5359,9 @@ class GUILauncher:
         from cryptography.fernet import InvalidToken
 
         encrypted = _load_manifest_encrypted_fields(sample_dir)
-        with ui.dialog().props("persistent") as dialog, ui.card().classes(
-            "robin-dialog-surface w-full max-w-md p-4 md:p-5"
+        with (
+            ui.dialog().props("persistent") as dialog,
+            ui.card().classes("robin-dialog-surface w-full max-w-md p-4 md:p-5"),
         ):
             ui.label("View sample identifiers").classes(
                 "classification-insight-heading text-headline-small mb-2"
@@ -5143,9 +5470,7 @@ class GUILauncher:
             }
 
             with ui.dialog().props("persistent") as dialog:
-                with ui.card().classes(
-                    "robin-dialog-surface w-96 max-w-[95vw] p-4"
-                ):
+                with ui.card().classes("robin-dialog-surface w-96 max-w-[95vw] p-4"):
                     title_label = ui.label("Generate report").classes(
                         "classification-insight-heading text-headline-small mb-3"
                     )
@@ -5183,13 +5508,17 @@ class GUILauncher:
                                 value=None,
                             ).classes("w-full")
                             sample_dob_input.set_visibility(False)
+
                             def _on_sample_dob_change(_):
                                 v = getattr(sample_dob_input, "value", None)
                                 if hasattr(v, "strftime"):
                                     state["sample_dob"] = v.strftime("%Y-%m-%d")
                                 else:
                                     state["sample_dob"] = str(v).strip() if v else ""
-                            sample_dob_input.on("update:model-value", _on_sample_dob_change)
+
+                            sample_dob_input.on(
+                                "update:model-value", _on_sample_dob_change
+                            )
 
                         with ui.column().classes("mb-4"):
                             ui.label("Output formats").classes(
@@ -5217,9 +5546,9 @@ class GUILauncher:
                                 ),
                             )
 
-                        ui.label(
-                            "Are you sure you want to generate a report?"
-                        ).classes("classification-insight-foot mb-4")
+                        ui.label("Are you sure you want to generate a report?").classes(
+                            "classification-insight-foot mb-4"
+                        )
 
                         def _capture_dob_and_confirm():
                             """Capture date picker value into state before closing dialog."""
@@ -5235,9 +5564,9 @@ class GUILauncher:
                             dialog.submit("Yes")
 
                         with ui.row().classes("justify-end gap-2 flex-wrap"):
-                            ui.button(
-                                "No", on_click=lambda: dialog.submit("No")
-                            ).props("flat no-caps outline")
+                            ui.button("No", on_click=lambda: dialog.submit("No")).props(
+                                "flat no-caps outline"
+                            )
                             ui.button(
                                 "Yes",
                                 on_click=_capture_dob_and_confirm,
@@ -5276,6 +5605,7 @@ class GUILauncher:
                     if encrypted:
                         try:
                             from cryptography.fernet import InvalidToken
+
                             decrypted: Dict[str, str] = {
                                 "sample_id": sample_id,
                                 "test_id": _get_test_id_from_manifest(sample_dir),
@@ -5305,9 +5635,7 @@ class GUILauncher:
 
             # Now show the progress dialog
             with ui.dialog().props("persistent") as progress_dialog:
-                with ui.card().classes(
-                    "robin-dialog-surface w-96 max-w-[95vw] p-4"
-                ):
+                with ui.card().classes("robin-dialog-surface w-96 max-w-[95vw] p-4"):
                     ui.label("Generating report").classes(
                         "classification-insight-heading text-headline-small mb-2"
                     )
@@ -5362,11 +5690,15 @@ class GUILauncher:
                                 progress = update.get("progress", 0.0)
 
                                 if progress is not None:
-                                    from robin.gui.report_progress import normalize_report_progress
+                                    from robin.gui.report_progress import (
+                                        normalize_report_progress,
+                                    )
 
                                     progress = normalize_report_progress(progress)
                                     progress_bar.value = progress
-                                    progress_text.text = f"{int(progress * 100)}% - {message}"
+                                    progress_text.text = (
+                                        f"{int(progress * 100)}% - {message}"
+                                    )
                                 else:
                                     progress_text.text = message
 
@@ -5407,15 +5739,21 @@ class GUILauncher:
                         """Handle downloads in UI context once generation is complete."""
                         if download_complete["done"] and files_to_download:
                             # Log that report generation is complete and downloads are available
-                            file_count = len([f for f in files_to_download if f is not None])
-                            logging.info(f"Report generation complete for {sample_id}. {file_count} file(s) ready for download.")
+                            file_count = len(
+                                [f for f in files_to_download if f is not None]
+                            )
+                            logging.info(
+                                f"Report generation complete for {sample_id}. {file_count} file(s) ready for download."
+                            )
 
                             for file_path in files_to_download:
                                 if file_path is not None:
                                     logging.debug(f"Initiating download: {file_path}")
                                     ui.download(file_path)
                             # Close dialog after 3 seconds
-                            ui.timer(3.0, lambda: progress_dialog.submit(None), once=True)
+                            ui.timer(
+                                3.0, lambda: progress_dialog.submit(None), once=True
+                            )
                             download_timer.deactivate()
 
                     download_timer = ui.timer(0.1, handle_downloads)
@@ -5424,7 +5762,13 @@ class GUILauncher:
                     async def complete_generation():
                         """Complete the report generation and close dialog."""
                         try:
-                            await generate_and_download_report(state, progress_callback, progress_dialog, is_generating, files_to_download)
+                            await generate_and_download_report(
+                                state,
+                                progress_callback,
+                                progress_dialog,
+                                is_generating,
+                                files_to_download,
+                            )
                         finally:
                             # Clean up timer
                             update_timer.deactivate()
@@ -5441,7 +5785,13 @@ class GUILauncher:
 
             await progress_dialog
 
-        async def generate_and_download_report(state: Dict[str, Any], progress_callback, progress_dialog, is_generating, files_to_download):
+        async def generate_and_download_report(
+            state: Dict[str, Any],
+            progress_callback,
+            progress_dialog,
+            is_generating,
+            files_to_download,
+        ):
             """Generate report and update progress in dialog."""
             generated_files: List[str] = []
             report_meta = self._report_generation_metadata()
@@ -5459,10 +5809,14 @@ class GUILauncher:
                     )
                     # Queue error notification
                     files_to_download.append(None)  # Signal error
-                    ui.timer(0.1, lambda: ui.notify(
-                        "Output directory not available for this sample",
-                        type="warning",
-                    ), once=True)
+                    ui.timer(
+                        0.1,
+                        lambda: ui.notify(
+                            "Output directory not available for this sample",
+                            type="warning",
+                        ),
+                        once=True,
+                    )
                     return
 
                 should_generate_report = bool(
@@ -5474,9 +5828,7 @@ class GUILauncher:
                     os.makedirs(str(sample_dir), exist_ok=True)
                     export_csv_dir = None
                     if bool(state.get("export_csv", False)):
-                        export_csv_dir = os.path.join(
-                            str(sample_dir), "report_csv"
-                        )
+                        export_csv_dir = os.path.join(str(sample_dir), "report_csv")
 
                     # Use only our custom callback, not the notification system
                     def combined_callback(progress_data: Dict[str, Any]):
@@ -5493,8 +5845,16 @@ class GUILauncher:
                         export_xlsx=False,
                         export_zip=bool(state.get("export_csv", False)),
                         progress_callback=combined_callback,
-                        workflow_steps=self.workflow_steps if hasattr(self, 'workflow_steps') else None,
-                        display_config=self.display_config if hasattr(self, 'display_config') else None,
+                        workflow_steps=(
+                            self.workflow_steps
+                            if hasattr(self, "workflow_steps")
+                            else None
+                        ),
+                        display_config=(
+                            self.display_config
+                            if hasattr(self, "display_config")
+                            else None
+                        ),
                         viewer_role=resolve_viewer_role(self),
                         sample_identifiers=state.get("sample_identifiers"),
                         generated_by=report_meta["generated_by"] or None,
@@ -5504,6 +5864,7 @@ class GUILauncher:
 
                     # Mark report as completed
                     from robin.gui.report_progress import progress_manager
+
                     progress_manager.complete_report(sample_id, filename)
 
                     # Queue files for download in UI context
@@ -5541,6 +5902,7 @@ class GUILauncher:
             except Exception as e:
                 # Mark report as failed
                 from robin.gui.report_progress import progress_manager
+
                 progress_manager.error_report(sample_id, str(e))
                 self._audit_report_generated(
                     state=state,
@@ -5553,10 +5915,14 @@ class GUILauncher:
                 )
 
                 # Queue error notification in UI context
-                ui.timer(0.1, lambda: ui.notify(
-                    f"Error generating report: {str(e)}",
-                    type="negative",
-                ), once=True)
+                ui.timer(
+                    0.1,
+                    lambda: ui.notify(
+                        f"Error generating report: {str(e)}",
+                        type="negative",
+                    ),
+                    once=True,
+                )
                 files_to_download.append(None)  # Signal error
 
         async def download_report(state: Dict[str, Any]):
@@ -5566,7 +5932,6 @@ class GUILauncher:
             try:
                 # Import here to avoid global dependency if GUI isn't used
                 from nicegui import run as ng_run  # type: ignore
-
 
                 if not sample_dir or not sample_dir.exists():
                     self._audit_report_generated(
@@ -5588,7 +5953,7 @@ class GUILauncher:
                     f"[{sample_id}] Starting report generation...",
                     type="info",
                     timeout=0,  # Persistent notification
-                    position="top-right"
+                    position="top-right",
                 )
 
                 filename = f"{sample_id}_run_report.pdf"
@@ -5596,12 +5961,11 @@ class GUILauncher:
                 os.makedirs(str(sample_dir), exist_ok=True)
                 export_csv_dir = None
                 if bool(state.get("export_csv", False)):
-                    export_csv_dir = os.path.join(
-                        str(sample_dir), "report_csv"
-                    )
+                    export_csv_dir = os.path.join(str(sample_dir), "report_csv")
 
                 # Create progress callback
                 from robin.gui.report_progress import create_progress_callback
+
                 progress_callback = create_progress_callback(sample_id)
 
                 pdf_file = await ng_run.io_bound(
@@ -5614,8 +5978,12 @@ class GUILauncher:
                     export_xlsx=False,
                     export_zip=bool(state.get("export_csv", False)),
                     progress_callback=progress_callback,
-                    workflow_steps=self.workflow_steps if hasattr(self, 'workflow_steps') else None,
-                    display_config=self.display_config if hasattr(self, 'display_config') else None,
+                    workflow_steps=(
+                        self.workflow_steps if hasattr(self, "workflow_steps") else None
+                    ),
+                    display_config=(
+                        self.display_config if hasattr(self, "display_config") else None
+                    ),
                     viewer_role=resolve_viewer_role(self),
                     generated_by=report_meta["generated_by"] or None,
                     generated_at=report_meta["generated_at"],
@@ -5624,6 +5992,7 @@ class GUILauncher:
 
                 # Mark report as completed
                 from robin.gui.report_progress import progress_manager
+
                 progress_manager.complete_report(sample_id, filename)
 
                 generated_files.append(pdf_file)
@@ -5647,6 +6016,7 @@ class GUILauncher:
             except Exception as e:
                 # Mark report as failed
                 from robin.gui.report_progress import progress_manager
+
                 progress_manager.error_report(sample_id, str(e))
                 self._audit_report_generated(
                     state=state,
@@ -5679,10 +6049,12 @@ class GUILauncher:
                     )
                     ui.label(
                         "This library ID has not been seen yet in the current session."
-                    ).classes("text-body-medium text-slate-600 dark:text-slate-400 text-center")
-                    ui.label(
-                        "Redirecting to sample list…"
-                    ).classes("text-body-small text-slate-500 dark:text-slate-500 mt-1")
+                    ).classes(
+                        "text-body-medium text-slate-600 dark:text-slate-400 text-center"
+                    )
+                    ui.label("Redirecting to sample list…").classes(
+                        "text-body-small text-slate-500 dark:text-slate-500 mt-1"
+                    )
                     ui.button(
                         "Back to samples", on_click=lambda: ui.navigate.to("/live_data")
                     ).props("color=primary").classes("rounded-lg mt-2")
@@ -5755,7 +6127,9 @@ class GUILauncher:
                                         "dark:text-slate-200 break-words"
                                     )
                                 if test_id:
-                                    with ui.row().classes("items-baseline gap-2 flex-wrap"):
+                                    with ui.row().classes(
+                                        "items-baseline gap-2 flex-wrap"
+                                    ):
                                         ui.label("Test ID").classes(
                                             "text-label-medium text-slate-500 dark:text-slate-400"
                                         )
@@ -5802,7 +6176,9 @@ class GUILauncher:
                                     ).classes(
                                         "rounded-lg border border-slate-300 dark:border-slate-600 "
                                         "text-title-medium w-full md:w-auto md:min-w-[10rem]"
-                                    ).props("flat no-caps")
+                                    ).props(
+                                        "flat no-caps"
+                                    )
                             if self._current_user_can_export():
                                 ui.button(
                                     "Generate report",
@@ -5813,7 +6189,9 @@ class GUILauncher:
                                 )
                             ui.button(
                                 "View audit",
-                                on_click=lambda: self._open_sample_audit_dialog(sample_id),
+                                on_click=lambda: self._open_sample_audit_dialog(
+                                    sample_id
+                                ),
                                 icon="history",
                             ).props("flat no-caps outline").classes(
                                 "rounded-lg w-full md:w-auto md:min-w-[10rem]"
@@ -5829,19 +6207,21 @@ class GUILauncher:
                             "dark:from-slate-900/60 dark:to-zinc-950/80"
                         )
                         with loading_container:
-                            ui.spinner("bars", size="4em", color="primary").classes("mb-4")
+                            ui.spinner("bars", size="4em", color="primary").classes(
+                                "mb-4"
+                            )
                             ui.label("Loading sample data…").classes(
                                 "text-title-medium text-slate-800 dark:text-slate-100"
                             )
-                            ui.label("This may take a moment for large datasets").classes(
+                            ui.label(
+                                "This may take a moment for large datasets"
+                            ).classes(
                                 "text-body-small text-slate-500 dark:text-slate-400"
                             )
 
                         # Content container that will be shown when data is ready
                         content_container = (
-                            ui.column()
-                            .classes("w-full gap-2")
-                            .style("display: none")
+                            ui.column().classes("w-full gap-2").style("display: none")
                         )
                     else:
                         # For page refreshes, show content immediately
@@ -5852,10 +6232,14 @@ class GUILauncher:
                         # Summary section (new component) - create UI immediately, load data async
                         try:
                             try:
-                                from .gui.components.summary import add_summary_section  # type: ignore
+                                from .gui.components.summary import (
+                                    add_summary_section,  # type: ignore
+                                )
                             except ImportError:
                                 # Try absolute import if relative fails
-                                from robin.gui.components.summary import add_summary_section
+                                from robin.gui.components.summary import (
+                                    add_summary_section,
+                                )
 
                             # Create the UI components immediately on the main thread
                             with _sample_page_section_timer(
@@ -5865,7 +6249,9 @@ class GUILauncher:
                         except Exception as e:
                             logging.exception(f"[GUI] Summary section failed: {e}")
                             try:
-                                ui.notify(f"Summary section failed: {e}", type="warning")
+                                ui.notify(
+                                    f"Summary section failed: {e}", type="warning"
+                                )
                             except Exception:
                                 pass
 
@@ -5877,6 +6263,7 @@ class GUILauncher:
                                 resolve_viewer_role,
                             )
                         except ImportError:
+
                             def is_section_visible(section_id, **kwargs):  # type: ignore[misc]
                                 return True
 
@@ -5887,10 +6274,14 @@ class GUILauncher:
                                 return "user"
 
                         workflow_steps = (
-                            self.workflow_steps if hasattr(self, "workflow_steps") else None
+                            self.workflow_steps
+                            if hasattr(self, "workflow_steps")
+                            else None
                         )
                         display_config = (
-                            self.display_config if hasattr(self, "display_config") else None
+                            self.display_config
+                            if hasattr(self, "display_config")
+                            else None
                         )
                         viewer_role = resolve_viewer_role(self)
 
@@ -5908,7 +6299,9 @@ class GUILauncher:
                                 )
                             ui.label(
                                 "This can take a moment for large datasets."
-                            ).classes("text-body-small text-slate-500 dark:text-slate-400 mt-2")
+                            ).classes(
+                                "text-body-small text-slate-500 dark:text-slate-400 mt-2"
+                            )
 
                         analysis_container = ui.column().classes("w-full gap-2")
 
@@ -5932,7 +6325,9 @@ class GUILauncher:
                                     ):
                                         try:
                                             try:
-                                                from .gui.components.classification import add_classification_section  # type: ignore
+                                                from .gui.components.classification import (
+                                                    add_classification_section,  # type: ignore
+                                                )
                                             except ImportError:
                                                 from robin.gui.components.classification import (
                                                     add_classification_section,
@@ -5947,10 +6342,13 @@ class GUILauncher:
                                                     sample_dir, self
                                                 )
                                         except Exception as e:
-                                            logging.exception(f"[GUI] Classification section failed: {e}")
+                                            logging.exception(
+                                                f"[GUI] Classification section failed: {e}"
+                                            )
                                             try:
                                                 ui.notify(
-                                                    f"Classification section failed: {e}", type="warning"
+                                                    f"Classification section failed: {e}",
+                                                    type="warning",
                                                 )
                                             except Exception:
                                                 pass
@@ -5964,9 +6362,13 @@ class GUILauncher:
                                     ):
                                         try:
                                             try:
-                                                from .gui.components.mnpflex import add_mnpflex_section  # type: ignore
+                                                from .gui.components.mnpflex import (
+                                                    add_mnpflex_section,  # type: ignore
+                                                )
                                             except ImportError:
-                                                from robin.gui.components.mnpflex import add_mnpflex_section
+                                                from robin.gui.components.mnpflex import (
+                                                    add_mnpflex_section,
+                                                )
 
                                             with _sample_page_section_timer(
                                                 "live_data", sample_id, "mnpflex"
@@ -5975,10 +6377,13 @@ class GUILauncher:
                                                     self, sample_dir, sample_id
                                                 )
                                         except Exception as e:
-                                            logging.exception(f"[GUI] MNP-Flex section failed: {e}")
+                                            logging.exception(
+                                                f"[GUI] MNP-Flex section failed: {e}"
+                                            )
                                             try:
                                                 ui.notify(
-                                                    f"MNP-Flex section failed: {e}", type="warning"
+                                                    f"MNP-Flex section failed: {e}",
+                                                    type="warning",
                                                 )
                                             except Exception:
                                                 pass
@@ -5992,7 +6397,9 @@ class GUILauncher:
                                     ):
                                         try:
                                             try:
-                                                from .gui.components.coverage import add_coverage_section  # type: ignore
+                                                from .gui.components.coverage import (
+                                                    add_coverage_section,  # type: ignore
+                                                )
                                             except ImportError:
                                                 from robin.gui.components.coverage import (
                                                     add_coverage_section,
@@ -6004,12 +6411,13 @@ class GUILauncher:
                                                 sample_id,
                                                 "coverage",
                                             ):
-                                                add_coverage_section(
-                                                    self, sample_dir
-                                                )
+                                                add_coverage_section(self, sample_dir)
                                         except Exception as e:
                                             try:
-                                                ui.notify(f"Coverage section failed: {e}", type="warning")
+                                                ui.notify(
+                                                    f"Coverage section failed: {e}",
+                                                    type="warning",
+                                                )
                                             except Exception:
                                                 pass
 
@@ -6022,18 +6430,27 @@ class GUILauncher:
                                     ):
                                         try:
                                             try:
-                                                from .gui.components.mgmt import add_mgmt_section  # type: ignore
+                                                from .gui.components.mgmt import (
+                                                    add_mgmt_section,  # type: ignore
+                                                )
                                             except ImportError:
-                                                from robin.gui.components.mgmt import add_mgmt_section
+                                                from robin.gui.components.mgmt import (
+                                                    add_mgmt_section,
+                                                )
 
                                             with _sample_page_section_timer(
                                                 "live_data", sample_id, "mgmt"
                                             ):
                                                 add_mgmt_section(self, sample_dir)
                                         except Exception as e:
-                                            logging.exception(f"[GUI] MGMT section failed: {e}")
+                                            logging.exception(
+                                                f"[GUI] MGMT section failed: {e}"
+                                            )
                                             try:
-                                                ui.notify(f"MGMT section failed: {e}", type="warning")
+                                                ui.notify(
+                                                    f"MGMT section failed: {e}",
+                                                    type="warning",
+                                                )
                                             except Exception:
                                                 pass
 
@@ -6046,18 +6463,27 @@ class GUILauncher:
                                     ):
                                         try:
                                             try:
-                                                from .gui.components.cnv import add_cnv_section  # type: ignore
+                                                from .gui.components.cnv import (
+                                                    add_cnv_section,  # type: ignore
+                                                )
                                             except ImportError:
-                                                from robin.gui.components.cnv import add_cnv_section
+                                                from robin.gui.components.cnv import (
+                                                    add_cnv_section,
+                                                )
 
                                             with _sample_page_section_timer(
                                                 "live_data", sample_id, "cnv"
                                             ):
                                                 add_cnv_section(self, sample_dir)
                                         except Exception as e:
-                                            logging.exception(f"[GUI] CNV section failed: {e}")
+                                            logging.exception(
+                                                f"[GUI] CNV section failed: {e}"
+                                            )
                                             try:
-                                                ui.notify(f"CNV section failed: {e}", type="warning")
+                                                ui.notify(
+                                                    f"CNV section failed: {e}",
+                                                    type="warning",
+                                                )
                                             except Exception:
                                                 pass
 
@@ -6070,26 +6496,39 @@ class GUILauncher:
                                     ):
                                         try:
                                             try:
-                                                from .gui.components.fusion import add_fusion_section  # type: ignore
+                                                from .gui.components.fusion import (
+                                                    add_fusion_section,  # type: ignore
+                                                )
                                             except ImportError:
-                                                from robin.gui.components.fusion import add_fusion_section
+                                                from robin.gui.components.fusion import (
+                                                    add_fusion_section,
+                                                )
 
                                             with _sample_page_section_timer(
                                                 "live_data", sample_id, "fusion"
                                             ):
                                                 add_fusion_section(self, sample_dir)
                                         except Exception as e:
-                                            logging.exception(f"[GUI] Fusion section failed: {e}")
+                                            logging.exception(
+                                                f"[GUI] Fusion section failed: {e}"
+                                            )
                                             try:
-                                                ui.notify(f"Fusion section failed: {e}", type="warning")
+                                                ui.notify(
+                                                    f"Fusion section failed: {e}",
+                                                    type="warning",
+                                                )
                                             except Exception:
                                                 pass
 
                                         try:
                                             try:
-                                                from .gui.components.bed_coverage import add_bed_coverage_section  # type: ignore
+                                                from .gui.components.bed_coverage import (
+                                                    add_bed_coverage_section,  # type: ignore
+                                                )
                                             except ImportError:
-                                                from robin.gui.components.bed_coverage import add_bed_coverage_section
+                                                from robin.gui.components.bed_coverage import (
+                                                    add_bed_coverage_section,
+                                                )
 
                                             if is_section_visible(
                                                 "bed_coverage",
@@ -6098,13 +6537,22 @@ class GUILauncher:
                                                 viewer_role=viewer_role,
                                             ):
                                                 with _sample_page_section_timer(
-                                                    "live_data", sample_id, "bed_coverage"
+                                                    "live_data",
+                                                    sample_id,
+                                                    "bed_coverage",
                                                 ):
-                                                    add_bed_coverage_section(self, sample_dir)
+                                                    add_bed_coverage_section(
+                                                        self, sample_dir
+                                                    )
                                         except Exception as e:
-                                            logging.exception(f"[GUI] BED coverage section failed: {e}")
+                                            logging.exception(
+                                                f"[GUI] BED coverage section failed: {e}"
+                                            )
                                             try:
-                                                ui.notify(f"BED Coverage section failed: {e}", type="warning")
+                                                ui.notify(
+                                                    f"BED Coverage section failed: {e}",
+                                                    type="warning",
+                                                )
                                             except Exception:
                                                 pass
 
@@ -6117,22 +6565,33 @@ class GUILauncher:
                                     ):
                                         try:
                                             try:
-                                                from .gui.components.itd import add_itd_section  # type: ignore
+                                                from .gui.components.itd import (
+                                                    add_itd_section,  # type: ignore
+                                                )
                                             except ImportError:
-                                                from robin.gui.components.itd import add_itd_section
+                                                from robin.gui.components.itd import (
+                                                    add_itd_section,
+                                                )
 
                                             with _sample_page_section_timer(
                                                 "live_data", sample_id, "itd"
                                             ):
                                                 add_itd_section(self, sample_dir)
                                         except Exception as e:
-                                            logging.exception(f"[GUI] ITD section failed: {e}")
+                                            logging.exception(
+                                                f"[GUI] ITD section failed: {e}"
+                                            )
                                             try:
-                                                ui.notify(f"ITD section failed: {e}", type="warning")
+                                                ui.notify(
+                                                    f"ITD section failed: {e}",
+                                                    type="warning",
+                                                )
                                             except Exception:
                                                 pass
 
-                                    total_elapsed = time.perf_counter() - t_analysis_start
+                                    total_elapsed = (
+                                        time.perf_counter() - t_analysis_start
+                                    )
                                     logging.debug(
                                         "[SamplePage] page=live_data sample=%s "
                                         "section=analysis_sections_total elapsed_s=%.3f",
@@ -6140,7 +6599,9 @@ class GUILauncher:
                                         total_elapsed,
                                     )
                             except Exception as e:
-                                logging.exception(f"[GUI] Failed to build analysis sections: {e}")
+                                logging.exception(
+                                    f"[GUI] Failed to build analysis sections: {e}"
+                                )
 
                         # Delay heavy UI creation to allow websocket handshake to complete
                         ui.timer(0.5, _build_analysis_sections, once=True)
@@ -6154,8 +6615,10 @@ class GUILauncher:
                             display_config=display_config,
                             viewer_role=viewer_role,
                         ):
-                            with ui.element("div").classes("w-full min-w-0").props(
-                                "id=analysis-detail-output-files"
+                            with (
+                                ui.element("div")
+                                .classes("w-full min-w-0")
+                                .props("id=analysis-detail-output-files")
                             ):
                                 with ui.element("div").classes(
                                     "classification-insight-shell w-full min-w-0"
@@ -6175,7 +6638,9 @@ class GUILauncher:
                                                 ui.icon("folder_open").classes(
                                                     "classification-insight-icon"
                                                 )
-                                                ui.label("Sample output directory").classes(
+                                                ui.label(
+                                                    "Sample output directory"
+                                                ).classes(
                                                     "classification-insight-model flex-1 min-w-0"
                                                 )
                                             ui.label(sample_id).classes(
@@ -6271,12 +6736,19 @@ class GUILauncher:
                                     if not self._require_export_or_notify():
                                         return
                                     if not sample_dir or not sample_dir.exists():
-                                        ui.notify("Sample directory not found", type="error")
+                                        ui.notify(
+                                            "Sample directory not found", type="error"
+                                        )
                                         return
 
                                     file_path = sample_dir / filename
-                                    if not file_path.exists() or not file_path.is_file():
-                                        ui.notify(f"File {filename} not found", type="error")
+                                    if (
+                                        not file_path.exists()
+                                        or not file_path.is_file()
+                                    ):
+                                        ui.notify(
+                                            f"File {filename} not found", type="error"
+                                        )
                                         return
 
                                     with open(file_path, "rb") as f:
@@ -6308,7 +6780,9 @@ class GUILauncher:
                                                         "size": stat.st_size,
                                                         "mtime": time.strftime(
                                                             "%Y-%m-%d %H:%M:%S",
-                                                            time.localtime(stat.st_mtime),
+                                                            time.localtime(
+                                                                stat.st_mtime
+                                                            ),
                                                         ),
                                                         "actions": f.name,
                                                     }
@@ -6360,24 +6834,31 @@ class GUILauncher:
                                         _notify_state["files_error"] = True
 
                             if show_loading and loading_container:
+
                                 async def _load_initial_data_and_show():
                                     try:
                                         await _refresh_sample_detail_async()
                                         loading_container.style("display: none")
                                         content_container.style("display: flex")
                                     except Exception as e:
-                                        logging.error(f"Error loading initial data: {e}")
+                                        logging.error(
+                                            f"Error loading initial data: {e}"
+                                        )
                                         loading_container.style("display: none")
                                         content_container.style("display: flex")
 
                                 try:
-                                    ui.timer(0.1, _load_initial_data_and_show, once=True)
+                                    ui.timer(
+                                        0.1, _load_initial_data_and_show, once=True
+                                    )
                                 except Exception:
                                     loading_container.style("display: none")
                                     content_container.style("display: flex")
                             else:
                                 try:
-                                    ui.timer(0.1, _refresh_sample_detail_async, once=True)
+                                    ui.timer(
+                                        0.1, _refresh_sample_detail_async, once=True
+                                    )
                                 except Exception:
                                     pass
 
@@ -6396,6 +6877,7 @@ class GUILauncher:
                             except Exception:
                                 pass
                         elif show_loading and loading_container:
+
                             def _show_content_without_files() -> None:
                                 loading_container.style("display: none")
                                 content_container.style("display: flex")
@@ -6451,7 +6933,9 @@ class GUILauncher:
                         on_click=lambda: ui.navigate.to("/live_data"),
                     ).classes(
                         "mt-1 rounded-lg border border-slate-300 dark:border-slate-600"
-                    ).props("flat")
+                    ).props(
+                        "flat"
+                    )
             return
 
         # Create the page with theme frame
@@ -6466,7 +6950,9 @@ class GUILauncher:
             from robin.gui.config import is_section_visible, launcher_visibility_context
             from robin.gui.display_config import SAMPLE_DETAILS_SURFACE
 
-            workflow_steps, display_config, viewer_role = launcher_visibility_context(self)
+            workflow_steps, display_config, viewer_role = launcher_visibility_context(
+                self
+            )
             details_surface = SAMPLE_DETAILS_SURFACE
             show_details_igv = is_section_visible(
                 "target",
@@ -6516,8 +7002,14 @@ class GUILauncher:
                 viewer_role=viewer_role,
             ) and (show_fusion_target or show_fusion_genome)
 
-            with ui.element("div").classes("w-full min-w-0").props("id=sample-details-page"):
-                with ui.element("div").classes("classification-insight-shell w-full min-w-0"):
+            with (
+                ui.element("div")
+                .classes("w-full min-w-0")
+                .props("id=sample-details-page")
+            ):
+                with ui.element("div").classes(
+                    "classification-insight-shell w-full min-w-0"
+                ):
                     with ui.row().classes(
                         "w-full flex flex-col gap-3 md:flex-row md:justify-between "
                         "md:items-start p-2 md:p-3"
@@ -6567,14 +7059,18 @@ class GUILauncher:
                         ):
                             ui.button(
                                 "View audit",
-                                on_click=lambda: self._open_sample_audit_dialog(sample_id),
+                                on_click=lambda: self._open_sample_audit_dialog(
+                                    sample_id
+                                ),
                                 icon="history",
                             ).props("flat no-caps outline").classes(
                                 "rounded-lg w-full md:min-w-[10rem]"
                             )
                             ui.button(
                                 "Back to sample",
-                                on_click=lambda: ui.navigate.to(f"/live_data/{sample_id}"),
+                                on_click=lambda: ui.navigate.to(
+                                    f"/live_data/{sample_id}"
+                                ),
                             ).props("color=primary no-caps").classes(
                                 "rounded-lg w-full md:min-w-[10rem]"
                             )
@@ -6589,9 +7085,7 @@ class GUILauncher:
                         with ui.element("div").classes(
                             "classification-insight-card w-full min-w-0"
                         ):
-                            with ui.column().classes(
-                                "w-full min-w-0 gap-2 p-2 md:p-3"
-                            ):
+                            with ui.column().classes("w-full min-w-0 gap-2 p-2 md:p-3"):
                                 with ui.row().classes("items-center gap-2 min-w-0"):
                                     ui.icon("folder_open").classes(
                                         "classification-insight-icon"
@@ -6630,9 +7124,7 @@ class GUILauncher:
                                 with ui.column().classes(
                                     "w-full min-w-0 gap-2 p-2 md:p-3"
                                 ):
-                                    with ui.row().classes(
-                                        "items-center gap-2 min-w-0"
-                                    ):
+                                    with ui.row().classes("items-center gap-2 min-w-0"):
                                         ui.icon("hub").classes(
                                             "classification-insight-icon"
                                         )
@@ -6666,7 +7158,9 @@ class GUILauncher:
                         try:
                             from robin.gui.components.itd import add_itd_section
                         except ImportError:
-                            from .gui.components.itd import add_itd_section  # type: ignore
+                            from .gui.components.itd import (
+                                add_itd_section,  # type: ignore
+                            )
 
                         with _sample_page_section_timer(
                             "sample_details", sample_id, "itd"
@@ -6676,22 +7170,29 @@ class GUILauncher:
                     # Fusion Pairs Table section
                     if sample_dir and sample_dir.exists() and show_details_fusion_pairs:
                         _fusion_pairs_t0 = time.perf_counter()
-                        from robin.gui.components.fusion import (
-                            _load_processed_pickle,
-                            _cluster_fusion_reads,
-                        )
                         import pandas as pd
+
+                        from robin.gui.components.fusion import (
+                            _cluster_fusion_reads,
+                            _load_processed_pickle,
+                        )
 
                         sample_key = str(sample_dir)
                         fusion_state = getattr(self, "_fusion_state", {})
                         cache_entry = fusion_state.setdefault(sample_key, {})
-                        target_file = sample_dir / "fusion_candidates_master_processed.pkl"
+                        target_file = (
+                            sample_dir / "fusion_candidates_master_processed.pkl"
+                        )
                         genome_file = sample_dir / "fusion_candidates_all_processed.pkl"
                         target_mtime = (
-                            target_file.stat().st_mtime if target_file.exists() else None
+                            target_file.stat().st_mtime
+                            if target_file.exists()
+                            else None
                         )
                         genome_mtime = (
-                            genome_file.stat().st_mtime if genome_file.exists() else None
+                            genome_file.stat().st_mtime
+                            if genome_file.exists()
+                            else None
                         )
                         file_sig = (target_mtime, genome_mtime)
                         cached_rows = cache_entry.get("details_pairs_rows")
@@ -6705,24 +7206,43 @@ class GUILauncher:
                             import re
 
                             fusion_data_local = None
-                            target_file_local = sample_dir / "fusion_candidates_master_processed.pkl"
-                            genome_file_local = sample_dir / "fusion_candidates_all_processed.pkl"
+                            target_file_local = (
+                                sample_dir / "fusion_candidates_master_processed.pkl"
+                            )
+                            genome_file_local = (
+                                sample_dir / "fusion_candidates_all_processed.pkl"
+                            )
                             try:
                                 if show_fusion_target and target_file_local.exists():
-                                    fusion_data_local = _load_processed_pickle(target_file_local)
+                                    fusion_data_local = _load_processed_pickle(
+                                        target_file_local
+                                    )
                                 elif show_fusion_genome and genome_file_local.exists():
-                                    fusion_data_local = _load_processed_pickle(genome_file_local)
+                                    fusion_data_local = _load_processed_pickle(
+                                        genome_file_local
+                                    )
                             except Exception as ex:
                                 logging.warning(f"Failed to load fusion data: {ex}")
                                 return []
 
                             if not fusion_data_local:
                                 return []
-                            annotated_data_local = fusion_data_local.get("annotated_data", pd.DataFrame())
-                            if annotated_data_local is None or annotated_data_local.empty:
+                            annotated_data_local = fusion_data_local.get(
+                                "annotated_data", pd.DataFrame()
+                            )
+                            if (
+                                annotated_data_local is None
+                                or annotated_data_local.empty
+                            ):
                                 return []
-                            goodpairs_local = fusion_data_local.get("goodpairs", pd.Series())
-                            if goodpairs_local is not None and not goodpairs_local.empty and goodpairs_local.sum() > 0:
+                            goodpairs_local = fusion_data_local.get(
+                                "goodpairs", pd.Series()
+                            )
+                            if (
+                                goodpairs_local is not None
+                                and not goodpairs_local.empty
+                                and goodpairs_local.sum() > 0
+                            ):
                                 aligned_goodpairs = goodpairs_local.reindex(
                                     annotated_data_local.index, fill_value=False
                                 )
@@ -6734,12 +7254,23 @@ class GUILauncher:
                                 max_distance=10000,
                                 use_breakpoint_validation=True,
                             )
-                            if clustered_data_local is None or clustered_data_local.empty:
+                            if (
+                                clustered_data_local is None
+                                or clustered_data_local.empty
+                            ):
                                 return []
 
                             built_rows: List[Dict[str, Any]] = []
                             for _, row in clustered_data_local.iterrows():
-                                if all(col in row for col in ["gene1_start", "gene1_end", "gene2_start", "gene2_end"]):
+                                if all(
+                                    col in row
+                                    for col in [
+                                        "gene1_start",
+                                        "gene1_end",
+                                        "gene2_start",
+                                        "gene2_end",
+                                    ]
+                                ):
                                     start1_raw = int(row["gene1_start"])
                                     end1_raw = int(row["gene1_end"])
                                     start2_raw = int(row["gene2_start"])
@@ -6747,19 +7278,31 @@ class GUILauncher:
                                 else:
                                     pos1_str = str(row.get("gene1_position", ""))
                                     pos2_str = str(row.get("gene2_position", ""))
-                                    pos1_match = re.match(r'(\d+)[-–—](\d+)', pos1_str.replace(',', ''))
-                                    pos2_match = re.match(r'(\d+)[-–—](\d+)', pos2_str.replace(',', ''))
+                                    pos1_match = re.match(
+                                        r"(\d+)[-–—](\d+)", pos1_str.replace(",", "")
+                                    )
+                                    pos2_match = re.match(
+                                        r"(\d+)[-–—](\d+)", pos2_str.replace(",", "")
+                                    )
                                     if pos1_match and pos2_match:
                                         start1_raw = int(pos1_match.group(1))
                                         end1_raw = int(pos1_match.group(2))
                                         start2_raw = int(pos2_match.group(1))
                                         end2_raw = int(pos2_match.group(2))
                                     else:
-                                        pos1_single = re.search(r'(\d+)', pos1_str.replace(',', ''))
-                                        pos2_single = re.search(r'(\d+)', pos2_str.replace(',', ''))
+                                        pos1_single = re.search(
+                                            r"(\d+)", pos1_str.replace(",", "")
+                                        )
+                                        pos2_single = re.search(
+                                            r"(\d+)", pos2_str.replace(",", "")
+                                        )
                                         if pos1_single and pos2_single:
-                                            start1_raw = end1_raw = int(pos1_single.group(1))
-                                            start2_raw = end2_raw = int(pos2_single.group(1))
+                                            start1_raw = end1_raw = int(
+                                                pos1_single.group(1)
+                                            )
+                                            start2_raw = end2_raw = int(
+                                                pos2_single.group(1)
+                                            )
                                         else:
                                             continue
                                 padding = 10000
@@ -6773,9 +7316,17 @@ class GUILauncher:
                                     {
                                         "fusion_pair": row.get("fusion_pair", ""),
                                         "chr1": chr1,
-                                        "pos1": f"{min1:,}-{max1:,}" if min1 != max1 else f"{min1:,}",
+                                        "pos1": (
+                                            f"{min1:,}-{max1:,}"
+                                            if min1 != max1
+                                            else f"{min1:,}"
+                                        ),
                                         "chr2": chr2,
-                                        "pos2": f"{min2:,}-{max2:,}" if min2 != max2 else f"{min2:,}",
+                                        "pos2": (
+                                            f"{min2:,}-{max2:,}"
+                                            if min2 != max2
+                                            else f"{min2:,}"
+                                        ),
                                         "reads": int(row.get("reads", 0)),
                                         "region": (
                                             f"{chr1}:{max(1, min1 - padding)}-{max1 + padding} "
@@ -6790,7 +7341,9 @@ class GUILauncher:
                         if not cache_hit:
                             rebuilt_rows = _build_fusion_pairs_rows_sync()
                             cache_entry["details_pairs_sig"] = file_sig
-                            cache_entry["details_pairs_rows"] = [dict(r) for r in rebuilt_rows]
+                            cache_entry["details_pairs_rows"] = [
+                                dict(r) for r in rebuilt_rows
+                            ]
                             cached_rows = cache_entry["details_pairs_rows"]
                             cache_hit = True
 
@@ -6801,11 +7354,19 @@ class GUILauncher:
                             try:
                                 if show_fusion_target and target_file.exists():
                                     fusion_data = _load_processed_pickle(target_file)
-                                    if fusion_data and fusion_data.get("annotated_data") is not None:
+                                    if (
+                                        fusion_data
+                                        and fusion_data.get("annotated_data")
+                                        is not None
+                                    ):
                                         fusion_data_loaded = True
                                 elif show_fusion_genome and genome_file.exists():
                                     fusion_data = _load_processed_pickle(genome_file)
-                                    if fusion_data and fusion_data.get("annotated_data") is not None:
+                                    if (
+                                        fusion_data
+                                        and fusion_data.get("annotated_data")
+                                        is not None
+                                    ):
                                         fusion_data_loaded = True
                             except Exception as e:
                                 logging.warning(f"Failed to load fusion data: {e}")
@@ -6824,7 +7385,9 @@ class GUILauncher:
                         if cache_hit or not annotated_data.empty:
                             # Filter to good pairs if available
                             if not goodpairs.empty and goodpairs.sum() > 0:
-                                aligned_goodpairs = goodpairs.reindex(annotated_data.index, fill_value=False)
+                                aligned_goodpairs = goodpairs.reindex(
+                                    annotated_data.index, fill_value=False
+                                )
                                 filtered_data = annotated_data[aligned_goodpairs]
                             else:
                                 filtered_data = annotated_data
@@ -6833,7 +7396,7 @@ class GUILauncher:
                             clustered_data = _cluster_fusion_reads(
                                 filtered_data,
                                 max_distance=10000,
-                                use_breakpoint_validation=True
+                                use_breakpoint_validation=True,
                             )
 
                             if cache_hit or not clustered_data.empty:
@@ -6855,24 +7418,72 @@ class GUILauncher:
                                     )
 
                                     columns = [
-                                        {"name": "fusion_pair", "label": "Fusion Pair", "field": "fusion_pair", "sortable": False},
-                                        {"name": "chr1", "label": "Chr 1", "field": "chr1", "sortable": False},
-                                        {"name": "pos1", "label": "Breakpoint 1", "field": "pos1", "sortable": False},
-                                        {"name": "chr2", "label": "Chr 2", "field": "chr2", "sortable": False},
-                                        {"name": "pos2", "label": "Breakpoint 2", "field": "pos2", "sortable": False},
-                                        {"name": "reads", "label": "Supporting Reads", "field": "reads", "sortable": False},
-                                        {"name": "action", "label": "View in IGV", "field": "action", "sortable": False}
+                                        {
+                                            "name": "fusion_pair",
+                                            "label": "Fusion Pair",
+                                            "field": "fusion_pair",
+                                            "sortable": False,
+                                        },
+                                        {
+                                            "name": "chr1",
+                                            "label": "Chr 1",
+                                            "field": "chr1",
+                                            "sortable": False,
+                                        },
+                                        {
+                                            "name": "pos1",
+                                            "label": "Breakpoint 1",
+                                            "field": "pos1",
+                                            "sortable": False,
+                                        },
+                                        {
+                                            "name": "chr2",
+                                            "label": "Chr 2",
+                                            "field": "chr2",
+                                            "sortable": False,
+                                        },
+                                        {
+                                            "name": "pos2",
+                                            "label": "Breakpoint 2",
+                                            "field": "pos2",
+                                            "sortable": False,
+                                        },
+                                        {
+                                            "name": "reads",
+                                            "label": "Supporting Reads",
+                                            "field": "reads",
+                                            "sortable": False,
+                                        },
+                                        {
+                                            "name": "action",
+                                            "label": "View in IGV",
+                                            "field": "action",
+                                            "sortable": False,
+                                        },
                                     ]
 
                                     # Format rows for display
-                                    rows = [dict(r) for r in cached_rows] if cache_hit else []
+                                    rows = (
+                                        [dict(r) for r in cached_rows]
+                                        if cache_hit
+                                        else []
+                                    )
                                     if not cache_hit:
                                         # Keep region in each source row to avoid duplicate mapping storage.
                                         import re
+
                                         for idx, row in clustered_data.iterrows():
                                             # Try to get start/end coordinates from the row if available
                                             # (e.g., from breakpoint validation)
-                                            if all(col in row for col in ["gene1_start", "gene1_end", "gene2_start", "gene2_end"]):
+                                            if all(
+                                                col in row
+                                                for col in [
+                                                    "gene1_start",
+                                                    "gene1_end",
+                                                    "gene2_start",
+                                                    "gene2_end",
+                                                ]
+                                            ):
                                                 # Use actual start/end coordinates if available
                                                 start1_raw = int(row["gene1_start"])
                                                 end1_raw = int(row["gene1_end"])
@@ -6880,25 +7491,49 @@ class GUILauncher:
                                                 end2_raw = int(row["gene2_end"])
                                             else:
                                                 # Parse from position strings (format: "start-end")
-                                                pos1_str = str(row.get("gene1_position", ""))
-                                                pos2_str = str(row.get("gene2_position", ""))
+                                                pos1_str = str(
+                                                    row.get("gene1_position", "")
+                                                )
+                                                pos2_str = str(
+                                                    row.get("gene2_position", "")
+                                                )
                                                 # Parse range format "start-end" or just a single number
-                                                pos1_match = re.match(r'(\d+)[-–—](\d+)', pos1_str.replace(',', ''))
-                                                pos2_match = re.match(r'(\d+)[-–—](\d+)', pos2_str.replace(',', ''))
+                                                pos1_match = re.match(
+                                                    r"(\d+)[-–—](\d+)",
+                                                    pos1_str.replace(",", ""),
+                                                )
+                                                pos2_match = re.match(
+                                                    r"(\d+)[-–—](\d+)",
+                                                    pos2_str.replace(",", ""),
+                                                )
                                                 if pos1_match and pos2_match:
                                                     # Extract both start and end from the range
-                                                    start1_raw = int(pos1_match.group(1))
+                                                    start1_raw = int(
+                                                        pos1_match.group(1)
+                                                    )
                                                     end1_raw = int(pos1_match.group(2))
-                                                    start2_raw = int(pos2_match.group(1))
+                                                    start2_raw = int(
+                                                        pos2_match.group(1)
+                                                    )
                                                     end2_raw = int(pos2_match.group(2))
                                                 else:
                                                     # Fallback: try to extract single coordinates
-                                                    pos1_single = re.search(r'(\d+)', pos1_str.replace(',', ''))
-                                                    pos2_single = re.search(r'(\d+)', pos2_str.replace(',', ''))
+                                                    pos1_single = re.search(
+                                                        r"(\d+)",
+                                                        pos1_str.replace(",", ""),
+                                                    )
+                                                    pos2_single = re.search(
+                                                        r"(\d+)",
+                                                        pos2_str.replace(",", ""),
+                                                    )
                                                     if pos1_single and pos2_single:
                                                         # Single coordinate - use it as both start and end
-                                                        start1_raw = end1_raw = int(pos1_single.group(1))
-                                                        start2_raw = end2_raw = int(pos2_single.group(1))
+                                                        start1_raw = end1_raw = int(
+                                                            pos1_single.group(1)
+                                                        )
+                                                        start2_raw = end2_raw = int(
+                                                            pos2_single.group(1)
+                                                        )
                                                     else:
                                                         # Skip this row if we can't parse coordinates
                                                         continue
@@ -6919,10 +7554,20 @@ class GUILauncher:
                                             # Format region as "chr1:start-end chr2:start-end"
                                             region = f"{chr1}:{start1}-{end1} {chr2}:{start2}-{end2}"
                                             # For display, show the breakpoint range (not the padded version)
-                                            display_pos1 = f"{min1:,}-{max1:,}" if min1 != max1 else f"{min1:,}"
-                                            display_pos2 = f"{min2:,}-{max2:,}" if min2 != max2 else f"{min2:,}"
+                                            display_pos1 = (
+                                                f"{min1:,}-{max1:,}"
+                                                if min1 != max1
+                                                else f"{min1:,}"
+                                            )
+                                            display_pos2 = (
+                                                f"{min2:,}-{max2:,}"
+                                                if min2 != max2
+                                                else f"{min2:,}"
+                                            )
                                             formatted_row = {
-                                                "fusion_pair": row.get("fusion_pair", ""),
+                                                "fusion_pair": row.get(
+                                                    "fusion_pair", ""
+                                                ),
                                                 "chr1": chr1,
                                                 "pos1": display_pos1,
                                                 "chr2": chr2,
@@ -6936,25 +7581,36 @@ class GUILauncher:
 
                                     if rows and not cache_hit:
                                         cache_entry["details_pairs_sig"] = file_sig
-                                        cache_entry["details_pairs_rows"] = [dict(r) for r in rows]
+                                        cache_entry["details_pairs_rows"] = [
+                                            dict(r) for r in rows
+                                        ]
 
                                     if rows:
                                         # Store fusion regions mapped by fusion pair for easy lookup
                                         fusion_regions_by_pair = {}
                                         for idx, row_data in enumerate(rows):
-                                            fusion_regions_by_pair[row_data["fusion_pair"]] = row_data.get("region", "")
+                                            fusion_regions_by_pair[
+                                                row_data["fusion_pair"]
+                                            ] = row_data.get("region", "")
 
                                         # Create JavaScript map of regions for IGV navigation
                                         import json
-                                        js_regions_json = json.dumps(fusion_regions_by_pair)
+
+                                        js_regions_json = json.dumps(
+                                            fusion_regions_by_pair
+                                        )
 
                                         # Function to navigate IGV to a fusion region
                                         def navigate_to_fusion_region(fusion_pair: str):
                                             """Navigate IGV browser to the specified fusion pair region."""
                                             if fusion_pair in fusion_regions_by_pair:
-                                                region = fusion_regions_by_pair[fusion_pair]
+                                                region = fusion_regions_by_pair[
+                                                    fusion_pair
+                                                ]
                                                 # Escape region string for JavaScript
-                                                escaped_region = region.replace('"', '\\"').replace("'", "\\'")
+                                                escaped_region = region.replace(
+                                                    '"', '\\"'
+                                                ).replace("'", "\\'")
                                                 js_navigate = f"""
                                                     (function() {{
                                                         try {{
@@ -6974,7 +7630,9 @@ class GUILauncher:
                                                         }}
                                                     }})();
                                                 """
-                                                ui.run_javascript(js_navigate, timeout=5.0)
+                                                ui.run_javascript(
+                                                    js_navigate, timeout=5.0
+                                                )
 
                                         # Initialize fusion regions map in window BEFORE creating table
                                         # This ensures it's available when the slot template renders
@@ -6989,32 +7647,44 @@ class GUILauncher:
 
                                         # Render only one page at a time (Quasar server-side paging).
                                         fusion_preview_mode = len(rows) > 50_000
-                                        fusion_rows_source = rows[:5_000] if fusion_preview_mode else rows
-                                        fusion_total = len(fusion_rows_source)
-                                        fusion_init_pagination = clamp_qtable_server_pagination(
-                                            {
-                                                "sortBy": None,
-                                                "descending": False,
-                                                "page": 1,
-                                                "rowsPerPage": 100,
-                                                "rowsNumber": fusion_total,
-                                            },
-                                            rows_number=fusion_total,
-                                            rows_per_page_default=100,
+                                        fusion_rows_source = (
+                                            rows[:5_000]
+                                            if fusion_preview_mode
+                                            else rows
                                         )
-                                        table_container, fusion_table = styled_server_paged_table(
-                                            columns=columns,
-                                            rows=[],
-                                            pagination=fusion_init_pagination,
-                                            row_key="__row_idx",
-                                            class_size="table-xs",
+                                        fusion_total = len(fusion_rows_source)
+                                        fusion_init_pagination = (
+                                            clamp_qtable_server_pagination(
+                                                {
+                                                    "sortBy": None,
+                                                    "descending": False,
+                                                    "page": 1,
+                                                    "rowsPerPage": 100,
+                                                    "rowsNumber": fusion_total,
+                                                },
+                                                rows_number=fusion_total,
+                                                rows_per_page_default=100,
+                                            )
+                                        )
+                                        table_container, fusion_table = (
+                                            styled_server_paged_table(
+                                                columns=columns,
+                                                rows=[],
+                                                pagination=fusion_init_pagination,
+                                                row_key="__row_idx",
+                                                class_size="table-xs",
+                                            )
                                         )
                                         if fusion_preview_mode:
                                             ui.label(
                                                 f"Preview mode: showing first {len(fusion_rows_source):,} rows of {len(rows):,}. Apply upstream filters to narrow."
-                                            ).classes("classification-insight-level classification-insight-level--low w-full")
+                                            ).classes(
+                                                "classification-insight-level classification-insight-level--low w-full"
+                                            )
 
-                                        def _fill_fusion_from_pagination(pag: Dict[str, Any]) -> None:
+                                        def _fill_fusion_from_pagination(
+                                            pag: Dict[str, Any],
+                                        ) -> None:
                                             total = len(fusion_rows_source)
                                             pag = clamp_qtable_server_pagination(
                                                 pag,
@@ -7025,14 +7695,18 @@ class GUILauncher:
                                             page = int(pag["page"])
                                             start = (page - 1) * rpp
                                             end = start + rpp
-                                            fusion_table.rows = fusion_rows_source[start:end]
+                                            fusion_table.rows = fusion_rows_source[
+                                                start:end
+                                            ]
                                             fusion_table.pagination = pag
                                             fusion_table.update()
 
                                         wire_qtable_server_pagination_handlers(
                                             fusion_table, _fill_fusion_from_pagination
                                         )
-                                        _fill_fusion_from_pagination(fusion_init_pagination)
+                                        _fill_fusion_from_pagination(
+                                            fusion_init_pagination
+                                        )
 
                                         # Add clickable action button column using slot that emits events to Python
                                         try:
@@ -7051,7 +7725,7 @@ color="primary"
 title="View in IGV"
   />
 </q-td>
-"""
+""",
                                             )
 
                                             # Handle the event from the slot
@@ -7062,19 +7736,40 @@ title="View in IGV"
                                                     row_idx = getattr(e, "args", None)
                                                     if row_idx is not None:
                                                         row_idx = int(row_idx)
-                                                        if 0 <= row_idx < len(fusion_rows_source):
-                                                            fusion_pair = fusion_rows_source[row_idx].get("fusion_pair", "")
+                                                        if (
+                                                            0
+                                                            <= row_idx
+                                                            < len(fusion_rows_source)
+                                                        ):
+                                                            fusion_pair = (
+                                                                fusion_rows_source[
+                                                                    row_idx
+                                                                ].get("fusion_pair", "")
+                                                            )
                                                     if fusion_pair:
-                                                        logging.debug(f"[Fusion] Button clicked for: {fusion_pair}")
-                                                        navigate_to_fusion_region(fusion_pair)
+                                                        logging.debug(
+                                                            f"[Fusion] Button clicked for: {fusion_pair}"
+                                                        )
+                                                        navigate_to_fusion_region(
+                                                            fusion_pair
+                                                        )
                                                 except Exception as ex:
-                                                    logging.warning(f"Error handling fusion view IGV event: {ex}")
+                                                    logging.warning(
+                                                        f"Error handling fusion view IGV event: {ex}"
+                                                    )
 
-                                            fusion_table.on("fusion-view-igv", on_fusion_view_igv)
-                                            logging.debug("Added action button column slot with event handler")
+                                            fusion_table.on(
+                                                "fusion-view-igv", on_fusion_view_igv
+                                            )
+                                            logging.debug(
+                                                "Added action button column slot with event handler"
+                                            )
                                         except Exception as slot_ex:
-                                            logging.warning(f"Could not add action column slot: {slot_ex}")
+                                            logging.warning(
+                                                f"Could not add action column slot: {slot_ex}"
+                                            )
                                             import traceback
+
                                             logging.warning(traceback.format_exc())
 
                                             # Fallback: Use JavaScript with inline region lookup
@@ -7107,7 +7802,9 @@ title="View in IGV"
                                                         console.log('[Fusion] Created navigation handler');
                                                     }})();
                                                 """
-                                                ui.run_javascript(js_inline_handler, timeout=5.0)
+                                                ui.run_javascript(
+                                                    js_inline_handler, timeout=5.0
+                                                )
 
                                                 fusion_table.add_slot(
                                                     "body-cell-action",
@@ -7123,10 +7820,12 @@ color="primary"
 title="View in IGV"
   />
 </q-td>
-"""
+""",
                                                 )
                                             except Exception as fallback_ex:
-                                                logging.warning(f"Fallback approach also failed: {fallback_ex}")
+                                                logging.warning(
+                                                    f"Fallback approach also failed: {fallback_ex}"
+                                                )
 
                                         # Use JavaScript to attach click handlers to rows - improved with event delegation
                                         js_attach_handlers = f"""
@@ -7254,14 +7953,21 @@ title="View in IGV"
                                         # (avoids UI-slot-bound timers firing after navigation).
                                         def _run_fusion_handlers_js() -> None:
                                             try:
-                                                ui.run_javascript(js_attach_handlers, timeout=10.0)
+                                                ui.run_javascript(
+                                                    js_attach_handlers, timeout=10.0
+                                                )
                                             except Exception:
                                                 pass
 
-                                        fusion_timer_1 = app.timer(0.5, _run_fusion_handlers_js, once=True)
-                                        fusion_timer_2 = app.timer(2.0, _run_fusion_handlers_js, once=True)
+                                        fusion_timer_1 = app.timer(
+                                            0.5, _run_fusion_handlers_js, once=True
+                                        )
+                                        fusion_timer_2 = app.timer(
+                                            2.0, _run_fusion_handlers_js, once=True
+                                        )
                                         fusion_pairs_refresh_timer = None
                                         try:
+
                                             def _cleanup_fusion_page() -> None:
                                                 fusion_rows_source.clear()
                                                 fusion_table.rows = []
@@ -7274,7 +7980,10 @@ title="View in IGV"
                                                         timer.deactivate()
                                                     except Exception:
                                                         pass
-                                            ui.context.client.on_disconnect(_cleanup_fusion_page)
+
+                                            ui.context.client.on_disconnect(
+                                                _cleanup_fusion_page
+                                            )
                                         except Exception:
                                             pass
 
@@ -7286,22 +7995,32 @@ title="View in IGV"
                                             f"Total supporting reads: {total_reads}"
                                         ).classes("classification-insight-foot")
 
-                                        async def _refresh_fusion_pairs_rows_async() -> None:
+                                        async def _refresh_fusion_pairs_rows_async() -> (
+                                            None
+                                        ):
                                             try:
                                                 new_sig = (
-                                                    target_file.stat().st_mtime
-                                                    if target_file.exists()
-                                                    else None,
-                                                    genome_file.stat().st_mtime
-                                                    if genome_file.exists()
-                                                    else None,
+                                                    (
+                                                        target_file.stat().st_mtime
+                                                        if target_file.exists()
+                                                        else None
+                                                    ),
+                                                    (
+                                                        genome_file.stat().st_mtime
+                                                        if genome_file.exists()
+                                                        else None
+                                                    ),
                                                 )
-                                                if new_sig == cache_entry.get("details_pairs_sig"):
+                                                if new_sig == cache_entry.get(
+                                                    "details_pairs_sig"
+                                                ):
                                                     return
                                                 updated_rows = await asyncio.to_thread(
                                                     _build_fusion_pairs_rows_sync
                                                 )
-                                                cache_entry["details_pairs_sig"] = new_sig
+                                                cache_entry["details_pairs_sig"] = (
+                                                    new_sig
+                                                )
                                                 cache_entry["details_pairs_rows"] = [
                                                     dict(r) for r in updated_rows
                                                 ]
@@ -7316,6 +8035,7 @@ title="View in IGV"
                                                         row_data["fusion_pair"]
                                                     ] = row_data.get("region", "")
                                                 import json
+
                                                 ui.run_javascript(
                                                     f"""
                                                     (function() {{
@@ -7400,9 +8120,11 @@ title="View in IGV"
                             # Note: This runs during page creation, not during user interaction
                             try:
                                 import pandas as pd
+
                                 df = pd.read_csv(
                                     coverage_file,
-                                    usecols=lambda c: c in {
+                                    usecols=lambda c: c
+                                    in {
                                         "chrom",
                                         "startpos",
                                         "endpos",
@@ -7427,18 +8149,30 @@ title="View in IGV"
                                 if all(col in df.columns for col in required_cols):
                                     # Calculate coverage if not present
                                     if "coverage" not in df.columns:
-                                        if "length" in df.columns and "bases" in df.columns:
+                                        if (
+                                            "length" in df.columns
+                                            and "bases" in df.columns
+                                        ):
                                             df["coverage"] = df["bases"] / df["length"]
-                                        elif "startpos" in df.columns and "endpos" in df.columns:
-                                            df["length"] = df["endpos"] - df["startpos"] + 1
+                                        elif (
+                                            "startpos" in df.columns
+                                            and "endpos" in df.columns
+                                        ):
+                                            df["length"] = (
+                                                df["endpos"] - df["startpos"] + 1
+                                            )
                                             if "bases" in df.columns:
-                                                df["coverage"] = df["bases"] / df["length"]
+                                                df["coverage"] = (
+                                                    df["bases"] / df["length"]
+                                                )
                                             else:
                                                 df["coverage"] = 0
 
                                     # Prepare table data
                                     table_data = []
-                                    gene_regions_by_name = {}  # Store regions for navigation
+                                    gene_regions_by_name = (
+                                        {}
+                                    )  # Store regions for navigation
                                     for _, row in df.iterrows():
                                         gene_name = str(row["name"])
                                         chrom = str(row["chrom"])
@@ -7452,15 +8186,19 @@ title="View in IGV"
                                         region = f"{chrom}:{startpos_nav}-{endpos_nav}"
                                         gene_regions_by_name[gene_name] = region
 
-                                        table_data.append({
-                                            "chrom": chrom,
-                                            "startpos": f"{startpos_raw:,}",  # Format with commas for display
-                                            "endpos": f"{endpos_raw:,}",  # Format with commas for display
-                                            "name": gene_name,
-                                            "coverage": float(row.get("coverage", 0)),
-                                            "__row_idx": len(table_data),
-                                            "action": "",
-                                        })
+                                        table_data.append(
+                                            {
+                                                "chrom": chrom,
+                                                "startpos": f"{startpos_raw:,}",  # Format with commas for display
+                                                "endpos": f"{endpos_raw:,}",  # Format with commas for display
+                                                "name": gene_name,
+                                                "coverage": float(
+                                                    row.get("coverage", 0)
+                                                ),
+                                                "__row_idx": len(table_data),
+                                                "action": "",
+                                            }
+                                        )
 
                                     if table_data:
                                         with ui.element("div").classes(
@@ -7471,7 +8209,9 @@ title="View in IGV"
                                             )
                                             ui.label(
                                                 "Click a gene row to open the region in IGV."
-                                            ).classes("classification-insight-meta w-full mb-2")
+                                            ).classes(
+                                                "classification-insight-meta w-full mb-2"
+                                            )
 
                                             from robin.gui.theme import (
                                                 clamp_qtable_server_pagination,
@@ -7480,20 +8220,58 @@ title="View in IGV"
                                             )
 
                                             columns = [
-                                                {"name": "name", "label": "Gene Name", "field": "name", "sortable": False},
-                                                {"name": "chrom", "label": "Chromosome", "field": "chrom", "sortable": False},
-                                                {"name": "startpos", "label": "Start", "field": "startpos", "sortable": False},
-                                                {"name": "endpos", "label": "End", "field": "endpos", "sortable": False},
-                                                {"name": "coverage", "label": "Coverage (x)", "field": "coverage", "sortable": False},
-                                                {"name": "action", "label": "View in IGV", "field": "action", "sortable": False}
+                                                {
+                                                    "name": "name",
+                                                    "label": "Gene Name",
+                                                    "field": "name",
+                                                    "sortable": False,
+                                                },
+                                                {
+                                                    "name": "chrom",
+                                                    "label": "Chromosome",
+                                                    "field": "chrom",
+                                                    "sortable": False,
+                                                },
+                                                {
+                                                    "name": "startpos",
+                                                    "label": "Start",
+                                                    "field": "startpos",
+                                                    "sortable": False,
+                                                },
+                                                {
+                                                    "name": "endpos",
+                                                    "label": "End",
+                                                    "field": "endpos",
+                                                    "sortable": False,
+                                                },
+                                                {
+                                                    "name": "coverage",
+                                                    "label": "Coverage (x)",
+                                                    "field": "coverage",
+                                                    "sortable": False,
+                                                },
+                                                {
+                                                    "name": "action",
+                                                    "label": "View in IGV",
+                                                    "field": "action",
+                                                    "sortable": False,
+                                                },
                                             ]
 
                                             gene_preview_mode = len(table_data) > 50_000
-                                            gene_rows_source = table_data[:5_000] if gene_preview_mode else table_data
+                                            gene_rows_source = (
+                                                table_data[:5_000]
+                                                if gene_preview_mode
+                                                else table_data
+                                            )
                                             gene_page_state: Dict[str, Any] = {
-                                                "filtered_positions": list(range(len(gene_rows_source))),
+                                                "filtered_positions": list(
+                                                    range(len(gene_rows_source))
+                                                ),
                                             }
-                                            gene_total_matches = len(gene_page_state["filtered_positions"])
+                                            gene_total_matches = len(
+                                                gene_page_state["filtered_positions"]
+                                            )
                                             gene_init_pagination = clamp_qtable_server_pagination(
                                                 {
                                                     "sortBy": None,
@@ -7505,20 +8283,30 @@ title="View in IGV"
                                                 rows_number=gene_total_matches,
                                                 rows_per_page_default=100,
                                             )
-                                            table_container, gene_table = styled_server_paged_table(
-                                                columns=columns,
-                                                rows=[],
-                                                pagination=gene_init_pagination,
-                                                row_key="__row_idx",
-                                                class_size="table-xs",
+                                            table_container, gene_table = (
+                                                styled_server_paged_table(
+                                                    columns=columns,
+                                                    rows=[],
+                                                    pagination=gene_init_pagination,
+                                                    row_key="__row_idx",
+                                                    class_size="table-xs",
+                                                )
                                             )
                                             if gene_preview_mode:
                                                 ui.label(
                                                     f"Preview mode: showing first {len(gene_rows_source):,} rows of {len(table_data):,}. Apply filters to narrow."
-                                                ).classes("classification-insight-level classification-insight-level--low w-full")
+                                                ).classes(
+                                                    "classification-insight-level classification-insight-level--low w-full"
+                                                )
 
-                                            def _fill_gene_from_pagination(pag: Dict[str, Any]) -> None:
-                                                total = len(gene_page_state["filtered_positions"])
+                                            def _fill_gene_from_pagination(
+                                                pag: Dict[str, Any],
+                                            ) -> None:
+                                                total = len(
+                                                    gene_page_state[
+                                                        "filtered_positions"
+                                                    ]
+                                                )
                                                 pag = clamp_qtable_server_pagination(
                                                     pag,
                                                     rows_number=total,
@@ -7528,10 +8316,13 @@ title="View in IGV"
                                                 page = int(pag["page"])
                                                 start = (page - 1) * rpp
                                                 end = start + rpp
-                                                positions = gene_page_state["filtered_positions"]
+                                                positions = gene_page_state[
+                                                    "filtered_positions"
+                                                ]
                                                 slice_pos = positions[start:end]
                                                 gene_table.rows = [
-                                                    gene_rows_source[i] for i in slice_pos
+                                                    gene_rows_source[i]
+                                                    for i in slice_pos
                                                 ]
                                                 gene_table.pagination = pag
                                                 gene_table.update()
@@ -7543,38 +8334,60 @@ title="View in IGV"
                                             def _apply_gene_search(term: str) -> None:
                                                 txt = str(term or "").strip().lower()
                                                 if not txt:
-                                                    gene_page_state["filtered_positions"] = list(
+                                                    gene_page_state[
+                                                        "filtered_positions"
+                                                    ] = list(
                                                         range(len(gene_rows_source))
                                                     )
                                                 else:
-                                                    gene_page_state["filtered_positions"] = [
+                                                    gene_page_state[
+                                                        "filtered_positions"
+                                                    ] = [
                                                         i
-                                                        for i, row in enumerate(gene_rows_source)
-                                                        if txt in str(row.get("name", "")).lower()
-                                                        or txt in str(row.get("chrom", "")).lower()
+                                                        for i, row in enumerate(
+                                                            gene_rows_source
+                                                        )
+                                                        if txt
+                                                        in str(
+                                                            row.get("name", "")
+                                                        ).lower()
+                                                        or txt
+                                                        in str(
+                                                            row.get("chrom", "")
+                                                        ).lower()
                                                     ]
                                                 pag = clamp_qtable_server_pagination(
                                                     dict(gene_table.pagination),
-                                                    rows_number=len(gene_page_state["filtered_positions"]),
+                                                    rows_number=len(
+                                                        gene_page_state[
+                                                            "filtered_positions"
+                                                        ]
+                                                    ),
                                                     rows_per_page_default=100,
                                                 )
                                                 pag["page"] = 1
                                                 _fill_gene_from_pagination(pag)
 
-                                            _fill_gene_from_pagination(gene_init_pagination)
+                                            _fill_gene_from_pagination(
+                                                gene_init_pagination
+                                            )
 
                                             try:
                                                 with gene_table.add_slot("top-right"):
                                                     gene_search_input = ui.input(
                                                         placeholder="Search genes..."
-                                                    ).props("type=search dense clearable")
+                                                    ).props(
+                                                        "type=search dense clearable"
+                                                    )
                                                     gene_search_input.on(
                                                         "update:model-value",
                                                         lambda e: _apply_gene_search(
                                                             getattr(e, "value", "")
                                                         ),
                                                     )
-                                                    with gene_search_input.add_slot("append"):
+                                                    with gene_search_input.add_slot(
+                                                        "append"
+                                                    ):
                                                         ui.icon("search")
                                             except Exception:
                                                 pass
@@ -7596,14 +8409,21 @@ title="View in IGV"
 
                                             # Function to navigate IGV to a gene region
                                             import json
-                                            js_gene_regions_json = json.dumps(gene_regions_by_name)
+
+                                            js_gene_regions_json = json.dumps(
+                                                gene_regions_by_name
+                                            )
 
                                             def navigate_to_gene_region(gene_name: str):
                                                 """Navigate IGV browser to the specified gene region."""
                                                 if gene_name in gene_regions_by_name:
-                                                    region = gene_regions_by_name[gene_name]
+                                                    region = gene_regions_by_name[
+                                                        gene_name
+                                                    ]
                                                     # Escape region string for JavaScript
-                                                    escaped_region = region.replace('"', '\\"').replace("'", "\\'")
+                                                    escaped_region = region.replace(
+                                                        '"', '\\"'
+                                                    ).replace("'", "\\'")
                                                     js_navigate = f"""
                                                         (function() {{
                                                             try {{
@@ -7623,7 +8443,9 @@ title="View in IGV"
                                                             }}
                                                         }})();
                                                     """
-                                                    ui.run_javascript(js_navigate, timeout=5.0)
+                                                    ui.run_javascript(
+                                                        js_navigate, timeout=5.0
+                                                    )
 
                                             # Store regions in window object for JavaScript access
                                             js_init_gene_regions = f"""
@@ -7631,7 +8453,9 @@ title="View in IGV"
                                                 Object.assign(window.geneRegionsMap, {js_gene_regions_json});
                                                 console.log('[Gene] Loaded', Object.keys(window.geneRegionsMap).length, 'gene regions');
                                             """
-                                            ui.run_javascript(js_init_gene_regions, timeout=5.0)
+                                            ui.run_javascript(
+                                                js_init_gene_regions, timeout=5.0
+                                            )
 
                                             # Add clickable action button column using slot that emits events to Python
                                             try:
@@ -7650,30 +8474,53 @@ title="View in IGV"
     title="View in IGV"
   />
 </q-td>
-"""
+""",
                                                 )
 
                                                 # Handle the event from the slot
                                                 def on_gene_view_igv(e):
                                                     """Handle gene view IGV event from table button."""
                                                     try:
-                                                        row_idx = getattr(e, "args", None)
+                                                        row_idx = getattr(
+                                                            e, "args", None
+                                                        )
                                                         gene_name = ""
                                                         if row_idx is not None:
                                                             row_idx = int(row_idx)
-                                                            if 0 <= row_idx < len(gene_rows_source):
-                                                                gene_name = gene_rows_source[row_idx].get("name", "")
+                                                            if (
+                                                                0
+                                                                <= row_idx
+                                                                < len(gene_rows_source)
+                                                            ):
+                                                                gene_name = (
+                                                                    gene_rows_source[
+                                                                        row_idx
+                                                                    ].get("name", "")
+                                                                )
                                                         if gene_name:
-                                                            logging.debug(f"[Gene] Button clicked for: {gene_name}")
-                                                            navigate_to_gene_region(gene_name)
+                                                            logging.debug(
+                                                                f"[Gene] Button clicked for: {gene_name}"
+                                                            )
+                                                            navigate_to_gene_region(
+                                                                gene_name
+                                                            )
                                                     except Exception as ex:
-                                                        logging.warning(f"Error handling gene view IGV event: {ex}")
+                                                        logging.warning(
+                                                            f"Error handling gene view IGV event: {ex}"
+                                                        )
 
-                                                gene_table.on("gene-view-igv", on_gene_view_igv)
-                                                logging.debug("Added action button column slot with event handler")
+                                                gene_table.on(
+                                                    "gene-view-igv", on_gene_view_igv
+                                                )
+                                                logging.debug(
+                                                    "Added action button column slot with event handler"
+                                                )
                                             except Exception as slot_ex:
-                                                logging.warning(f"Could not add action column slot: {slot_ex}")
+                                                logging.warning(
+                                                    f"Could not add action column slot: {slot_ex}"
+                                                )
                                                 import traceback
+
                                                 logging.warning(traceback.format_exc())
 
                                             gene_handler_timers: List[Any] = []
@@ -7775,25 +8622,50 @@ title="View in IGV"
 
                                                 def _run_gene_handlers_js() -> None:
                                                     try:
-                                                        ui.run_javascript(js_gene_table_handlers, timeout=10.0)
+                                                        ui.run_javascript(
+                                                            js_gene_table_handlers,
+                                                            timeout=10.0,
+                                                        )
                                                     except Exception:
                                                         pass
 
-                                                gene_handler_timers.append(app.timer(0.5, _run_gene_handlers_js, once=True))
-                                                gene_handler_timers.append(app.timer(2.0, _run_gene_handlers_js, once=True))
+                                                gene_handler_timers.append(
+                                                    app.timer(
+                                                        0.5,
+                                                        _run_gene_handlers_js,
+                                                        once=True,
+                                                    )
+                                                )
+                                                gene_handler_timers.append(
+                                                    app.timer(
+                                                        2.0,
+                                                        _run_gene_handlers_js,
+                                                        once=True,
+                                                    )
+                                                )
                                             except Exception as e:
-                                                logging.warning(f"Could not add gene table click handlers: {e}")
+                                                logging.warning(
+                                                    f"Could not add gene table click handlers: {e}"
+                                                )
                                             try:
+
                                                 def _cleanup_gene_page() -> None:
-                                                    gene_page_state["filtered_positions"] = []
+                                                    gene_page_state[
+                                                        "filtered_positions"
+                                                    ] = []
                                                     gene_rows_source.clear()
                                                     gene_table.rows = []
-                                                    for timer_obj in gene_handler_timers:
+                                                    for (
+                                                        timer_obj
+                                                    ) in gene_handler_timers:
                                                         try:
                                                             timer_obj.deactivate()
                                                         except Exception:
                                                             pass
-                                                ui.context.client.on_disconnect(_cleanup_gene_page)
+
+                                                ui.context.client.on_disconnect(
+                                                    _cleanup_gene_page
+                                                )
                                             except Exception:
                                                 pass
 
@@ -7803,7 +8675,9 @@ title="View in IGV"
                                                 f"Total target genes: {total_genes}"
                                             ).classes("classification-insight-foot")
                             except Exception as e:
-                                logging.warning(f"Could not load target gene table: {e}")
+                                logging.warning(
+                                    f"Could not load target gene table: {e}"
+                                )
                             tg_elapsed = time.perf_counter() - _t_target_genes
                             logging.debug(
                                 "[SamplePage] page=sample_details sample=%s "
@@ -7908,29 +8782,27 @@ title="View in IGV"
             center=self.center,
             setup_notifications=self._setup_notification_system,
         ):
-            with ui.element("div").classes("w-full min-w-0").props(
-                "id=workflow-monitor-page"
+            with (
+                ui.element("div")
+                .classes("w-full min-w-0")
+                .props("id=workflow-monitor-page")
             ):
-                with ui.column().classes(
-                    "w-full gap-3 p-2 md:p-3 max-w-6xl mx-auto"
-                ):
+                with ui.column().classes("w-full gap-3 p-2 md:p-3 max-w-6xl mx-auto"):
                     with ui.element("div").classes(
                         "classification-insight-shell w-full min-w-0"
                     ):
                         ui.label("Workflow monitor").classes(
                             "classification-insight-heading text-headline-small"
                         )
-                        ui.label(
-                            "Real-time workflow monitoring and control."
-                        ).classes("classification-insight-foot")
+                        ui.label("Real-time workflow monitoring and control.").classes(
+                            "classification-insight-foot"
+                        )
 
                     # Workflow status overview
                     with ui.element("div").classes(
                         "classification-insight-card w-full min-w-0"
                     ):
-                        with ui.column().classes(
-                            "w-full min-w-0 gap-3 p-2 md:p-3"
-                        ):
+                        with ui.column().classes("w-full min-w-0 gap-3 p-2 md:p-3"):
                             with ui.row().classes("items-center gap-2 min-w-0"):
                                 ui.icon("monitor_heart").classes(
                                     "classification-insight-icon"
@@ -7953,9 +8825,7 @@ title="View in IGV"
                                     "workflow-monitor-status-text--running"
                                 )
 
-                            with ui.row().classes(
-                                "w-full gap-2 mt-2 flex-wrap"
-                            ):
+                            with ui.row().classes("w-full gap-2 mt-2 flex-wrap"):
                                 self.workflow_start_time = ui.label(
                                     "Started: —"
                                 ).classes("text-sm workflow-monitor-meta")
@@ -7975,9 +8845,7 @@ title="View in IGV"
                             ui.label("Run counts").classes(
                                 "target-coverage-panel__meta-label mt-2 mb-1"
                             )
-                            with ui.row().classes(
-                                "w-full gap-4 mt-1 flex-wrap"
-                            ):
+                            with ui.row().classes("w-full gap-4 mt-1 flex-wrap"):
                                 with ui.row().classes("items-center gap-2"):
                                     ui.label("Completed").classes(
                                         "text-xs workflow-monitor-meta"
@@ -8007,7 +8875,9 @@ title="View in IGV"
                             with ui.row().classes(
                                 "w-full min-w-0 gap-3 p-2 md:p-3 items-center flex-wrap"
                             ):
-                                ui.icon("biotech").classes("classification-insight-icon")
+                                ui.icon("biotech").classes(
+                                    "classification-insight-icon"
+                                )
                                 with ui.column().classes("flex-1 min-w-0 gap-1"):
                                     ui.label("Sequencer (MinKNOW)").classes(
                                         "classification-insight-model"
@@ -8026,9 +8896,7 @@ title="View in IGV"
                     with ui.element("div").classes(
                         "classification-insight-card w-full min-w-0"
                     ):
-                        with ui.column().classes(
-                            "w-full min-w-0 gap-3 p-2 md:p-3"
-                        ):
+                        with ui.column().classes("w-full min-w-0 gap-3 p-2 md:p-3"):
                             with ui.row().classes("items-center gap-2 min-w-0"):
                                 ui.icon("folder_open").classes(
                                     "classification-insight-icon"
@@ -8037,44 +8905,36 @@ title="View in IGV"
                                     "classification-insight-model flex-1 min-w-0"
                                 )
 
-                            with ui.row().classes(
-                                "w-full items-center gap-3 min-w-0"
-                            ):
+                            with ui.row().classes("w-full items-center gap-3 min-w-0"):
                                 ui.label("Overall files").classes(
                                     "text-sm font-medium workflow-monitor-meta shrink-0"
                                 )
-                                self.overall_files_progress = (
-                                    ui.linear_progress(0.0).classes(
-                                        "flex-1 min-w-0"
-                                    )
-                                )
+                                self.overall_files_progress = ui.linear_progress(
+                                    0.0
+                                ).classes("flex-1 min-w-0")
                                 self.overall_files_label = ui.label(
                                     "0/0 files processed"
-                                ).classes(
-                                    "text-sm min-w-[120px] workflow-monitor-meta"
-                                )
+                                ).classes("text-sm min-w-[120px] workflow-monitor-meta")
 
                             ui.label("Per-sample progress").classes(
                                 "target-coverage-panel__meta-label mt-2 mb-1"
                             )
-                            with ui.scroll_area().classes("w-full").style(
-                                "max-height: 300px;"
+                            with (
+                                ui.scroll_area()
+                                .classes("w-full")
+                                .style("max-height: 300px;")
                             ):
-                                self.sample_files_progress_container = ui.column().classes(
-                                    "w-full gap-2 p-1 min-w-0"
+                                self.sample_files_progress_container = (
+                                    ui.column().classes("w-full gap-2 p-1 min-w-0")
                                 )
 
                     # Queue status
                     with ui.element("div").classes(
                         "classification-insight-card w-full min-w-0"
                     ):
-                        with ui.column().classes(
-                            "w-full min-w-0 gap-3 p-2 md:p-3"
-                        ):
+                        with ui.column().classes("w-full min-w-0 gap-3 p-2 md:p-3"):
                             with ui.row().classes("items-center gap-2 min-w-0"):
-                                ui.icon("layers").classes(
-                                    "classification-insight-icon"
-                                )
+                                ui.icon("layers").classes("classification-insight-icon")
                                 ui.label("Queue status").classes(
                                     "classification-insight-model flex-1 min-w-0"
                                 )
@@ -8095,9 +8955,7 @@ title="View in IGV"
                                 with ui.element("div").classes(
                                     "workflow-monitor-queue-tile flex-1 min-w-[10rem]"
                                 ):
-                                    with ui.row().classes(
-                                        "items-center gap-1 min-w-0"
-                                    ):
+                                    with ui.row().classes("items-center gap-1 min-w-0"):
                                         ui.icon("science").classes(
                                             "text-base workflow-monitor-queue-icon"
                                         )
@@ -8114,7 +8972,9 @@ title="View in IGV"
                                     ui.label("Classification").classes(
                                         "classification-insight-foot"
                                     )
-                                    self.classification_status = ui.label("0/0").classes(
+                                    self.classification_status = ui.label(
+                                        "0/0"
+                                    ).classes(
                                         "text-2xl font-bold workflow-monitor-queue-num--class"
                                     )
 
@@ -8138,23 +8998,19 @@ title="View in IGV"
                     with ui.element("div").classes(
                         "classification-insight-card w-full min-w-0"
                     ):
-                        with ui.column().classes(
-                            "w-full min-w-0 gap-3 p-2 md:p-3"
-                        ):
+                        with ui.column().classes("w-full min-w-0 gap-3 p-2 md:p-3"):
                             with ui.row().classes("items-center gap-2 min-w-0"):
-                                ui.icon("work").classes(
-                                    "classification-insight-icon"
-                                )
+                                ui.icon("work").classes("classification-insight-icon")
                                 ui.label("Active jobs").classes(
                                     "classification-insight-model flex-1 min-w-0"
                                 )
 
-                            with ui.row().classes(
-                                "items-center gap-2 mb-2 flex-wrap"
-                            ):
-                                self.active_jobs_search = ui.input("Search…").props(
-                                    "outlined dense clearable"
-                                ).classes("min-w-[12rem] flex-1")
+                            with ui.row().classes("items-center gap-2 mb-2 flex-wrap"):
+                                self.active_jobs_search = (
+                                    ui.input("Search…")
+                                    .props("outlined dense clearable")
+                                    .classes("min-w-[12rem] flex-1")
+                                )
                                 self.active_jobs_type_filter = (
                                     ui.select(
                                         options=["All"],
@@ -8252,16 +9108,12 @@ title="View in IGV"
                     with ui.element("div").classes(
                         "classification-insight-card w-full min-w-0"
                     ):
-                        with ui.column().classes(
-                            "w-full min-w-0 gap-3 p-2 md:p-3"
-                        ):
+                        with ui.column().classes("w-full min-w-0 gap-3 p-2 md:p-3"):
                             with ui.row().classes(
                                 "w-full items-center justify-between gap-2 "
                                 "flex-wrap min-w-0"
                             ):
-                                with ui.row().classes(
-                                    "items-center gap-2 min-w-0"
-                                ):
+                                with ui.row().classes("items-center gap-2 min-w-0"):
                                     ui.icon("article").classes(
                                         "classification-insight-icon"
                                     )
@@ -8281,12 +9133,8 @@ title="View in IGV"
                                     ).props("color=primary no-caps outline")
 
                             self.log_area = (
-                                ui.textarea(
-                                    "Workflow logs will appear here…"
-                                )
-                                .classes(
-                                    "w-full h-40 workflow-monitor-log-area"
-                                )
+                                ui.textarea("Workflow logs will appear here…")
+                                .classes("w-full h-40 workflow-monitor-log-area")
                                 .props("outlined readonly dense")
                             )
 
@@ -8294,20 +9142,14 @@ title="View in IGV"
                     with ui.element("div").classes(
                         "classification-insight-card w-full min-w-0"
                     ):
-                        with ui.column().classes(
-                            "w-full min-w-0 gap-3 p-2 md:p-3"
-                        ):
+                        with ui.column().classes("w-full min-w-0 gap-3 p-2 md:p-3"):
                             with ui.row().classes("items-center gap-2 min-w-0"):
-                                ui.icon("tune").classes(
-                                    "classification-insight-icon"
-                                )
+                                ui.icon("tune").classes("classification-insight-icon")
                                 ui.label("Workflow configuration").classes(
                                     "classification-insight-model flex-1 min-w-0"
                                 )
 
-                            with ui.grid(columns=2).classes(
-                                "w-full gap-3 min-w-0"
-                            ):
+                            with ui.grid(columns=2).classes("w-full gap-3 min-w-0"):
                                 with ui.column().classes("min-w-0 gap-1"):
                                     ui.label("Monitored directory").classes(
                                         "target-coverage-panel__meta-label"
@@ -8326,9 +9168,7 @@ title="View in IGV"
                                         ", ".join(self.workflow_steps)
                                         if self.workflow_steps
                                         else "Not specified"
-                                    ).classes(
-                                        "text-sm workflow-monitor-config-value"
-                                    )
+                                    ).classes("text-sm workflow-monitor-config-value")
 
                                 with ui.column().classes("min-w-0 gap-1"):
                                     ui.label("Log level").classes(
@@ -8349,9 +9189,7 @@ title="View in IGV"
                     with ui.element("div").classes(
                         "classification-insight-card w-full min-w-0"
                     ):
-                        with ui.column().classes(
-                            "w-full min-w-0 gap-3 p-2 md:p-3"
-                        ):
+                        with ui.column().classes("w-full min-w-0 gap-3 p-2 md:p-3"):
                             with ui.row().classes("items-center gap-2 min-w-0"):
                                 ui.icon("error_outline").classes(
                                     "classification-insight-icon"
@@ -8363,27 +9201,21 @@ title="View in IGV"
                             with ui.row().classes(
                                 "w-full justify-between gap-2 flex-wrap"
                             ):
-                                with ui.column().classes(
-                                    "text-center min-w-[5rem]"
-                                ):
+                                with ui.column().classes("text-center min-w-[5rem]"):
                                     self.preprocessing_errors = ui.label("0").classes(
                                         "text-xl font-bold workflow-monitor-error-num"
                                     )
                                     ui.label("Preprocessing").classes(
                                         "text-xs workflow-monitor-meta"
                                     )
-                                with ui.column().classes(
-                                    "text-center min-w-[5rem]"
-                                ):
+                                with ui.column().classes("text-center min-w-[5rem]"):
                                     self.analysis_errors = ui.label("0").classes(
                                         "text-xl font-bold workflow-monitor-error-num"
                                     )
                                     ui.label("Analysis").classes(
                                         "text-xs workflow-monitor-meta"
                                     )
-                                with ui.column().classes(
-                                    "text-center min-w-[5rem]"
-                                ):
+                                with ui.column().classes("text-center min-w-[5rem]"):
                                     self.classification_errors = ui.label("0").classes(
                                         "text-xl font-bold workflow-monitor-error-num"
                                     )
@@ -8397,13 +9229,9 @@ title="View in IGV"
                             )
                             self.error_summary_label = ui.label(
                                 "No errors detected."
-                            ).classes(
-                                "text-xs workflow-monitor-error-summary"
-                            )
+                            ).classes("text-xs workflow-monitor-error-summary")
 
-                    ui.label(
-                        "R.O.B.I.N workflow monitor — session active"
-                    ).classes(
+                    ui.label("R.O.B.I.N workflow monitor — session active").classes(
                         "classification-insight-foot text-center w-full py-2"
                     )
 
@@ -8481,23 +9309,33 @@ title="View in IGV"
         candidates: List[Path] = []
 
         try:
-            candidates.extend([
-                sample_dir / "reference.fasta",
-                sample_dir / "reference.fa",
-            ])
+            candidates.extend(
+                [
+                    sample_dir / "reference.fasta",
+                    sample_dir / "reference.fa",
+                ]
+            )
 
-            base_dir = Path(self.monitored_directory) if self.monitored_directory else sample_dir.parent
+            base_dir = (
+                Path(self.monitored_directory)
+                if self.monitored_directory
+                else sample_dir.parent
+            )
             if base_dir:
-                candidates.extend([
-                    base_dir / "reference.fasta",
-                    base_dir / "reference.fa",
-                ])
+                candidates.extend(
+                    [
+                        base_dir / "reference.fasta",
+                        base_dir / "reference.fa",
+                    ]
+                )
 
             env_reference = os.environ.get("robin_REFERENCE")
             if env_reference:
                 candidates.append(Path(env_reference))
         except Exception as exc:
-            logging.debug(f"Error assembling fallback reference candidates for {sample_dir}: {exc}")
+            logging.debug(
+                f"Error assembling fallback reference candidates for {sample_dir}: {exc}"
+            )
 
         for candidate in candidates:
             try:
@@ -8556,7 +9394,9 @@ title="View in IGV"
                 if not targets_bed.is_file():
                     continue
                 try:
-                    if not targets_bed.read_text(encoding="utf-8", errors="replace").strip():
+                    if not targets_bed.read_text(
+                        encoding="utf-8", errors="replace"
+                    ).strip():
                         continue
                 except OSError:
                     continue
@@ -8596,7 +9436,9 @@ title="View in IGV"
         while time.time() < deadline:
             if self._sample_has_snp_calling_outputs(sample_id):
                 return True
-            phase = str(self._sample_pipeline_status.get(sample_id, {}).get("phase", "") or "")
+            phase = str(
+                self._sample_pipeline_status.get(sample_id, {}).get("phase", "") or ""
+            )
             if phase in terminal_phases:
                 return False
             time.sleep(poll_s)
@@ -8681,9 +9523,7 @@ title="View in IGV"
                 if not sample_dir.exists():
                     continue
 
-                if (
-                    self._mnpflex_results_dir_for_sample(sample_dir, sid) is not None
-                ):
+                if self._mnpflex_results_dir_for_sample(sample_dir, sid) is not None:
                     continue
 
                 if not sample_ready_for_mnpflex_auto_run(r):
@@ -8717,9 +9557,7 @@ title="View in IGV"
             if os.path.exists(zpath):
                 i = 2
                 while os.path.exists(zpath):
-                    zpath = os.path.join(
-                        tempfile.gettempdir(), f"{base_name}_{i}.zip"
-                    )
+                    zpath = os.path.join(tempfile.gettempdir(), f"{base_name}_{i}.zip")
                     i += 1
             used_names: Set[str] = set()
             with zipfile.ZipFile(zpath, "w", zipfile.ZIP_DEFLATED) as zf:
@@ -8759,9 +9597,13 @@ title="View in IGV"
 
             table_fields: List[str] = []
             table = getattr(self, "samples_table", None)
-            for col in (getattr(table, "columns", None) or []):
+            for col in getattr(table, "columns", None) or []:
                 field = str(col.get("field", "") or "").strip()
-                if field and field not in ("actions", "export") and field not in table_fields:
+                if (
+                    field
+                    and field not in ("actions", "export")
+                    and field not in table_fields
+                ):
                     table_fields.append(field)
             if not table_fields:
                 table_fields = [
@@ -8805,7 +9647,12 @@ title="View in IGV"
                 "tucan",
             ]
             analysis_fields = {
-                "coverage": ["quality", "global_coverage", "target_coverage", "enrichment"],
+                "coverage": [
+                    "quality",
+                    "global_coverage",
+                    "target_coverage",
+                    "enrichment",
+                ],
                 "cnv": [
                     "genetic_sex",
                     "bin_width",
@@ -8882,12 +9729,15 @@ title="View in IGV"
             from robin.gui.components.summary import _refresh_summary_cache_sync
 
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            out_path = os.path.join(tempfile.gettempdir(), f"robin_sample_tracking_{timestamp}.tsv")
+            out_path = os.path.join(
+                tempfile.gettempdir(), f"robin_sample_tracking_{timestamp}.tsv"
+            )
             if os.path.exists(out_path):
                 i = 2
                 while os.path.exists(out_path):
                     out_path = os.path.join(
-                        tempfile.gettempdir(), f"robin_sample_tracking_{timestamp}_{i}.tsv"
+                        tempfile.gettempdir(),
+                        f"robin_sample_tracking_{timestamp}_{i}.tsv",
                     )
                     i += 1
 
@@ -8927,6 +9777,7 @@ title="View in IGV"
 
                     # Variant/SNP summary extraction (when available)
                     try:
+
                         def _format_pathogenic_rows(rows: Any) -> str:
                             if not isinstance(rows, list):
                                 return ""
@@ -8951,7 +9802,9 @@ title="View in IGV"
                                 significance = clnsig or onc or sci
                                 locus = f"{chrom}:{pos}" if chrom and pos else ""
                                 allele = f"{ref}>{alt}" if ref and alt else ""
-                                item_parts = [p for p in [locus, allele, gene, significance] if p]
+                                item_parts = [
+                                    p for p in [locus, allele, gene, significance] if p
+                                ]
                                 if item_parts:
                                     formatted.append("|".join(item_parts))
                             # Keep deterministic + compact while still "listing" all hits.
@@ -8968,9 +9821,12 @@ title="View in IGV"
                                 snp_display = json.load(f)
                             summary_dict = snp_display.get("summary", {}) or {}
                             rows_all = snp_display.get("rows_all", []) or []
-                            rows_pathogenic = snp_display.get("rows_pathogenic", []) or []
+                            rows_pathogenic = (
+                                snp_display.get("rows_pathogenic", []) or []
+                            )
                             rows_significant = (
-                                snp_display.get("rows_clinvar_significant") or rows_pathogenic
+                                snp_display.get("rows_clinvar_significant")
+                                or rows_pathogenic
                             )
                             variant_data["snp_total_variants"] = summary_dict.get(
                                 "total_variants", len(rows_all)
@@ -8981,18 +9837,22 @@ title="View in IGV"
                                     "pathogenic_variants", len(rows_significant)
                                 ),
                             )
-                            variant_data["snp_pathogenic_list"] = _format_pathogenic_rows(
-                                rows_significant
+                            variant_data["snp_pathogenic_list"] = (
+                                _format_pathogenic_rows(rows_significant)
                             )
 
                         # INDEL summary (from ClinVar-annotated display if available)
-                        indel_display_path = clair_dir / "snpsift_indel_output_display.json"
+                        indel_display_path = (
+                            clair_dir / "snpsift_indel_output_display.json"
+                        )
                         if indel_display_path.exists():
                             with open(indel_display_path, "r", encoding="utf-8") as f:
                                 indel_display = json.load(f)
                             indel_summary = indel_display.get("summary", {}) or {}
                             indel_rows_all = indel_display.get("rows_all", []) or []
-                            indel_rows_pathogenic = indel_display.get("rows_pathogenic", []) or []
+                            indel_rows_pathogenic = (
+                                indel_display.get("rows_pathogenic", []) or []
+                            )
                             indel_rows_significant = (
                                 indel_display.get("rows_clinvar_significant")
                                 or indel_rows_pathogenic
@@ -9000,14 +9860,17 @@ title="View in IGV"
                             variant_data["indel_total_variants"] = indel_summary.get(
                                 "total_variants", len(indel_rows_all)
                             )
-                            variant_data["indel_pathogenic_variants"] = indel_summary.get(
-                                "clinvar_significant_variants",
+                            variant_data["indel_pathogenic_variants"] = (
                                 indel_summary.get(
-                                    "pathogenic_variants", len(indel_rows_significant)
-                                ),
+                                    "clinvar_significant_variants",
+                                    indel_summary.get(
+                                        "pathogenic_variants",
+                                        len(indel_rows_significant),
+                                    ),
+                                )
                             )
-                            variant_data["indel_pathogenic_list"] = _format_pathogenic_rows(
-                                indel_rows_significant
+                            variant_data["indel_pathogenic_list"] = (
+                                _format_pathogenic_rows(indel_rows_significant)
                             )
                         else:
                             # Fallback: count records from annotated INDEL VCF if present
@@ -9016,7 +9879,9 @@ title="View in IGV"
                                 total_indel = 0
                                 pathogenic_indel = 0
                                 pathogenic_indel_items: List[str] = []
-                                with open(indel_vcf, "r", encoding="utf-8", errors="ignore") as f:
+                                with open(
+                                    indel_vcf, "r", encoding="utf-8", errors="ignore"
+                                ) as f:
                                     for line in f:
                                         if not line or line.startswith("#"):
                                             continue
@@ -9031,7 +9896,9 @@ title="View in IGV"
                                                     f"{chrom}:{pos}|{ref}>{alt}"
                                                 )
                                 variant_data["indel_total_variants"] = total_indel
-                                variant_data["indel_pathogenic_variants"] = pathogenic_indel
+                                variant_data["indel_pathogenic_variants"] = (
+                                    pathogenic_indel
+                                )
                                 variant_data["indel_pathogenic_list"] = "; ".join(
                                     pathogenic_indel_items
                                 )
@@ -9050,7 +9917,13 @@ title="View in IGV"
                             arm_events = 0
                             broad_gain_events = 0
                             broad_loss_events = 0
-                            with open(cnv_results_csv, "r", newline="", encoding="utf-8", errors="ignore") as f:
+                            with open(
+                                cnv_results_csv,
+                                "r",
+                                newline="",
+                                encoding="utf-8",
+                                errors="ignore",
+                            ) as f:
                                 reader = csv.DictReader(f)
                                 for event_row in reader:
                                     region = str(
@@ -9086,7 +9959,9 @@ title="View in IGV"
                         )
 
                     try:
-                        results_dir = self._mnpflex_results_dir_for_sample(sample_dir, sample_id)
+                        results_dir = self._mnpflex_results_dir_for_sample(
+                            sample_dir, sample_id
+                        )
                         if results_dir:
                             bundle_path = results_dir / "bundle_summary.json"
                             if bundle_path.exists():
@@ -9094,15 +9969,26 @@ title="View in IGV"
                                     bundle = json.load(f)
                                 qc = bundle.get("qc", {}) or {}
                                 mgmt = bundle.get("mgmt", {}) or {}
-                                classifier_summary = bundle.get("classifier_summary", {}) or {}
-                                classifier = classifier_summary.get("classifier", {}) or {}
-                                hierarchy = classifier_summary.get("summary_hierarchical", []) or []
+                                classifier_summary = (
+                                    bundle.get("classifier_summary", {}) or {}
+                                )
+                                classifier = (
+                                    classifier_summary.get("classifier", {}) or {}
+                                )
+                                hierarchy = (
+                                    classifier_summary.get("summary_hierarchical", [])
+                                    or []
+                                )
                                 scores = classifier_summary.get("scores") or []
                                 top_path = ""
                                 top_path_score = ""
                                 try:
                                     if hierarchy:
-                                        def _flatten(nodes: List[Dict[str, Any]], path: Optional[List[str]] = None):
+
+                                        def _flatten(
+                                            nodes: List[Dict[str, Any]],
+                                            path: Optional[List[str]] = None,
+                                        ):
                                             current_path = path or []
                                             flat_rows = []
                                             for node in nodes or []:
@@ -9111,24 +9997,32 @@ title="View in IGV"
                                                 next_path = current_path + [group]
                                                 members = node.get("members") or []
                                                 if members:
-                                                    flat_rows.extend(_flatten(members, next_path))
+                                                    flat_rows.extend(
+                                                        _flatten(members, next_path)
+                                                    )
                                                 else:
                                                     flat_rows.append((score, next_path))
                                             return flat_rows
 
                                         flat = _flatten(hierarchy)
                                         if flat:
-                                            best_score, best_path = max(flat, key=lambda x: x[0] or 0)
+                                            best_score, best_path = max(
+                                                flat, key=lambda x: x[0] or 0
+                                            )
                                             top_path = " > ".join(best_path)
                                             top_path_score = best_score
                                     elif scores:
                                         top = sorted(
                                             scores,
-                                            key=lambda item: float(item.get("score", 0) or 0),
+                                            key=lambda item: float(
+                                                item.get("score", 0) or 0
+                                            ),
                                             reverse=True,
                                         )[:1]
                                         if top:
-                                            top_ref = top[0].get("reference_group") or {}
+                                            top_ref = (
+                                                top[0].get("reference_group") or {}
+                                            )
                                             top_path = (
                                                 top_ref.get("molecular_subclass")
                                                 or top_ref.get("name")
@@ -9140,19 +10034,27 @@ title="View in IGV"
                                 mnpflex_data = {
                                     "qc_status": qc.get("status", ""),
                                     "qc_avg_coverage": qc.get("avg_coverage", ""),
-                                    "qc_missing_site_count": qc.get("missing_site_count", ""),
+                                    "qc_missing_site_count": qc.get(
+                                        "missing_site_count", ""
+                                    ),
                                     "mgmt_status": mgmt.get("status", ""),
                                     "mgmt_average": mgmt.get("average", ""),
                                     "mgmt_site_count": mgmt.get("site_count", ""),
                                     "classifier_name": classifier.get("name", ""),
                                     "classifier_version": classifier.get("version", ""),
-                                    "classifier_type": classifier.get("classifier_type", ""),
+                                    "classifier_type": classifier.get(
+                                        "classifier_type", ""
+                                    ),
                                     "has_hierarchical_summary": bool(hierarchy),
                                     "top_path": top_path,
                                     "top_path_score": top_path_score,
                                 }
                     except Exception as ex:
-                        logging.debug("Could not extract MNP-Flex TSV fields for %s: %s", sample_id, ex)
+                        logging.debug(
+                            "Could not extract MNP-Flex TSV fields for %s: %s",
+                            sample_id,
+                            ex,
+                        )
                     if mnpflex_data:
                         analysis["mnpflex"] = mnpflex_data
                     if variant_data:
@@ -9160,24 +10062,40 @@ title="View in IGV"
                     if cnv_broad_data:
                         analysis["cnv_broad"] = cnv_broad_data
 
-                    export_row: Dict[str, Any] = {k: row_data.get(k, "") for k in table_fields}
+                    export_row: Dict[str, Any] = {
+                        k: row_data.get(k, "") for k in table_fields
+                    }
                     for key in run_info_fields:
                         export_row[f"run_summary_{key}"] = run_info.get(key, "")
                     for model_name in classification_models:
                         model_data = classification.get(model_name, {}) or {}
-                        export_row[f"classification_{model_name}_class"] = model_data.get("classification", "")
-                        export_row[f"classification_{model_name}_confidence"] = model_data.get("confidence", "")
-                        export_row[f"classification_{model_name}_confidence_level"] = model_data.get("confidence_level", "")
-                        export_row[f"classification_{model_name}_features"] = model_data.get("features", "")
+                        export_row[f"classification_{model_name}_class"] = (
+                            model_data.get("classification", "")
+                        )
+                        export_row[f"classification_{model_name}_confidence"] = (
+                            model_data.get("confidence", "")
+                        )
+                        export_row[f"classification_{model_name}_confidence_level"] = (
+                            model_data.get("confidence_level", "")
+                        )
+                        export_row[f"classification_{model_name}_features"] = (
+                            model_data.get("features", "")
+                        )
                     for section, keys in analysis_fields.items():
                         section_data = analysis.get(section, {}) or {}
                         for key in keys:
-                            export_row[f"analysis_{section}_{key}"] = section_data.get(key, "")
-                    writer.writerow({k: _clean_tsv_value(v) for k, v in export_row.items()})
+                            export_row[f"analysis_{section}_{key}"] = section_data.get(
+                                key, ""
+                            )
+                    writer.writerow(
+                        {k: _clean_tsv_value(v) for k, v in export_row.items()}
+                    )
 
             return out_path
         except Exception as e:
-            logging.error("Failed to build sample tracking TSV export: %s", e, exc_info=True)
+            logging.error(
+                "Failed to build sample tracking TSV export: %s", e, exc_info=True
+            )
             return None
 
     def _wait_for_snp_outputs_or_timeout(
@@ -9269,7 +10187,9 @@ title="View in IGV"
                 threading.current_thread().name,
                 len(sample_ids or []),
             )
-            from robin.analysis.target_analysis import is_docker_available_for_snp_analysis
+            from robin.analysis.target_analysis import (
+                is_docker_available_for_snp_analysis,
+            )
 
             docker_ok, docker_error = is_docker_available_for_snp_analysis()
             if not docker_ok:
@@ -9332,12 +10252,14 @@ title="View in IGV"
                                 progress=1.0,
                                 detail="SNP outputs detected",
                             )
-                            logging.info("Bulk SNP: completed via finalize-first %s", sid)
+                            logging.info(
+                                "Bulk SNP: completed via finalize-first %s", sid
+                            )
                         else:
                             phase = str(
-                                self._sample_pipeline_status
-                                .get(sid, {})
-                                .get("phase", "SNP still running")
+                                self._sample_pipeline_status.get(sid, {}).get(
+                                    "phase", "SNP still running"
+                                )
                             )
                             if phase not in {
                                 "SNP skipped",
@@ -9393,9 +10315,7 @@ title="View in IGV"
                 with self._snp_analysis_lock:
                     self._snp_analysis_running_sample = sid
                 try:
-                    logging.info(
-                        "Bulk SNP (%d/%d): submitting %s", idx, total, sid
-                    )
+                    logging.info("Bulk SNP (%d/%d): submitting %s", idx, total, sid)
                     submitted = self._resolve_submission_result(
                         workflow_runner.submit_snp_analysis_job(
                             sample_dir=str(sample_dir),
@@ -9566,9 +10486,7 @@ title="View in IGV"
                     continue
 
                 try:
-                    logging.info(
-                        "Bulk MNP-Flex (%d/%d): running %s", idx, total, sid
-                    )
+                    logging.info("Bulk MNP-Flex (%d/%d): running %s", idx, total, sid)
                     self._audit_log(
                         event_type="run.started",
                         user_id=self._get_current_user_id(),
@@ -9682,10 +10600,14 @@ title="View in IGV"
         except OSError:
             pass
 
-    def _trigger_target_bam_finalization(self, sample_id: str, *, trigger_snp: bool = False) -> None:
+    def _trigger_target_bam_finalization(
+        self, sample_id: str, *, trigger_snp: bool = False
+    ) -> None:
         """Trigger target.bam finalization for a sample. Optionally start SNP analysis afterwards."""
         logging.debug(
-            "target_bam_finalize: start sample_id=%s trigger_snp=%s", sample_id, trigger_snp
+            "target_bam_finalize: start sample_id=%s trigger_snp=%s",
+            sample_id,
+            trigger_snp,
         )
         self._set_pipeline_status(
             sample_id,
@@ -9707,7 +10629,8 @@ title="View in IGV"
         if self._is_target_bam_finalize_redundant(sample_id):
             self._finalized_samples.add(sample_id)
             logging.debug(
-                "target_bam_finalize: redundant (target.bam already) sample_id=%s", sample_id
+                "target_bam_finalize: redundant (target.bam already) sample_id=%s",
+                sample_id,
             )
             self._set_pipeline_status(
                 sample_id,
@@ -9756,6 +10679,7 @@ title="View in IGV"
 
             # Trigger finalization (and optional SNP analysis) in background thread to avoid blocking GUI
             import threading
+
             def finalize_in_background():
                 try:
                     logging.debug(
@@ -9774,7 +10698,9 @@ title="View in IGV"
                     finalization_succeeded = True
 
                     if already_finalized:
-                        logging.info(f"Sample {sample_id} already finalized; skipping target.bam merge")
+                        logging.info(
+                            f"Sample {sample_id} already finalized; skipping target.bam merge"
+                        )
                     else:
                         logging.debug(
                             "target_bam_finalize: merge path sample_id=%s", sample_id
@@ -9901,7 +10827,9 @@ title="View in IGV"
                                     sample_id,
                                     phase="Finalize failed",
                                     progress=0.2,
-                                    detail=str(result.get("error", "unknown error"))[:120],
+                                    detail=str(result.get("error", "unknown error"))[
+                                        :120
+                                    ],
                                     level="negative",
                                 )
                                 logging.warning(
@@ -9945,11 +10873,14 @@ title="View in IGV"
 
                             self._snp_analysis_running_sample = sample_id
                             logging.debug(
-                                "target_bam_finalize: snp lock set sample_id=%s", sample_id
+                                "target_bam_finalize: snp lock set sample_id=%s",
+                                sample_id,
                             )
 
                         try:
-                            reference_path = self._locate_reference_for_sample(sample_dir)
+                            reference_path = self._locate_reference_for_sample(
+                                sample_dir
+                            )
                             if not reference_path:
                                 logging.debug(
                                     "target_bam_finalize: no reference sample_id=%s",
@@ -9992,7 +10923,9 @@ title="View in IGV"
                                     detail="target.bam missing",
                                     level="warning",
                                 )
-                                message = "target.bam not found; cannot run SNP analysis."
+                                message = (
+                                    "target.bam not found; cannot run SNP analysis."
+                                )
                                 logging.warning(message)
                                 self.send_update(
                                     UpdateType.WARNING_NOTIFICATION,
@@ -10006,8 +10939,13 @@ title="View in IGV"
                                 )
                                 return
 
-                            from robin.analysis.target_analysis import is_docker_available_for_snp_analysis
-                            docker_ok, docker_error = is_docker_available_for_snp_analysis()
+                            from robin.analysis.target_analysis import (
+                                is_docker_available_for_snp_analysis,
+                            )
+
+                            docker_ok, docker_error = (
+                                is_docker_available_for_snp_analysis()
+                            )
                             if not docker_ok:
                                 logging.debug(
                                     "target_bam_finalize: docker unavailable sample_id=%s: %s",
@@ -10102,6 +11040,7 @@ title="View in IGV"
                                     progress=0.85,
                                     detail="Queued in slow worker",
                                 )
+
                                 def _mark_snp_completion(_sid: str) -> None:
                                     finished = self._wait_for_snp_outputs_or_timeout(
                                         _sid, poll_s=5.0, max_wait_s=86400.0
@@ -10224,7 +11163,9 @@ title="View in IGV"
             logging.debug(
                 "target_bam_finalize: outer exception sample_id=%s: %s", sample_id, e
             )
-            logging.error(f"Failed to trigger target.bam finalization for {sample_id}: {e}")
+            logging.error(
+                f"Failed to trigger target.bam finalization for {sample_id}: {e}"
+            )
 
     def _get_expected_completion_job_types(self) -> Set[str]:
         """Get the set of job types expected to complete for this workflow."""
@@ -10237,7 +11178,9 @@ title="View in IGV"
                 expected.add(step_name)
         return expected
 
-    def _expected_jobs_completed(self, sample_dir: Path, expected_job_types: Set[str]) -> bool:
+    def _expected_jobs_completed(
+        self, sample_dir: Path, expected_job_types: Set[str]
+    ) -> bool:
         """Return True if all expected job types have completion outputs."""
         if not expected_job_types:
             return True
@@ -10294,16 +11237,18 @@ title="View in IGV"
                 "total_jobs": total_jobs,
                 "completed_jobs": completed_jobs,
                 "failed_jobs": failed_jobs,
-                "job_types": ", ".join(sorted(job_types)) if job_types else ""
+                "job_types": ", ".join(sorted(job_types)) if job_types else "",
             }
 
         except Exception as e:
-            logging.warning(f"Error calculating job counts from files for {sample_dir}: {e}")
+            logging.warning(
+                f"Error calculating job counts from files for {sample_dir}: {e}"
+            )
             return {
                 "total_jobs": 0,
                 "completed_jobs": 0,
                 "failed_jobs": 0,
-                "job_types": ""
+                "job_types": "",
             }
 
     def _create_watched_folders_page(self):
@@ -10311,8 +11256,8 @@ title="View in IGV"
         try:
             from robin.workflow_ray import (
                 add_watch_path,
-                remove_watch_path,
                 get_watched_paths,
+                remove_watch_path,
             )
         except ImportError:
             with theme.frame(
@@ -10326,8 +11271,10 @@ title="View in IGV"
                     "Manage folders requires Ray workflow. Are you running with --use-ray?",
                     type="negative",
                 )
-                with ui.element("div").classes("w-full min-w-0").props(
-                    "id=watched-folders-page"
+                with (
+                    ui.element("div")
+                    .classes("w-full min-w-0")
+                    .props("id=watched-folders-page")
                 ):
                     with ui.column().classes(
                         "w-full max-w-2xl mx-auto gap-3 p-2 md:p-3"
@@ -10357,12 +11304,12 @@ title="View in IGV"
             center=self.center,
             setup_notifications=self._setup_notification_system,
         ):
-            with ui.element("div").classes("w-full min-w-0").props(
-                "id=watched-folders-page"
+            with (
+                ui.element("div")
+                .classes("w-full min-w-0")
+                .props("id=watched-folders-page")
             ):
-                with ui.column().classes(
-                    "w-full max-w-2xl mx-auto gap-3 p-2 md:p-3"
-                ):
+                with ui.column().classes("w-full max-w-2xl mx-auto gap-3 p-2 md:p-3"):
                     with ui.element("div").classes(
                         "classification-insight-shell w-full min-w-0"
                     ):
@@ -10372,12 +11319,8 @@ title="View in IGV"
                         with ui.element("div").classes(
                             "classification-insight-card w-full min-w-0"
                         ):
-                            with ui.column().classes(
-                                "w-full min-w-0 gap-3 p-2 md:p-3"
-                            ):
-                                with ui.row().classes(
-                                    "items-center gap-2 min-w-0"
-                                ):
+                            with ui.column().classes("w-full min-w-0 gap-3 p-2 md:p-3"):
+                                with ui.row().classes("items-center gap-2 min-w-0"):
                                     ui.icon("folder_special").classes(
                                         "classification-insight-icon"
                                     )
@@ -10415,13 +11358,13 @@ title="View in IGV"
                                                         remove_watch_path,
                                                         get_watched_paths,
                                                     ),
-                                                ).props("flat color=negative size=sm no-caps")
+                                                ).props(
+                                                    "flat color=negative size=sm no-caps"
+                                                )
                                     else:
                                         ui.label(
                                             "No folders currently watched."
-                                        ).classes(
-                                            "classification-insight-foot italic"
-                                        )
+                                        ).classes("classification-insight-foot italic")
 
                                 ui.separator().classes("mgmt-detail-separator")
 
@@ -10519,9 +11462,11 @@ title="View in IGV"
                                             type="warning",
                                         )
                                         return
-                                    with ui.dialog().props("persistent").classes(
-                                        "w-full max-w-sm"
-                                    ) as add_dialog:
+                                    with (
+                                        ui.dialog()
+                                        .props("persistent")
+                                        .classes("w-full max-w-sm") as add_dialog
+                                    ):
                                         with ui.card().classes(
                                             "robin-dialog-surface p-4 md:p-5 w-full"
                                         ):
@@ -10640,7 +11585,9 @@ title="View in IGV"
         raw = self.security_store.get_gui_setting(PLOTTING_PREFERENCES_KEY)
         return PlottingPreferencesConfig.from_dict(raw)
 
-    def save_plotting_preferences(self, config, *, user_id: Optional[int] = None) -> None:
+    def save_plotting_preferences(
+        self, config, *, user_id: Optional[int] = None
+    ) -> None:
         """Persist plotting preferences and refresh the in-memory copy."""
         from robin.gui.plotting_preferences import PLOTTING_PREFERENCES_KEY
         from robin.security.store import utc_now_iso
@@ -10678,12 +11625,12 @@ title="View in IGV"
             center=self.center,
             setup_notifications=self._setup_notification_system,
         ):
-            with ui.element("div").classes("w-full min-w-0").props(
-                "id=sample-id-generator-page"
+            with (
+                ui.element("div")
+                .classes("w-full min-w-0")
+                .props("id=sample-id-generator-page")
             ):
-                with ui.column().classes(
-                    "w-full max-w-2xl mx-auto gap-3 p-2 md:p-3"
-                ):
+                with ui.column().classes("w-full max-w-2xl mx-auto gap-3 p-2 md:p-3"):
                     with ui.element("div").classes(
                         "classification-insight-shell w-full min-w-0"
                     ):
@@ -10693,12 +11640,8 @@ title="View in IGV"
                         with ui.element("div").classes(
                             "classification-insight-card w-full min-w-0"
                         ):
-                            with ui.column().classes(
-                                "w-full min-w-0 gap-3 p-2 md:p-3"
-                            ):
-                                with ui.row().classes(
-                                    "items-center gap-2 min-w-0"
-                                ):
+                            with ui.column().classes("w-full min-w-0 gap-3 p-2 md:p-3"):
+                                with ui.row().classes("items-center gap-2 min-w-0"):
                                     ui.icon("fingerprint").classes(
                                         "classification-insight-icon"
                                     )
@@ -10714,13 +11657,17 @@ title="View in IGV"
                                     "encrypted alongside the sample, provide a date of birth."
                                 ).classes("classification-insight-foot")
 
-                                id_mode = ui.toggle(
-                                    {
-                                        "custom": "Use my sample ID",
-                                        "md5": "Generate MD5 ID",
-                                    },
-                                    value="custom",
-                                ).props("no-caps dense").classes("w-full")
+                                id_mode = (
+                                    ui.toggle(
+                                        {
+                                            "custom": "Use my sample ID",
+                                            "md5": "Generate MD5 ID",
+                                        },
+                                        value="custom",
+                                    )
+                                    .props("no-caps dense")
+                                    .classes("w-full")
+                                )
 
                                 md5_fields = ui.column().classes("w-full min-w-0 gap-3")
                                 with md5_fields:
@@ -10773,10 +11720,14 @@ title="View in IGV"
                                     placeholder="e.g. 123 456 7890",
                                 ).classes("w-full")
 
-                                notes = ui.textarea(
-                                    label="Notes (optional)",
-                                    placeholder="Free-text notes stored encrypted with the identifiers",
-                                ).classes("w-full").props("outlined dense autogrow")
+                                notes = (
+                                    ui.textarea(
+                                        label="Notes (optional)",
+                                        placeholder="Free-text notes stored encrypted with the identifiers",
+                                    )
+                                    .classes("w-full")
+                                    .props("outlined dense autogrow")
+                                )
 
                                 ui.separator().classes("mgmt-detail-separator")
 
@@ -10787,11 +11738,13 @@ title="View in IGV"
                                     "text-sm font-mono break-all p-3 rounded sample-id-gen-hash-preview"
                                 )
                                 result_label.set_visibility(False)
-                                result_input = ui.input(
-                                    label="Sample ID",
-                                    placeholder="Register to create or confirm an ID",
-                                ).classes("w-full font-mono").props(
-                                    "readonly outlined dense"
+                                result_input = (
+                                    ui.input(
+                                        label="Sample ID",
+                                        placeholder="Register to create or confirm an ID",
+                                    )
+                                    .classes("w-full font-mono")
+                                    .props("readonly outlined dense")
                                 )
 
                                 def _sync_id_mode() -> None:
@@ -10809,11 +11762,14 @@ title="View in IGV"
                                     try:
                                         registration = build_sample_registration(
                                             mode=id_mode.value or "custom",
-                                            custom_sample_id=custom_sample_id.value or "",
+                                            custom_sample_id=custom_sample_id.value
+                                            or "",
                                             test_id=(
                                                 (test_id.value or "").strip()
                                                 if id_mode.value == "md5"
-                                                else (custom_test_id.value or "").strip()
+                                                else (
+                                                    custom_test_id.value or ""
+                                                ).strip()
                                             ),
                                             first_name=first_name.value or "",
                                             last_name=last_name.value or "",
@@ -10858,9 +11814,7 @@ title="View in IGV"
                                             type="warning",
                                         )
 
-                                with ui.row().classes(
-                                    "w-full gap-2 mt-2 flex-wrap"
-                                ):
+                                with ui.row().classes("w-full gap-2 mt-2 flex-wrap"):
                                     ui.button(
                                         "Register sample ID",
                                         on_click=register_sample_id,
@@ -10906,6 +11860,7 @@ title="View in IGV"
 
         try:
             from nicegui import run as ng_run
+
             success, message = await ng_run.io_bound(add_watch_path, path_val)
         except ImportError:
             success, message = add_watch_path(path_val)
@@ -10919,7 +11874,10 @@ title="View in IGV"
                 msg_l = ""
             notify_type = (
                 "warning"
-                if ("skipped previously-analysed" in msg_l or "skipped previously analyzed" in msg_l)
+                if (
+                    "skipped previously-analysed" in msg_l
+                    or "skipped previously analyzed" in msg_l
+                )
                 else "positive"
             )
             self._safe_notify(message, notify_type)
@@ -10929,9 +11887,15 @@ title="View in IGV"
                 if "deleted" not in str(e).lower() and "client" not in str(e).lower():
                     raise
                 # Dialog/slot was closed or client disconnected; skip clearing input
-            if watched_container is not None and get_watched_paths is not None and remove_watch_path is not None:
+            if (
+                watched_container is not None
+                and get_watched_paths is not None
+                and remove_watch_path is not None
+            ):
                 try:
-                    self._refresh_watched_list(watched_container, remove_watch_path, get_watched_paths)
+                    self._refresh_watched_list(
+                        watched_container, remove_watch_path, get_watched_paths
+                    )
                 except RuntimeError as e:
                     if "deleted" not in str(e).lower():
                         raise
@@ -11019,16 +11983,22 @@ title="View in IGV"
                     raise
         return failures
 
-    def _do_remove_folder(self, path, watched_container, remove_watch_path, get_watched_paths):
+    def _do_remove_folder(
+        self, path, watched_container, remove_watch_path, get_watched_paths
+    ):
         """Remove a folder from the watch list."""
         success, message = remove_watch_path(path)
         if success:
             ui.notify(message, type="positive")
-            self._refresh_watched_list(watched_container, remove_watch_path, get_watched_paths)
+            self._refresh_watched_list(
+                watched_container, remove_watch_path, get_watched_paths
+            )
         else:
             ui.notify(message, type="negative")
 
-    def _refresh_watched_list(self, watched_container, remove_watch_path, get_watched_paths):
+    def _refresh_watched_list(
+        self, watched_container, remove_watch_path, get_watched_paths
+    ):
         """Refresh the list of watched paths in the dialog."""
         if not self._safe_clear_container(watched_container):
             return

@@ -7,7 +7,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Mapping, MutableMapping, Optional
 
-
 LOCAL_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
 
 
@@ -73,7 +72,9 @@ class MinKnowAuthConfig:
         if self.developer_api_token:
             kwargs["developer_api_token"] = self.developer_api_token
         if self.client_cert_chain_path is not None:
-            kwargs["client_certificate_chain"] = self.client_cert_chain_path.read_bytes()
+            kwargs["client_certificate_chain"] = (
+                self.client_cert_chain_path.read_bytes()
+            )
         if self.client_key_path is not None:
             kwargs["client_private_key"] = self.client_key_path.read_bytes()
         if self.ca_cert_path is not None:

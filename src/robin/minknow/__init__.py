@@ -15,13 +15,13 @@ from robin.minknow.run import (
     stop_protocol_run,
 )
 from robin.minknow.sample_id import (
+    build_sample_registration,
     generate_sample_id_md5,
     has_encrypted_identifier_fields,
     save_sample_identifier_manifest,
+    save_sample_registration,
     validate_custom_sample_id,
     validate_dob,
-    build_sample_registration,
-    save_sample_registration,
 )
 from robin.minknow.stream_monitor import MinKnowStreamMonitor, acquire_stream_monitor
 from robin.minknow.toml_config import MinKnowWorkflowConfig, load_minknow_toml

@@ -1,17 +1,17 @@
 """Simple workflow management system for robin using threading."""
 
-import os
-import time
-import threading
-import queue
 import itertools
+import os
+import queue
+import threading
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, Dict, List, Optional, Any, Set
+from typing import Any, Callable, Dict, List, Optional, Set
 
+from tqdm import tqdm
 from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
-from tqdm import tqdm
 
 try:
     from rich.progress import (
@@ -27,12 +27,12 @@ try:
     _RICH_AVAILABLE = True
 except Exception:
     _RICH_AVAILABLE = False
-from robin.logging_config import get_job_logger
 from robin.analysis.target_analysis import (
     igv_bam_handler,
     snp_analysis_handler,
     target_bam_finalize_handler,
 )
+from robin.logging_config import get_job_logger
 
 # ---------- Batch Configuration ----------
 # See workflow_ray.py for the full description. Two timeouts are honoured:
@@ -48,22 +48,46 @@ from robin.analysis.target_analysis import (
 #   ROBIN_BATCH_TIMEOUT_BUSY_S_<TYPE>   e.g. ROBIN_BATCH_TIMEOUT_BUSY_S_CNV=45
 BATCH_CONFIG: Dict[str, Dict[str, Any]] = {
     # Preprocessing should NOT be batched - each file needs individual sample ID extraction
-    "preprocessing": {"max_batch_size": 1, "timeout_seconds": 0, "timeout_seconds_busy": 0},
-    "bed_conversion": {"max_batch_size": 20, "timeout_seconds": 2, "timeout_seconds_busy": 30},
+    "preprocessing": {
+        "max_batch_size": 1,
+        "timeout_seconds": 0,
+        "timeout_seconds_busy": 0,
+    },
+    "bed_conversion": {
+        "max_batch_size": 20,
+        "timeout_seconds": 2,
+        "timeout_seconds_busy": 30,
+    },
     "mgmt": {"max_batch_size": 20, "timeout_seconds": 2, "timeout_seconds_busy": 30},
     "cnv": {"max_batch_size": 50, "timeout_seconds": 2, "timeout_seconds_busy": 30},
     "target": {"max_batch_size": 20, "timeout_seconds": 2, "timeout_seconds_busy": 30},
     "fusion": {"max_batch_size": 20, "timeout_seconds": 2, "timeout_seconds_busy": 30},
     "itd": {"max_batch_size": 20, "timeout_seconds": 2, "timeout_seconds_busy": 30},
-    "sturgeon": {"max_batch_size": 20, "timeout_seconds": 2, "timeout_seconds_busy": 30},
+    "sturgeon": {
+        "max_batch_size": 20,
+        "timeout_seconds": 2,
+        "timeout_seconds_busy": 30,
+    },
     "nanodx": {"max_batch_size": 20, "timeout_seconds": 2, "timeout_seconds_busy": 30},
-    "pannanodx": {"max_batch_size": 20, "timeout_seconds": 2, "timeout_seconds_busy": 30},
-    "random_forest": {"max_batch_size": 20, "timeout_seconds": 2, "timeout_seconds_busy": 30},
+    "pannanodx": {
+        "max_batch_size": 20,
+        "timeout_seconds": 2,
+        "timeout_seconds_busy": 30,
+    },
+    "random_forest": {
+        "max_batch_size": 20,
+        "timeout_seconds": 2,
+        "timeout_seconds_busy": 30,
+    },
     "marlin": {"max_batch_size": 20, "timeout_seconds": 2, "timeout_seconds_busy": 30},
     "lamprey": {"max_batch_size": 20, "timeout_seconds": 2, "timeout_seconds_busy": 30},
     "tucan": {"max_batch_size": 20, "timeout_seconds": 2, "timeout_seconds_busy": 30},
     "igv_bam": {"max_batch_size": 20, "timeout_seconds": 2, "timeout_seconds_busy": 30},
-    "snp_analysis": {"max_batch_size": 20, "timeout_seconds": 2, "timeout_seconds_busy": 30},
+    "snp_analysis": {
+        "max_batch_size": 20,
+        "timeout_seconds": 2,
+        "timeout_seconds_busy": 30,
+    },
 }
 
 
@@ -108,7 +132,7 @@ class WorkflowContext:
     results: dict = field(default_factory=dict)
     history: list = field(default_factory=list)
     errors: list = field(default_factory=list)
-    
+
     # NEW: Simple batch metadata
     batch_id: Optional[str] = None
     batch_index: Optional[int] = None
@@ -144,14 +168,14 @@ class WorkflowContext:
         # First try to get from bam_metadata (for backward compatibility)
         bam_metadata = self.metadata.get("bam_metadata", {})
         sample_id = bam_metadata.get("sample_id", "unknown")
-        
+
         # If not found or "unknown", try to get from preprocessing results
         if sample_id == "unknown":
             preprocessing_result = self.results.get("preprocessing", {})
             sample_id = preprocessing_result.get("sample_id", "unknown")
-        
+
         return sample_id
-    
+
     def set_batch_info(self, batch_id: str, batch_index: int) -> None:
         """Set batch information for this context"""
         self.batch_id = batch_id
@@ -311,13 +335,13 @@ class BatchedJob:
     contexts: List[WorkflowContext]  # Multiple contexts for batched processing
     batch_id: str
     sample_id: str
-    
+
     def get_sample_id(self) -> str:
         return self.sample_id
-    
+
     def get_file_count(self) -> int:
         return len(self.contexts)
-    
+
     def get_filepaths(self) -> List[str]:
         return [ctx.filepath for ctx in self.contexts]
 
@@ -357,79 +381,91 @@ class SampleJobBatcher:
         """Add a job and return any completed batches"""
         sample_id = job.get_sample_id()
         job_type = job.job_type
-        
+
         with self.lock:
             # Initialize if needed
             if sample_id not in self.pending_jobs:
                 self.pending_jobs[sample_id] = {}
                 self.last_job_time[sample_id] = {}
-            
+
             if job_type not in self.pending_jobs[sample_id]:
                 self.pending_jobs[sample_id][job_type] = []
                 self.last_job_time[sample_id][job_type] = time.time()
-            
+
             # Add job to pending list
             self.pending_jobs[sample_id][job_type].append(job)
             self.last_job_time[sample_id][job_type] = time.time()
-            
+
             # Check for completed batches
             return self._check_and_create_batches(sample_id, job_type)
-    
-    def _check_and_create_batches(self, sample_id: str, job_type: str) -> List[BatchedJob]:
+
+    def _check_and_create_batches(
+        self, sample_id: str, job_type: str
+    ) -> List[BatchedJob]:
         """Check if we should create batches for a sample/job_type combination.
         Jobs with force_individual_batch (e.g. large BAMs) are emitted as single-file batches.
         """
-        config = BATCH_CONFIG.get(job_type, {"max_batch_size": 20, "timeout_seconds": 10})
+        config = BATCH_CONFIG.get(
+            job_type, {"max_batch_size": 20, "timeout_seconds": 10}
+        )
         max_batch_size = config["max_batch_size"]
-        
+
         pending = self.pending_jobs[sample_id][job_type]
         batches = []
-        
+
         # Emit single-file batches for jobs marked force_individual_batch (e.g. large BAMs)
-        individual = [j for j in pending if (j.context.metadata or {}).get("force_individual_batch")]
-        rest = [j for j in pending if not (j.context.metadata or {}).get("force_individual_batch")]
+        individual = [
+            j
+            for j in pending
+            if (j.context.metadata or {}).get("force_individual_batch")
+        ]
+        rest = [
+            j
+            for j in pending
+            if not (j.context.metadata or {}).get("force_individual_batch")
+        ]
         for job in individual:
             batches.append(self._create_batched_job([job], sample_id, job_type))
-        
+
         # Create batches of max_batch_size from the rest
         while len(rest) >= max_batch_size:
             batch_jobs = rest[:max_batch_size]
             rest = rest[max_batch_size:]
             batched_job = self._create_batched_job(batch_jobs, sample_id, job_type)
             batches.append(batched_job)
-        
+
         # Update pending list (only unbatched jobs remain)
         self.pending_jobs[sample_id][job_type] = rest
-        
+
         return batches
-    
+
     def check_timeouts(self) -> List[BatchedJob]:
         """Check for timed-out batches and return them"""
         current_time = time.time()
         timed_out_batches = []
-        
+
         with self.lock:
             for sample_id in list(self.pending_jobs.keys()):
                 for job_type in list(self.pending_jobs[sample_id].keys()):
                     jobs = self.pending_jobs[sample_id][job_type]
                     if not jobs:
                         continue
-                    
+
                     timeout_seconds = self._effective_timeout(job_type)
                     last_time = self.last_job_time[sample_id][job_type]
-                    
+
                     if (current_time - last_time) >= timeout_seconds:
                         # Create batch with remaining jobs
                         batch = self._create_batched_job(jobs, sample_id, job_type)
                         timed_out_batches.append(batch)
-                        
+
                         # Clear the pending jobs
                         self.pending_jobs[sample_id][job_type] = []
                         del self.last_job_time[sample_id][job_type]
-            
+
             # Clean up empty entries
             self._cleanup_empty_entries()
-        
+
         return timed_out_batches
 
     def force_flush_type(self, job_type: str) -> List[BatchedJob]:
@@ -453,26 +489,32 @@ class SampleJobBatcher:
                     del self.last_job_time[sample_id][job_type]
             self._cleanup_empty_entries()
         return flushed
-    
-    def _create_batched_job(self, jobs: List[Job], sample_id: str, job_type: str) -> BatchedJob:
+
+    def _create_batched_job(
+        self, jobs: List[Job], sample_id: str, job_type: str
+    ) -> BatchedJob:
         """Create a batched job from a list of individual jobs"""
         if not jobs:
             raise ValueError("Cannot create batched job from empty job list")
-        
+
         # Validate all jobs have same sample_id and job_type
         for job in jobs:
             if job.get_sample_id() != sample_id:
-                raise ValueError(f"Mixed sample IDs in batch: {sample_id} vs {job.get_sample_id()}")
+                raise ValueError(
+                    f"Mixed sample IDs in batch: {sample_id} vs {job.get_sample_id()}"
+                )
             if job.job_type != job_type:
-                raise ValueError(f"Mixed job types in batch: {job_type} vs {job.job_type}")
-        
+                raise ValueError(
+                    f"Mixed job types in batch: {job_type} vs {job.job_type}"
+                )
+
         # Use the first job as template
         template_job = jobs[0]
         batch_id = f"{sample_id}_{job_type}_{int(time.time() * 1000)}"
-        
+
         # Extract contexts from all jobs
         contexts = [job.context for job in jobs]
-        
+
         return BatchedJob(
             job_id=next(_job_id_counter),
             job_type=job_type,
@@ -481,9 +523,9 @@ class SampleJobBatcher:
             step=template_job.step,
             contexts=contexts,
             batch_id=batch_id,
-            sample_id=sample_id
+            sample_id=sample_id,
         )
-    
+
     def _cleanup_empty_entries(self):
         """Remove empty entries from pending jobs and timestamps"""
         # Remove empty job type entries
@@ -493,7 +535,7 @@ class SampleJobBatcher:
                     del self.pending_jobs[sample_id][job_type]
                     if job_type in self.last_job_time[sample_id]:
                         del self.last_job_time[sample_id][job_type]
-            
+
             # Remove empty sample entries
             if not self.pending_jobs[sample_id]:
                 del self.pending_jobs[sample_id]
@@ -645,15 +687,13 @@ class WorkflowManager:
         #   'sample_id', 'active_jobs', 'total_jobs', 'completed_jobs', 'failed_jobs', 'job_types' (set), 'last_seen'
         # }
         self.samples_by_id: Dict[str, Dict[str, Any]] = {}
-        
+
         # Batching support. The batcher uses adaptive timeouts driven by
         # the live per-type inflight count from self.active_jobs. When a
         # type is idle, fire batches quickly; when busy, accumulate longer.
         self.enable_batching = enable_batching
         self.sample_batcher = (
-            SampleJobBatcher(
-                inflight_callback=self._inflight_count_for_type
-            )
+            SampleJobBatcher(inflight_callback=self._inflight_count_for_type)
             if enable_batching
             else None
         )
@@ -853,13 +893,15 @@ class WorkflowManager:
         # Process jobs through batcher if batching is enabled
         if self.enable_batching and self.sample_batcher:
             # Separate preprocessing jobs from other jobs
-            preprocessing_jobs = [job for job in jobs if job.job_type == "preprocessing"]
+            preprocessing_jobs = [
+                job for job in jobs if job.job_type == "preprocessing"
+            ]
             other_jobs = [job for job in jobs if job.job_type != "preprocessing"]
-            
+
             # Submit preprocessing jobs directly (no batching)
             if preprocessing_jobs:
                 self._enqueue_jobs_internal(preprocessing_jobs)
-            
+
             # Process other jobs through batcher
             for job in other_jobs:
                 batches = self.sample_batcher.add_job(job)
@@ -869,7 +911,7 @@ class WorkflowManager:
                     self._enqueue_jobs_internal(regular_jobs)
         else:
             self._enqueue_jobs_internal(jobs)
-    
+
     def _enqueue_jobs_internal(self, jobs: List[Job]) -> None:
         """Internal job enqueue logic"""
         jobs_to_enqueue = []
@@ -1053,17 +1095,21 @@ class WorkflowManager:
                         logger.info(
                             f"Job {job.job_type} completed, triggering {len(triggered_jobs)} parallel jobs: {[j.job_type for j in triggered_jobs]}"
                         )
-                        
+
                         # For CNV jobs, use batching if enabled
                         if self.enable_batching and self.sample_batcher:
                             # Check if any of the triggered jobs are CNV jobs
-                            cnv_jobs = [j for j in triggered_jobs if j.job_type == "cnv"]
-                            other_jobs = [j for j in triggered_jobs if j.job_type != "cnv"]
-                            
+                            cnv_jobs = [
+                                j for j in triggered_jobs if j.job_type == "cnv"
+                            ]
+                            other_jobs = [
+                                j for j in triggered_jobs if j.job_type != "cnv"
+                            ]
+
                             # Submit non-CNV jobs immediately
                             if other_jobs:
                                 self.enqueue_jobs(other_jobs)
-                            
+
                             # For CNV jobs, add them to the batcher
                             for cnv_job in cnv_jobs:
                                 batches = self.sample_batcher.add_job(cnv_job)
@@ -1252,7 +1298,7 @@ class WorkflowManager:
             slow_worker.daemon = True
             self.slow_workers.append(slow_worker)
             slow_worker.start()
-        
+
         # Start batch timeout thread if batching is enabled
         if self.enable_batching and self.sample_batcher:
             self.batch_timeout_thread = threading.Thread(
@@ -1374,21 +1420,21 @@ class WorkflowManager:
             True if all workers stopped gracefully, False if timeout occurred
         """
         return self.stop(timeout)
-    
+
     def _batch_timeout_loop(self):
         """Periodically check for timed-out batches"""
         while self.running:
             try:
                 # Check for timed-out batches
                 timed_out_batches = self.sample_batcher.check_timeouts()
-                
+
                 # Enqueue timed-out batches
                 if timed_out_batches:
                     regular_jobs = self._convert_batched_jobs(timed_out_batches)
                     self._enqueue_jobs_internal(regular_jobs)
-                
+
                 time.sleep(1.0)  # Check every second
-                
+
             except Exception:
                 time.sleep(1.0)
 
@@ -1399,7 +1445,8 @@ class WorkflowManager:
         timeouts."""
         try:
             return sum(
-                1 for info in self.active_jobs.values()
+                1
+                for info in self.active_jobs.values()
                 if info.get("job_type") == job_type
             )
         except Exception:
@@ -1501,9 +1548,7 @@ class WorkflowManager:
                 if not self._job_is_coalescable_batch(entry):
                     i += 1
                     continue
-                other_bjob: BatchedJob = entry.context.metadata.get(
-                    "_batched_job"
-                )
+                other_bjob: BatchedJob = entry.context.metadata.get("_batched_job")
                 take = min(room, len(other_bjob.contexts))
                 if take <= 0:
                     i += 1
@@ -1518,9 +1563,8 @@ class WorkflowManager:
                     try:
                         if job_queue.unfinished_tasks > 0:
                             job_queue.unfinished_tasks -= 1
-                            if (
-                                job_queue.unfinished_tasks == 0
-                                and hasattr(job_queue, "all_tasks_done")
+                            if job_queue.unfinished_tasks == 0 and hasattr(
+                                job_queue, "all_tasks_done"
                             ):
                                 job_queue.all_tasks_done.notify_all()
                     except Exception:
@@ -1545,7 +1589,7 @@ class WorkflowManager:
             except Exception:
                 pass
         return absorbed
-    
+
     def _convert_batched_jobs(self, batched_jobs: List[BatchedJob]) -> List[Job]:
         """Convert BatchedJob objects to regular Job objects for processing"""
         regular_jobs = []
@@ -1557,16 +1601,19 @@ class WorkflowManager:
                 context=batched_job.contexts[0],  # Use first context as primary
                 origin=batched_job.origin,
                 workflow=batched_job.workflow,
-                step=batched_job.step
+                step=batched_job.step,
             )
             # Store batch information in metadata
             regular_job.context.metadata["_batched_job"] = batched_job
             regular_jobs.append(regular_job)
-        
+
         return regular_jobs
-    
-    def register_batched_handler(self, job_type: str, handler: Callable[[BatchedJob], None]) -> None:
+
+    def register_batched_handler(
+        self, job_type: str, handler: Callable[[BatchedJob], None]
+    ) -> None:
         """Register a handler that can process batched jobs"""
+
         # Wrap the handler to extract BatchedJob from regular Job
         def wrapped_handler(job: Job) -> None:
             batched_job = job.context.metadata.get("_batched_job")
@@ -1583,10 +1630,10 @@ class WorkflowManager:
                     step=job.step,
                     contexts=[single_context],
                     batch_id=f"single_{job.job_id}",
-                    sample_id=single_context.get_sample_id()
+                    sample_id=single_context.get_sample_id(),
                 )
                 handler(single_batch)
-        
+
         # Register the wrapped handler
         self.register_handler(job_type, wrapped_handler)
 
@@ -1827,6 +1874,7 @@ class FileWatcher(FileSystemEventHandler):
         try:
             # Check if preprocessor function accepts target_panel parameter
             import inspect
+
             sig = inspect.signature(self.preprocessor_func)
             if "target_panel" in sig.parameters:
                 jobs = self.preprocessor_func(filepath, target_panel=self.target_panel)
@@ -1952,7 +2000,9 @@ class FileWatcher(FileSystemEventHandler):
 _job_id_counter = itertools.count(1000)
 
 
-def default_file_classifier(filepath: str, workflow_plan: List[str], target_panel: str) -> List[Job]:
+def default_file_classifier(
+    filepath: str, workflow_plan: List[str], target_panel: str
+) -> List[Job]:
     """Default classifier that creates jobs for a file based on a workflow plan."""
     job_id = next(_job_id_counter)
     ctx = WorkflowContext(filepath)
@@ -2104,32 +2154,35 @@ def command_handler(job: Job, command_template: str) -> None:
 
 def enhanced_handler(job: BatchedJob) -> None:
     """Enhanced handler that processes batched jobs sequentially"""
-    
+
     sample_id = job.get_sample_id()
     job_type = job.job_type
     batch_size = job.get_file_count()
-    
+
     # Process each context sequentially
     for i, context in enumerate(job.contexts):
         context.set_batch_info(job.batch_id, i)
-        
+
         try:
             # Process individual file within batch
             process_single_file_in_batch(context, job_type, i, batch_size)
             context.add_result(job_type, f"{job_type}_ok")
-            
+
         except Exception as e:
             # Fail entire batch if any file fails
             error_msg = f"File {i+1}/{batch_size} failed: {str(e)}"
             for ctx in job.contexts:
                 ctx.add_error(job_type, error_msg)
             raise  # Re-raise to fail the entire batch
-    
+
     # Mark batch as completed
     for context in job.contexts:
         context.add_result(job_type, f"{job_type}_batch_completed")
 
-def process_single_file_in_batch(context: WorkflowContext, job_type: str, index: int, total: int) -> None:
+
+def process_single_file_in_batch(
+    context: WorkflowContext, job_type: str, index: int, total: int
+) -> None:
     """Process a single file within a batch - to be implemented per job type"""
     # This would call the existing single-file processing logic
     pass
@@ -2191,7 +2244,7 @@ class WorkflowRunner:
     ) -> None:
         """Register a custom job handler."""
         self.manager.register_handler(queue_type, job_type, handler)
-    
+
     def register_batched_handler(
         self, job_type: str, handler: Callable[[BatchedJob], None]
     ) -> None:
@@ -2375,6 +2428,7 @@ class WorkflowRunner:
             if target_panel is None:
                 try:
                     import csv
+
                     master_csv = Path(sample_dir) / "master.csv"
                     if master_csv.exists():
                         with master_csv.open("r", newline="") as fh:
@@ -2513,7 +2567,9 @@ class WorkflowRunner:
             if graceful_shutdown:
                 print("[SHUTDOWN] File watcher stopped gracefully")
             else:
-                print("[SHUTDOWN] Warning: File watcher may not have stopped gracefully")
+                print(
+                    "[SHUTDOWN] Warning: File watcher may not have stopped gracefully"
+                )
 
             if self.verbose:
                 if graceful_shutdown:
@@ -2534,6 +2590,7 @@ class WorkflowRunner:
     def _monitor_progress(self, watcher) -> None:
         """Monitor and display worker progress in real-time."""
         import time
+
         if _should_use_rich_progress():
             self._monitor_progress_rich()
             return

@@ -1,21 +1,23 @@
 """
 Helper functions to sort and merge bedmethyl files. Requires Python 3.12+.
 """
+
 from __future__ import annotations
 
 import sys
+
 if sys.version_info < (3, 12):
     raise RuntimeError("robin merge_bedmethyl utilities require Python 3.12 or newer")
 
-import pandas as pd
 import csv
-import logging
-from typing import List, Dict, Optional
-import os
 import gc
+import logging
+import os
 from copy import deepcopy
-import numpy as np
+from typing import Dict, List, Optional
 
+import numpy as np
+import pandas as pd
 
 # Sturgeon-related imports (must be installed)
 from sturgeon.utils import read_probes_file
@@ -233,8 +235,10 @@ def modkit_pileup_file_to_bed(
                 "strand",
             ]
             # Check if all expected columns exist in the DataFrame
-            has_expected_cols = all(col in modkit_df.columns for col in expected_columns)
-            
+            has_expected_cols = all(
+                col in modkit_df.columns for col in expected_columns
+            )
+
             if has_expected_cols:
                 # Data has the essential columns, just filter and select them
                 modkit_df = modkit_df[expected_columns].copy()
@@ -319,19 +323,19 @@ def modkit_pileup_file_to_bed(
 
         # Load probes file
         # The probes file has a header and uses whitespace (spaces) as delimiter
-        probes_df = pd.read_csv(probes_file, sep=r'\s+', header=0)
-        
+        probes_df = pd.read_csv(probes_file, sep=r"\s+", header=0)
+
         # Rename columns to expected names if needed
-        if 'ID_REF' in probes_df.columns:
-            probes_df = probes_df.rename(columns={'ID_REF': 'probe_name'})
-        
+        if "ID_REF" in probes_df.columns:
+            probes_df = probes_df.rename(columns={"ID_REF": "probe_name"})
+
         # Keep only the columns we need
-        probes_df = probes_df[['chr', 'start', 'end', 'probe_name']].copy()
+        probes_df = probes_df[["chr", "start", "end", "probe_name"]].copy()
 
         # Ensure chromosome names match
         probes_df["chr"] = probes_df["chr"].astype(str).str.removeprefix("chr")
         modkit_df["chr"] = modkit_df["chr"].astype(str).str.removeprefix("chr")
-        
+
         # Get unique chromosomes
         chromosomes = np.unique(probes_df["chr"].astype(str))
 
@@ -364,8 +368,10 @@ def modkit_pileup_file_to_bed(
             )
 
             # Rename 'probe_name' to 'probe_id' for consistency
-            if 'probe_name' in calls_per_probe_chr.columns:
-                calls_per_probe_chr = calls_per_probe_chr.rename(columns={'probe_name': 'probe_id'})
+            if "probe_name" in calls_per_probe_chr.columns:
+                calls_per_probe_chr = calls_per_probe_chr.rename(
+                    columns={"probe_name": "probe_id"}
+                )
 
             calls_per_probe.append(calls_per_probe_chr)
 
@@ -411,10 +417,10 @@ def modkit_pileup_file_to_bed(
 
         # Store result for return
         result_df = calls_per_probe.copy()
-        
+
         # Rename 'probe_name' to 'probe_id' for Sturgeon compatibility
-        if 'probe_name' in result_df.columns:
-            result_df = result_df.rename(columns={'probe_name': 'probe_id'})
+        if "probe_name" in result_df.columns:
+            result_df = result_df.rename(columns={"probe_name": "probe_id"})
 
     finally:
         # Clean up large DataFrames that are no longer needed

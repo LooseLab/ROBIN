@@ -230,9 +230,7 @@ def merge_protocol_run(
     protocol_name = _non_empty_string(getattr(run, "protocol_id", None))
     if protocol_name:
         updates["protocol_name"] = protocol_name
-    protocol_run_state = _enum_name(
-        protocol_state_enum, getattr(run, "state", None)
-    )
+    protocol_run_state = _enum_name(protocol_state_enum, getattr(run, "state", None))
     if protocol_run_state:
         updates["protocol_run_state"] = protocol_run_state
 
@@ -257,7 +255,9 @@ def merge_protocol_run(
     return replace(status, **updates)
 
 
-def merge_output_directories(status: PositionStatus, directories: Any) -> PositionStatus:
+def merge_output_directories(
+    status: PositionStatus, directories: Any
+) -> PositionStatus:
     """Attach static output directory paths from ``get_output_directories``."""
     return replace(
         status,

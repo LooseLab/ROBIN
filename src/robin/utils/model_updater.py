@@ -7,7 +7,7 @@ import re
 import urllib.error
 import urllib.request
 from pathlib import Path
-from typing import Optional, Tuple, List, Dict, Any
+from typing import Any, Dict, List, Optional, Tuple
 
 # https://github.com/{owner}/{repo}/releases/download/{tag}/{filename}
 _GITHUB_RELEASE_DOWNLOAD_RE = re.compile(
@@ -28,7 +28,9 @@ def _default_repo_root_guess() -> Optional[Path]:
         return None
 
 
-def _resolve_assets_manifest_path(manifest_path: Optional[str] = None) -> Optional[Path]:
+def _resolve_assets_manifest_path(
+    manifest_path: Optional[str] = None,
+) -> Optional[Path]:
     """
     Resolve assets manifest path.
 
@@ -83,7 +85,11 @@ def _load_assets_manifest(manifest_path: Optional[str]) -> Dict[str, Any]:
     # Packaged fallback
     import importlib.resources as importlib_resources
 
-    txt = importlib_resources.files("robin.resources").joinpath("assets.json").read_text(encoding="utf-8")
+    txt = (
+        importlib_resources.files("robin.resources")
+        .joinpath("assets.json")
+        .read_text(encoding="utf-8")
+    )
     return json.loads(txt)
 
 
@@ -122,7 +128,9 @@ def _stream_http_response(resp, target_path: Path, *, label: str) -> None:
     downloaded = 0
 
     if click is not None and total and total > 0:
-        with click.progressbar(length=total, label=label, show_eta=True, show_percent=True) as bar:
+        with click.progressbar(
+            length=total, label=label, show_eta=True, show_percent=True
+        ) as bar:
             with target_path.open("wb") as f:
                 while True:
                     chunk = resp.read(chunk_size)
@@ -231,7 +239,13 @@ def _download_manifest_asset(
         _stream_http_response(resp, target_path, label=label)
 
 
-def _download(url: str, target_path: Path, github_token: Optional[str], *, label: str = "Downloading") -> None:
+def _download(
+    url: str,
+    target_path: Path,
+    github_token: Optional[str],
+    *,
+    label: str = "Downloading",
+) -> None:
     _download_manifest_asset(url, target_path, github_token, label=label)
 
 
@@ -269,7 +283,9 @@ def update_models(
     if mp:
         messages.append(f"Using assets manifest: {mp}")
     else:
-        messages.append("Using bundled package assets manifest (robin.resources/assets.json).")
+        messages.append(
+            "Using bundled package assets manifest (robin.resources/assets.json)."
+        )
 
     models_dir = Path(models_dir).expanduser().resolve()
     models_dir.mkdir(parents=True, exist_ok=True)
@@ -284,7 +300,9 @@ def update_models(
         url = str(asset_info.get("url") or "")
         expected_sha256 = str(asset_info.get("sha256") or "")
         if not url or not expected_sha256:
-            messages.append(f"Manifest entry incomplete for {asset_key} (missing url/sha256).")
+            messages.append(
+                f"Manifest entry incomplete for {asset_key} (missing url/sha256)."
+            )
             return False, messages
 
         target_path = models_dir / filename
@@ -299,7 +317,9 @@ def update_models(
                     target_path.unlink()
                 except Exception:
                     pass
-                messages.append(f"Checksum mismatch for {filename} (expected {expected_sha256}, got {got}).")
+                messages.append(
+                    f"Checksum mismatch for {filename} (expected {expected_sha256}, got {got})."
+                )
                 return False, messages
             messages.append(f"Downloaded {filename}.")
         except Exception as e:
@@ -316,4 +336,3 @@ def update_models(
             return False, messages
 
     return True, messages
-

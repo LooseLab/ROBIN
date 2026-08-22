@@ -1,14 +1,14 @@
 from __future__ import annotations
 
 import asyncio
-from pathlib import Path
-from typing import Any, Dict, List, Optional
 import base64
 import json
 import logging
 import queue
 import threading
 import time
+from pathlib import Path
+from typing import Any, Dict, List, Optional
 
 try:
     from nicegui import ui
@@ -23,15 +23,18 @@ from robin.analysis.mnpflex_docker import (
     format_mnpflex_runtime_error,
     hierarchy_aggregate_display,
 )
+from robin.analysis.mnpflex_eligibility import (
+    sample_ready_for_mnpflex_auto_run_from_dir,
+)
 from robin.analysis.mnpflex_hierarchy import (
     format_mnpflex_hierarchy_score,
     mnpflex_hierarchy_has_content,
 )
-from robin.analysis.mnpflex_eligibility import (
-    sample_ready_for_mnpflex_auto_run_from_dir,
+from robin.analysis.mnpflex_runner import (
+    preflight_mnpflex_runtime,
+    run_mnpflex_analysis,
 )
-from robin.analysis.mnpflex_runner import preflight_mnpflex_runtime, run_mnpflex_analysis
-from robin.gui.theme import styled_table, client_timer, stop_timer
+from robin.gui.theme import client_timer, stop_timer, styled_table
 
 
 def add_mnpflex_section(launcher: Any, sample_dir: Path, sample_id: str) -> None:
@@ -88,25 +91,23 @@ def add_mnpflex_section(launcher: Any, sample_dir: Path, sample_id: str) -> None
             config=mnpflex_config,
         )
 
-    with ui.element("div").classes("classification-insight-shell w-full min-w-0").props(
-        "id=mnpflex-results"
+    with (
+        ui.element("div")
+        .classes("classification-insight-shell w-full min-w-0")
+        .props("id=mnpflex-results")
     ):
         ui.label("MNP-Flex results").classes(
             "classification-insight-heading text-headline-small"
         )
         with ui.column().classes("w-full min-w-0 gap-3"):
             with ui.row().classes("mnpflex-notice"):
-                ui.icon("schedule", size="sm").classes(
-                    "mnpflex-notice-icon mt-0.5"
-                )
+                ui.icon("schedule", size="sm").classes("mnpflex-notice-icon mt-0.5")
                 ui.label(
                     "MNP-Flex is recommended only after at least 12 hours of "
                     "sequencing data have been generated for this sample."
                 ).classes("mnpflex-notice-text")
 
-            with ui.row().classes(
-                "w-full justify-between items-start gap-3 flex-wrap"
-            ):
+            with ui.row().classes("w-full justify-between items-start gap-3 flex-wrap"):
                 with ui.column().classes("gap-1 min-w-0"):
                     last_updated_label = ui.label("Last updated: --").classes(
                         "classification-insight-meta"
@@ -145,7 +146,9 @@ def add_mnpflex_section(launcher: Any, sample_dir: Path, sample_id: str) -> None
 
         results_container = ui.column().classes("w-full min-w-0")
         with results_container:
-            with ui.element("div").classes("classification-insight-card w-full min-w-0"):
+            with ui.element("div").classes(
+                "classification-insight-card w-full min-w-0"
+            ):
                 with ui.column().classes("w-full gap-2 p-2 md:p-3"):
                     with ui.row().classes("items-center gap-2 min-w-0"):
                         ui.icon("psychology").classes("classification-insight-icon")
@@ -161,7 +164,9 @@ def add_mnpflex_section(launcher: Any, sample_dir: Path, sample_id: str) -> None
                     classifier_type = ui.label("Type: --").classes(
                         "classification-insight-meta"
                     )
-            with ui.element("div").classes("classification-insight-card w-full min-w-0"):
+            with ui.element("div").classes(
+                "classification-insight-card w-full min-w-0"
+            ):
                 with ui.column().classes("w-full gap-2 p-2 md:p-3"):
                     with ui.row().classes("items-center gap-2 min-w-0"):
                         ui.icon("account_tree").classes("classification-insight-icon")
@@ -171,9 +176,7 @@ def add_mnpflex_section(launcher: Any, sample_dir: Path, sample_id: str) -> None
                     hierarchy_tree_container = ui.element("div").classes(
                         "mnpflex-hierarchy-tree w-full min-w-0"
                     )
-                with ui.row().classes(
-                    "w-full items-center gap-2 mt-4 flex-wrap"
-                ):
+                with ui.row().classes("w-full items-center gap-2 mt-4 flex-wrap"):
                     ui.label("Top path").classes("classification-insight-meta")
                     top_path_badge = ui.badge("--").classes(
                         "mnpflex-score-badge mnpflex-score-badge--neutral"
@@ -201,7 +204,9 @@ def add_mnpflex_section(launcher: Any, sample_dir: Path, sample_id: str) -> None
                             "classification-insight-card w-full min-w-0"
                         ):
                             with ui.column().classes("gap-2 p-3 md:p-4"):
-                                ui.label("Subclass").classes("classification-insight-model")
+                                ui.label("Subclass").classes(
+                                    "classification-insight-model"
+                                )
                                 agg_subclass_name = ui.label("--").classes(
                                     "classification-insight-result text-sm"
                                 )
@@ -212,7 +217,9 @@ def add_mnpflex_section(launcher: Any, sample_dir: Path, sample_id: str) -> None
                             "classification-insight-card w-full min-w-0"
                         ):
                             with ui.column().classes("gap-2 p-3 md:p-4"):
-                                ui.label("Class").classes("classification-insight-model")
+                                ui.label("Class").classes(
+                                    "classification-insight-model"
+                                )
                                 agg_class_name = ui.label("--").classes(
                                     "classification-insight-result text-sm"
                                 )
@@ -223,7 +230,9 @@ def add_mnpflex_section(launcher: Any, sample_dir: Path, sample_id: str) -> None
                             "classification-insight-card w-full min-w-0"
                         ):
                             with ui.column().classes("gap-2 p-3 md:p-4"):
-                                ui.label("Family").classes("classification-insight-model")
+                                ui.label("Family").classes(
+                                    "classification-insight-model"
+                                )
                                 agg_family_name = ui.label("--").classes(
                                     "classification-insight-result text-sm"
                                 )
@@ -259,7 +268,9 @@ def add_mnpflex_section(launcher: Any, sample_dir: Path, sample_id: str) -> None
                                 "classification-insight-card w-full min-w-0"
                             ):
                                 with ui.column().classes("gap-2 p-3 md:p-4"):
-                                    ui.label("Subclass").classes("classification-insight-model")
+                                    ui.label("Subclass").classes(
+                                        "classification-insight-model"
+                                    )
                                     agg_subclass_name_exp = ui.label("--").classes(
                                         "classification-insight-result text-sm"
                                     )
@@ -270,7 +281,9 @@ def add_mnpflex_section(launcher: Any, sample_dir: Path, sample_id: str) -> None
                                 "classification-insight-card w-full min-w-0"
                             ):
                                 with ui.column().classes("gap-2 p-3 md:p-4"):
-                                    ui.label("Class").classes("classification-insight-model")
+                                    ui.label("Class").classes(
+                                        "classification-insight-model"
+                                    )
                                     agg_class_name_exp = ui.label("--").classes(
                                         "classification-insight-result text-sm"
                                     )
@@ -281,7 +294,9 @@ def add_mnpflex_section(launcher: Any, sample_dir: Path, sample_id: str) -> None
                                 "classification-insight-card w-full min-w-0"
                             ):
                                 with ui.column().classes("gap-2 p-3 md:p-4"):
-                                    ui.label("Family").classes("classification-insight-model")
+                                    ui.label("Family").classes(
+                                        "classification-insight-model"
+                                    )
                                     agg_family_name_exp = ui.label("--").classes(
                                         "classification-insight-result text-sm"
                                     )
@@ -307,7 +322,11 @@ def add_mnpflex_section(launcher: Any, sample_dir: Path, sample_id: str) -> None
                     _, classifier_scores_table = styled_table(
                         columns=[
                             {"name": "score", "label": "Score", "field": "score"},
-                            {"name": "subclass", "label": "Subclass", "field": "subclass"},
+                            {
+                                "name": "subclass",
+                                "label": "Subclass",
+                                "field": "subclass",
+                            },
                             {"name": "class", "label": "Class", "field": "class"},
                             {"name": "family", "label": "Family", "field": "family"},
                             {
@@ -322,9 +341,7 @@ def add_mnpflex_section(launcher: Any, sample_dir: Path, sample_id: str) -> None
                     )
             ui.separator().classes("my-4")
 
-            with ui.element("div").classes(
-                "classification-insight-grid--2 w-full"
-            ):
+            with ui.element("div").classes("classification-insight-grid--2 w-full"):
                 with ui.element("div").classes(
                     "classification-insight-card w-full min-w-0"
                 ):
@@ -348,7 +365,9 @@ def add_mnpflex_section(launcher: Any, sample_dir: Path, sample_id: str) -> None
                         qc_missing = ui.label("Missing sites: --").classes(
                             "classification-insight-meta"
                         )
-                        with ui.expansion("QC plots", value=False).classes("w-full mt-3"):
+                        with ui.expansion("QC plots", value=False).classes(
+                            "w-full mt-3"
+                        ):
                             qc_plots_container = ui.row().classes("w-full gap-3 mt-2")
                 with ui.element("div").classes(
                     "classification-insight-card w-full min-w-0"
@@ -370,13 +389,10 @@ def add_mnpflex_section(launcher: Any, sample_dir: Path, sample_id: str) -> None
                         mgmt_sites = ui.label("MGMT sites: --").classes(
                             "classification-insight-meta"
                         )
-                        with ui.expansion("MGMT plot", value=False).classes("w-full mt-3"):
+                        with ui.expansion("MGMT plot", value=False).classes(
+                            "w-full mt-3"
+                        ):
                             mgmt_plot_container = ui.row().classes("w-full gap-3 mt-2")
-
-        
-        
-            
-            
 
         def _format_score(value: Optional[float]) -> str:
             try:
@@ -423,7 +439,9 @@ def add_mnpflex_section(launcher: Any, sample_dir: Path, sample_id: str) -> None
             except Exception:
                 badge.classes(classes)
 
-        def _extract_classifier_rows(classifier_summary: Dict[str, Any], limit: int = 10):
+        def _extract_classifier_rows(
+            classifier_summary: Dict[str, Any], limit: int = 10
+        ):
             scores = classifier_summary.get("scores") or []
             rows = []
             for item in scores:
@@ -481,9 +499,11 @@ def add_mnpflex_section(launcher: Any, sample_dir: Path, sample_id: str) -> None
                 description = (node.get("description") or "").strip()
                 members = node.get("members") or []
                 depth_class = f"mnpflex-hierarchy-node--depth-{min(depth, 3)}"
-                with ui.element("div").classes(
-                    f"mnpflex-hierarchy-node {depth_class} w-full min-w-0"
-                ).style(f"padding-left: {depth * 1.25}rem"):
+                with (
+                    ui.element("div")
+                    .classes(f"mnpflex-hierarchy-node {depth_class} w-full min-w-0")
+                    .style(f"padding-left: {depth * 1.25}rem")
+                ):
                     with ui.row().classes(
                         "mnpflex-hierarchy-node__row items-start w-full min-w-0"
                     ):
@@ -509,7 +529,9 @@ def add_mnpflex_section(launcher: Any, sample_dir: Path, sample_id: str) -> None
             with hierarchy_tree_container:
                 _render_hierarchy_nodes(nodes)
 
-        def _update_labels(summary: Optional[Dict[str, Any]], summary_path: Optional[Path]) -> None:
+        def _update_labels(
+            summary: Optional[Dict[str, Any]], summary_path: Optional[Path]
+        ) -> None:
             has_results = summary is not None
             try:
                 results_container.visible = has_results
@@ -576,13 +598,9 @@ def add_mnpflex_section(launcher: Any, sample_dir: Path, sample_id: str) -> None
             mgmt_status_value = mgmt.get("status", "Unknown")
             mgmt_status_badge.set_text(mgmt_status_value)
             mgmt_status_badge.classes(replace=_status_badge_classes(mgmt_status_value))
-            mgmt_average.set_text(
-                f"MGMT average: {mgmt.get('average', 'Unknown')}"
-            )
+            mgmt_average.set_text(f"MGMT average: {mgmt.get('average', 'Unknown')}")
             mgmt_sites.set_text(f"MGMT sites: {mgmt.get('site_count', 'Unknown')}")
-            classifier_name.set_text(
-                f"Classifier: {classifier.get('name', 'Unknown')}"
-            )
+            classifier_name.set_text(f"Classifier: {classifier.get('name', 'Unknown')}")
             classifier_version.set_text(
                 f"Version: {classifier.get('version', 'Unknown')}"
             )
@@ -600,7 +618,9 @@ def add_mnpflex_section(launcher: Any, sample_dir: Path, sample_id: str) -> None
                 disp_subclass = (
                     hierarchy_preds.get("molecular_subclass", {}).get("label") or "N/A"
                 )
-                subclass_sum = hierarchy_preds.get("molecular_subclass", {}).get("score")
+                subclass_sum = hierarchy_preds.get("molecular_subclass", {}).get(
+                    "score"
+                )
                 disp_class = (
                     hierarchy_preds.get("molecular_class", {}).get("label") or "N/A"
                 )
@@ -613,9 +633,9 @@ def add_mnpflex_section(launcher: Any, sample_dir: Path, sample_id: str) -> None
                     hierarchy_preds.get("molecular_superfamily", {}).get("label")
                     or "N/A"
                 )
-                superfamily_sum = hierarchy_preds.get(
-                    "molecular_superfamily", {}
-                ).get("score")
+                superfamily_sum = hierarchy_preds.get("molecular_superfamily", {}).get(
+                    "score"
+                )
                 agg_subclass_name.set_text(disp_subclass)
                 agg_class_name.set_text(disp_class)
                 agg_family_name.set_text(disp_family)
@@ -640,7 +660,9 @@ def add_mnpflex_section(launcher: Any, sample_dir: Path, sample_id: str) -> None
                     scores, "molecular_subclass", top_subclass
                 )
                 class_sum = _sum_scores_by_field(scores, "molecular_class", top_class)
-                family_sum = _sum_scores_by_field(scores, "molecular_family", top_family)
+                family_sum = _sum_scores_by_field(
+                    scores, "molecular_family", top_family
+                )
                 superfamily_sum = _sum_scores_by_field(
                     scores, "molecular_superfamily", top_superfamily
                 )
@@ -692,7 +714,9 @@ def add_mnpflex_section(launcher: Any, sample_dir: Path, sample_id: str) -> None
                 agg_class_name_exp.set_text(disp_class)
                 agg_family_name_exp.set_text(disp_family)
                 agg_superfamily_name_exp.set_text(disp_superfamily)
-                _set_badge_value(agg_subclass_badge_exp, subclass_sum if scores else None)
+                _set_badge_value(
+                    agg_subclass_badge_exp, subclass_sum if scores else None
+                )
                 _set_badge_value(agg_class_badge_exp, class_sum if scores else None)
                 _set_badge_value(agg_family_badge_exp, family_sum if scores else None)
                 _set_badge_value(
@@ -935,17 +959,13 @@ def add_mnpflex_section(launcher: Any, sample_dir: Path, sample_id: str) -> None
                             f"Full BED file was not created at {full_bed_path}"
                         )
                     if full_bed_path.stat().st_size == 0:
-                        raise RuntimeError(
-                            f"Full BED file is empty at {full_bed_path}"
-                        )
+                        raise RuntimeError(f"Full BED file is empty at {full_bed_path}")
                     if not subset_path.exists():
                         raise RuntimeError(
                             f"Subset BED file was not created at {subset_path}"
                         )
                     if subset_path.stat().st_size == 0:
-                        raise RuntimeError(
-                            f"Subset BED file is empty at {subset_path}"
-                        )
+                        raise RuntimeError(f"Subset BED file is empty at {subset_path}")
                     state["last_updated"] = time.time()
                     outcome = {
                         "ok": True,

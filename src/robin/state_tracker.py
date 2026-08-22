@@ -19,9 +19,12 @@ def _safe_stat(path: str) -> Tuple[int, int, int, float]:
     """
     try:
         st = os.stat(path)
-        return int(getattr(st, "st_dev", 0) or 0), int(getattr(st, "st_ino", 0) or 0), int(
-            getattr(st, "st_size", 0) or 0
-        ), float(getattr(st, "st_mtime", 0.0) or 0.0)
+        return (
+            int(getattr(st, "st_dev", 0) or 0),
+            int(getattr(st, "st_ino", 0) or 0),
+            int(getattr(st, "st_size", 0) or 0),
+            float(getattr(st, "st_mtime", 0.0) or 0.0),
+        )
     except Exception:
         return 0, 0, 0, 0.0
 
@@ -103,8 +106,7 @@ class SQLiteStateTracker:
             pass
 
     def _init_schema(self) -> None:
-        self._conn.execute(
-            """
+        self._conn.execute("""
             CREATE TABLE IF NOT EXISTS file_state (
               file_key TEXT PRIMARY KEY,
               path TEXT,
@@ -119,8 +121,7 @@ class SQLiteStateTracker:
               last_update REAL,
               last_error TEXT
             );
-            """
-        )
+            """)
         self._conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_file_state_sample_id ON file_state(sample_id);"
         )
@@ -253,4 +254,3 @@ class SQLiteStateTracker:
         if mask == 0:
             return False
         return self.is_done(path, job_type)
-

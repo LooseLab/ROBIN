@@ -111,7 +111,9 @@ def load_probe_names(bed_path: str | os.PathLike) -> List[str]:
     return names
 
 
-def load_probe_position_map(probes_bed_path: str | os.PathLike) -> Dict[tuple[str, int], str]:
+def load_probe_position_map(
+    probes_bed_path: str | os.PathLike,
+) -> Dict[tuple[str, int], str]:
     """
     Build (chrom, position) → probe_id from Lamprey ``probe_hg38.bed``.
 
@@ -163,21 +165,21 @@ def bedmethyl_to_probe_calls(
     start_col = (
         "chromStart"
         if "chromStart" in df.columns
-        else "start_pos"
-        if "start_pos" in df.columns
-        else "start"
+        else "start_pos" if "start_pos" in df.columns else "start"
     )
     value_col = (
         "percent_modified"
         if "percent_modified" in df.columns
-        else "fraction"
-        if "fraction" in df.columns
-        else "score"
-        if "score" in df.columns
-        else None
+        else (
+            "fraction"
+            if "fraction" in df.columns
+            else "score" if "score" in df.columns else None
+        )
     )
     if value_col is None:
-        raise ValueError("Methylation dataframe missing percent_modified/fraction/score")
+        raise ValueError(
+            "Methylation dataframe missing percent_modified/fraction/score"
+        )
 
     sums: Dict[str, float] = {}
     counts: Dict[str, int] = {}
@@ -334,19 +336,13 @@ class LampreyPredictor:
         self, probe_calls: Mapping[str, int]
     ) -> LampreyPrediction:
         vector, n_used = build_feature_vector(self.probe_names, probe_calls)
-        temperature = float(
-            self.temps[np.argmin(np.abs(self.bin_centers - n_used))]
-        )
+        temperature = float(self.temps[np.argmin(np.abs(self.bin_centers - n_used))])
         batch = vector.reshape(1, -1)
-        outputs = self.session.run(
-            [self.output_name], {self.input_name: batch}
-        )[0]
+        outputs = self.session.run([self.output_name], {self.input_name: batch})[0]
         outputs = outputs / np.exp(temperature)
         outputs = _softmax(outputs, axis=1)
         probs = outputs[0]
-        scores = {
-            name: float(score) for name, score in zip(self.class_names, probs)
-        }
+        scores = {name: float(score) for name, score in zip(self.class_names, probs)}
         top_idx = int(np.argmax(probs))
         top_score = float(probs[top_idx])
         return LampreyPrediction(
@@ -544,7 +540,9 @@ def process_multiple_files(
             except Exception:
                 pass
         if analysis_result["files_processed"] == 0:
-            analysis_result["error_message"] = "No files could be processed successfully"
+            analysis_result["error_message"] = (
+                "No files could be processed successfully"
+            )
             analysis_result["processing_steps"].append("no_files_processed")
             return analysis_result
         analysis_result["processing_steps"].append("analysis_complete")
@@ -596,7 +594,9 @@ def lamprey_handler(job, work_dir=None):
                         os.path.basename(bam_path),
                     )
             if not parquet_paths:
-                error_msg = "No parquet paths found from bed conversion results in batch"
+                error_msg = (
+                    "No parquet paths found from bed conversion results in batch"
+                )
                 if suppress_expected:
                     job.context.add_result(
                         "lamprey_analysis",
@@ -673,9 +673,7 @@ def lamprey_handler(job, work_dir=None):
         else:
             os.makedirs(work_dir, exist_ok=True)
 
-        analyzer = LampreyAnalysis(
-            work_dir=work_dir, genome_build=DEFAULT_GENOME_BUILD
-        )
+        analyzer = LampreyAnalysis(work_dir=work_dir, genome_build=DEFAULT_GENOME_BUILD)
         result = analyzer.process_parquet_file(parquet_path, sample_id)
         job.context.add_metadata("lamprey_analysis", result.results)
         job.context.add_metadata("lamprey_processing_steps", result.processing_steps)

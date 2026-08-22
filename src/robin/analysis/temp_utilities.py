@@ -5,18 +5,19 @@ Temporary utilities for robin BAM to parquet conversion.
 This module provides utilities for merging modkit files and creating parquet files.
 """
 
-import warnings
-from typing import List, Optional
 import gc
-import os
+import json
 import logging
+import os
 import pickle
+import tempfile
+import warnings
+from contextlib import contextmanager
 from datetime import datetime
+from typing import List, Optional
+
 import pandas as pd
 import polars as pl
-from contextlib import contextmanager
-import tempfile
-import json
 
 # Suppress pkg_resources deprecation warnings from sorted_nearest
 warnings.filterwarnings(
@@ -29,10 +30,12 @@ warnings.filterwarnings(
 
 try:
     import pyranges as pr
-    from robin.analysis.utilities.mnp_flex import APIClient as MnpFlexClient #ToDo: Maintain to future integration.
+
+    from robin.analysis.utilities.mnp_flex import (
+        APIClient as MnpFlexClient,  # ToDo: Maintain to future integration.
+    )
 except ImportError as e:
     logging.warning(f"Some dependencies not available: {e}")
-
 
 
 # Simple cross-process file lock using POSIX flock when available (no-op on unsupported platforms)
@@ -143,7 +146,6 @@ def merge_modkit_files(
             f"Total cumulative BAM files contributing to parquet: {cumulative_bam_file_count} (added {num_bam_files_seen} new files)"
         )
 
-        
         # Cache or build PyRanges filter with improved caching
         # Use distinct cache for .txt (1-based converted) vs .gz (0-based) to avoid stale data
         cache_suffix = "_1based" if filter_bed_file.endswith(".txt") else ""
@@ -176,7 +178,9 @@ def merge_modkit_files(
                         rename[c] = "End"
                 bed_df = bed_df.rename(columns=rename)
                 bed_df["Start"] = bed_df["Start"].astype(int) - 1  # 1-based -> 0-based
-                bed_df["End"] = bed_df["End"].astype(int)  # 1-based end inclusive -> 0-based exclusive
+                bed_df["End"] = bed_df["End"].astype(
+                    int
+                )  # 1-based end inclusive -> 0-based exclusive
             else:
                 bed_df = pd.read_csv(
                     filter_bed_file,
@@ -245,7 +249,10 @@ def merge_modkit_files(
                         infer_schema_length=0,
                     ).select(essential_cols)
                     pl_df = pl_df.with_columns(
-                        [pl.col(c).cast(pl.UInt32, strict=False) for c in unsigned_int_cols]
+                        [
+                            pl.col(c).cast(pl.UInt32, strict=False)
+                            for c in unsigned_int_cols
+                        ]
                         + [pl.col(c).cast(pl.Float32, strict=False) for c in float_cols]
                     )
 
@@ -254,9 +261,9 @@ def merge_modkit_files(
                     continue
 
                 # Build PyRanges for intersection (only need chrom/start/end)
-                pr_df = pl_df.rename({"chrom": "Chromosome", "chromStart": "Start"}).with_columns(
-                    (pl.col("Start") + 1).alias("End")
-                )
+                pr_df = pl_df.rename(
+                    {"chrom": "Chromosome", "chromStart": "Start"}
+                ).with_columns((pl.col("Start") + 1).alias("End"))
                 gr = pr.PyRanges(pr_df.to_pandas()[["Chromosome", "Start", "End"]])
                 inter = gr.intersect(filter_ranges).df
 

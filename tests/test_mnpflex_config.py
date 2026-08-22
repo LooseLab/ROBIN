@@ -7,7 +7,9 @@ import pytest
 from robin.analysis.mnpflex_config import load_mnpflex_config
 
 
-def test_load_mnpflex_config_api_from_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_load_mnpflex_config_api_from_credentials(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.delenv("MNPFLEX_BACKEND", raising=False)
     monkeypatch.delenv("MNPFLEX_DOCKER_IMAGE", raising=False)
     monkeypatch.setenv("MNPFLEX_USERNAME", "user")
@@ -17,7 +19,9 @@ def test_load_mnpflex_config_api_from_credentials(monkeypatch: pytest.MonkeyPatc
     assert config.validation_error() is None
 
 
-def test_load_mnpflex_config_docker_requires_image(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_load_mnpflex_config_docker_requires_image(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setenv("MNPFLEX_BACKEND", "docker")
     monkeypatch.delenv("MNPFLEX_DOCKER_IMAGE", raising=False)
     config = load_mnpflex_config()

@@ -4,20 +4,23 @@ coverage.py
 This module contains the coverage analysis section of the report.
 """
 
-from reportlab.lib.units import inch
-from reportlab.platypus import Paragraph, Spacer, Table, TableStyle, PageBreak, Image
-from reportlab.lib.styles import ParagraphStyle
-from .base import ReportSection
 import os
-import pandas as pd
-import numpy as np
-import matplotlib.pyplot as plt
+
 import matplotlib
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+from reportlab.lib.styles import ParagraphStyle
+from reportlab.lib.units import inch
+from reportlab.platypus import Image, PageBreak, Paragraph, Spacer, Table, TableStyle
+
+from .base import ReportSection
 
 matplotlib.use("Agg")
 import io
-import natsort
 import logging
+
+import natsort
 
 logger = logging.getLogger(__name__)
 
@@ -145,11 +148,18 @@ class CoverageSection(ReportSection):
             # Check if data is available
             if not self.chromosome_data:
                 plt.figure(figsize=(8, 4))
-                plt.text(0.5, 0.5, "No chromosome coverage data available", 
-                        ha='center', va='center', transform=plt.gca().transAxes,
-                        fontsize=14, color='gray')
+                plt.text(
+                    0.5,
+                    0.5,
+                    "No chromosome coverage data available",
+                    ha="center",
+                    va="center",
+                    transform=plt.gca().transAxes,
+                    fontsize=14,
+                    color="gray",
+                )
                 plt.title("Per Chromosome Coverage")
-                plt.axis('off')
+                plt.axis("off")
             else:
                 plt.figure(figsize=(8, 4))  # Reduced from default size
                 chromosomes = [d["name"] for d in self.chromosome_data]
@@ -169,19 +179,19 @@ class CoverageSection(ReportSection):
 
             # Save plot to bytes buffer
             buf = io.BytesIO()
-            plt.savefig(buf, format="png", dpi=300, bbox_inches='tight')
+            plt.savefig(buf, format="png", dpi=300, bbox_inches="tight")
             plt.close()
             buf.seek(0)
-            
+
             # Verify the buffer has data
             if buf.getvalue():
                 return buf
             else:
                 return self._create_empty_plot_buffer()
-                
+
         except Exception as e:
             logger.warning(f"Error creating chromosome coverage plot: {e}")
-            plt.close('all')  # Close any open figures
+            plt.close("all")  # Close any open figures
             return self._create_empty_plot_buffer()
 
     def _create_target_coverage_plot(self):
@@ -191,11 +201,18 @@ class CoverageSection(ReportSection):
             if self.bedcov_df_main.empty or self.cov_df_main.empty:
                 # Create empty plot with message
                 plt.figure(figsize=(8, 4))
-                plt.text(0.5, 0.5, "No coverage data available", 
-                        ha='center', va='center', transform=plt.gca().transAxes,
-                        fontsize=14, color='gray')
+                plt.text(
+                    0.5,
+                    0.5,
+                    "No coverage data available",
+                    ha="center",
+                    va="center",
+                    transform=plt.gca().transAxes,
+                    fontsize=14,
+                    color="gray",
+                )
                 plt.title("Target vs Off-Target Coverage by Chromosome")
-                plt.axis('off')
+                plt.axis("off")
             else:
                 # Calculate target statistics
                 self.bedcov_df_main["length"] = (
@@ -246,43 +263,51 @@ class CoverageSection(ReportSection):
 
             # Save plot to bytes buffer
             buf = io.BytesIO()
-            plt.savefig(buf, format="png", dpi=300, bbox_inches='tight')
+            plt.savefig(buf, format="png", dpi=300, bbox_inches="tight")
             plt.close()
             buf.seek(0)
-            
+
             # Verify the buffer has data
             if buf.getvalue():
                 return buf
             else:
                 # Return a minimal valid PNG if buffer is empty
                 return self._create_empty_plot_buffer()
-                
+
         except Exception as e:
             logger.warning(f"Error creating target coverage plot: {e}")
-            plt.close('all')  # Close any open figures
+            plt.close("all")  # Close any open figures
             return self._create_empty_plot_buffer()
 
     def _create_empty_plot_buffer(self):
         """Create a minimal valid PNG buffer for empty plots."""
         try:
             plt.figure(figsize=(8, 4))
-            plt.text(0.5, 0.5, "No data available", 
-                    ha='center', va='center', transform=plt.gca().transAxes,
-                    fontsize=14, color='gray')
+            plt.text(
+                0.5,
+                0.5,
+                "No data available",
+                ha="center",
+                va="center",
+                transform=plt.gca().transAxes,
+                fontsize=14,
+                color="gray",
+            )
             plt.title("Coverage Plot")
-            plt.axis('off')
-            
+            plt.axis("off")
+
             buf = io.BytesIO()
-            plt.savefig(buf, format="png", dpi=300, bbox_inches='tight')
+            plt.savefig(buf, format="png", dpi=300, bbox_inches="tight")
             plt.close()
             buf.seek(0)
             return buf
         except Exception:
             # If even this fails, return a minimal PNG
             import base64
+
             # Minimal 1x1 transparent PNG
             png_data = base64.b64decode(
-                'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=='
+                "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
             )
             buf = io.BytesIO(png_data)
             buf.seek(0)
@@ -294,9 +319,7 @@ class CoverageSection(ReportSection):
             return []
         df = self.target_coverage_df.copy()
         df["coverage"] = df["coverage"].round(2)
-        sorted_chroms = sorted(
-            df["chrom"].unique(), key=natsort.natsort_keygen()
-        )
+        sorted_chroms = sorted(df["chrom"].unique(), key=natsort.natsort_keygen())
         rows = []
         for chrom in sorted_chroms:
             chrom_data = df[df["chrom"] == chrom]
@@ -314,12 +337,14 @@ class CoverageSection(ReportSection):
             for _, out in outliers.iterrows():
                 cov = out["coverage"]
                 event_type = "Gain" if cov > upper_bound else "Loss"
-                rows.append({
-                    "chrom": chrom,
-                    "gene": out["name"],
-                    "coverage": cov,
-                    "type": event_type,
-                })
+                rows.append(
+                    {
+                        "chrom": chrom,
+                        "gene": out["name"],
+                        "coverage": cov,
+                        "type": event_type,
+                    }
+                )
         return rows
 
     def _create_target_boxplot(self):
@@ -328,31 +353,39 @@ class CoverageSection(ReportSection):
             # Check if data is available
             if self.target_coverage_df.empty:
                 plt.figure(figsize=(8, 4))
-                plt.text(0.5, 0.5, "No target coverage data available", 
-                        ha='center', va='center', transform=plt.gca().transAxes,
-                        fontsize=14, color='gray')
+                plt.text(
+                    0.5,
+                    0.5,
+                    "No target coverage data available",
+                    ha="center",
+                    va="center",
+                    transform=plt.gca().transAxes,
+                    fontsize=14,
+                    color="gray",
+                )
                 plt.title("Target Coverage Distribution")
-                plt.axis('off')
+                plt.axis("off")
             else:
                 # Prepare data
-                self.target_coverage_df["coverage"] = self.target_coverage_df["coverage"].round(
-                    2
-                )
+                self.target_coverage_df["coverage"] = self.target_coverage_df[
+                    "coverage"
+                ].round(2)
 
                 # Create figure and boxplot
                 plt.figure(figsize=(8, 4))  # Reduced size
 
                 # Get sorted unique chromosomes
                 sorted_chroms = sorted(
-                    self.target_coverage_df["chrom"].unique(), key=natsort.natsort_keygen()
+                    self.target_coverage_df["chrom"].unique(),
+                    key=natsort.natsort_keygen(),
                 )
 
                 # Create boxplot
                 bp = plt.boxplot(
                     [
-                        self.target_coverage_df[self.target_coverage_df["chrom"] == chrom][
-                            "coverage"
-                        ]
+                        self.target_coverage_df[
+                            self.target_coverage_df["chrom"] == chrom
+                        ]["coverage"]
                         for chrom in sorted_chroms
                     ],
                     patch_artist=True,
@@ -380,16 +413,16 @@ class CoverageSection(ReportSection):
             plt.savefig(buf, format="png", dpi=300, bbox_inches="tight")
             plt.close()
             buf.seek(0)
-            
+
             # Verify the buffer has data
             if buf.getvalue():
                 return buf
             else:
                 return self._create_empty_plot_buffer()
-                
+
         except Exception as e:
             logger.warning(f"Error creating target boxplot: {e}")
-            plt.close('all')  # Close any open figures
+            plt.close("all")  # Close any open figures
             return self._create_empty_plot_buffer()
 
     def add_content(self):
@@ -545,20 +578,20 @@ class CoverageSection(ReportSection):
             chrom_buf = self._create_chromosome_coverage_plot()
             target_buf = self._create_target_coverage_plot()
             box_buf = self._create_target_boxplot()
-            
+
             # Validate buffers before creating Image objects
             if chrom_buf and chrom_buf.getvalue():
                 chrom_plot = Image(chrom_buf, width=6 * inch, height=3 * inch)
                 self.elements.append(chrom_plot)
             else:
                 logger.warning("Skipping chromosome coverage plot - invalid buffer")
-            
+
             if target_buf and target_buf.getvalue():
                 target_plot = Image(target_buf, width=6 * inch, height=3 * inch)
                 self.elements.append(target_plot)
             else:
                 logger.warning("Skipping target coverage plot - invalid buffer")
-            
+
             if box_buf and box_buf.getvalue():
                 box_plot = Image(box_buf, width=6 * inch, height=3 * inch)
                 self.elements.append(box_plot)
@@ -584,12 +617,14 @@ class CoverageSection(ReportSection):
                     )
                     table_data = [["Chromosome", "Gene", "Coverage", "Type"]]
                     for o in outliers:
-                        table_data.append([
-                            o["chrom"],
-                            o["gene"],
-                            f"{o['coverage']:.1f}x",
-                            o["type"],
-                        ])
+                        table_data.append(
+                            [
+                                o["chrom"],
+                                o["gene"],
+                                f"{o['coverage']:.1f}x",
+                                o["type"],
+                            ]
+                        )
                     outliers_table = self.create_table(
                         table_data,
                         repeat_rows=1,
@@ -598,13 +633,15 @@ class CoverageSection(ReportSection):
                         font_size=9,
                     )
                     outliers_table.setStyle(
-                        TableStyle([
-                            *self.MODERN_TABLE_STYLE._cmds,
-                            ("ALIGN", (2, 1), (2, -1), "RIGHT"),
-                            ("ALIGN", (3, 1), (3, -1), "CENTER"),
-                            ("TOPPADDING", (0, 0), (-1, -1), 4),
-                            ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
-                        ])
+                        TableStyle(
+                            [
+                                *self.MODERN_TABLE_STYLE._cmds,
+                                ("ALIGN", (2, 1), (2, -1), "RIGHT"),
+                                ("ALIGN", (3, 1), (3, -1), "CENTER"),
+                                ("TOPPADDING", (0, 0), (-1, -1), 4),
+                                ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+                            ]
+                        )
                     )
                     self.elements.append(outliers_table)
                     self.elements.append(Spacer(1, 6))

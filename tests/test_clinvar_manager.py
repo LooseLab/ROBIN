@@ -20,7 +20,6 @@ import pytest
 
 from robin.utils import clinvar_manager as cm
 
-
 # --- Small HTTP fakes (no real sockets) ---
 
 
@@ -233,7 +232,9 @@ def test_ensure_tabix_pysam_failure_uses_cli_tabix(tmp_path: Path) -> None:
     def build_index(gz_path: Path, tbi_path: Path) -> None:
         tbi_path.write_bytes(b"index")
 
-    with patch("robin.utils.clinvar_manager._build_tabix_index", side_effect=build_index):
+    with patch(
+        "robin.utils.clinvar_manager._build_tabix_index", side_effect=build_index
+    ):
         with patch(
             "robin.utils.clinvar_manager._verify_clinvar_tabix_index",
             return_value=True,
@@ -462,7 +463,9 @@ def test_record_sample_clinvar_provenance_not_overwritten_by_default(
             resources_dir=resources,
         )
 
-    assert json.loads(provenance.read_text(encoding="utf-8"))["file_date"] == "2020-01-01"
+    assert (
+        json.loads(provenance.read_text(encoding="utf-8"))["file_date"] == "2020-01-01"
+    )
 
 
 # --- update_clinvar_if_newer ---
@@ -545,7 +548,9 @@ def test_update_clinvar_defensive_download_creates_gz_when_missing_after_ensure(
         with patch.object(cm, "_download_url_to_file", side_effect=write_gz) as dl:
             with patch.object(cm, "_get_remote_last_modified", return_value=1.0):
                 with patch.object(cm, "_ensure_tabix_index"):
-                    cm.update_clinvar_if_newer(resources_dir=r, download_if_missing=True)
+                    cm.update_clinvar_if_newer(
+                        resources_dir=r, download_if_missing=True
+                    )
     assert dl.called
     assert (r / cm.CLINVAR_VCF_GZ_NAME).read_bytes() == b"fresh"
 
@@ -587,4 +592,3 @@ def test_compare_sample_clinvar_to_installed_detects_stale_release(
     assert status["is_stale"] is True
     assert status["installed_label"] == "ClinVar release 2026-06-21"
     assert status["sample_label"] == "ClinVar release 2020-01-01"
-

@@ -1,17 +1,20 @@
 """BAM read and RG tag extraction. Requires Python 3.12+."""
+
 from __future__ import annotations
 
 import sys
+
 if sys.version_info < (3, 12):
     raise RuntimeError("robin ReadBam utilities require Python 3.12 or newer")
 
-import pysam
-import os
-from typing import Optional, Tuple, Dict, Any, Generator, Set
-from dataclasses import dataclass, field, asdict
 import logging
-from dateutil import parser
+import os
 import re
+from dataclasses import asdict, dataclass, field
+from typing import Any, Dict, Generator, Optional, Set, Tuple
+
+import pysam
+from dateutil import parser
 
 # Create a logger for this module
 logger = logging.getLogger(__name__)

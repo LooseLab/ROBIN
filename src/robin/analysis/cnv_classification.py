@@ -8,26 +8,26 @@ classification rules from classification_config.py.
 import logging
 import pickle
 from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
 
+import natsort
 import numpy as np
 import pandas as pd
-import natsort
-from typing import Dict, List, Tuple, Optional, Any
 
 try:
     from importlib import resources as importlib_resources
 except ImportError:  # pragma: no cover
     import importlib_resources  # type: ignore
 
-from robin.classification_config import (
-    get_cnv_thresholds,
-    is_whole_chromosome_event,
-    is_arm_event,
-    is_resolution_sufficient
-)
 from robin.analysis.cnv_analysis import (
     CNV_MAPPABILITY_MIN_FRACTION,
     region_has_mappable_support,
+)
+from robin.classification_config import (
+    get_cnv_thresholds,
+    is_arm_event,
+    is_resolution_sufficient,
+    is_whole_chromosome_event,
 )
 
 logger = logging.getLogger(__name__)
@@ -89,7 +89,7 @@ def _arm_has_mappable_support(
 
 class CNVEvent:
     """Represents a CNV event with metadata."""
-    
+
     def __init__(
         self,
         chromosome: str,
@@ -101,10 +101,12 @@ class CNVEvent:
         genes: List[str] = None,
         confidence: str = "Unknown",
         arm: Optional[str] = None,
-        proportion_affected: float = 0.0
+        proportion_affected: float = 0.0,
     ):
         self.chromosome = chromosome
-        self.event_type = event_type  # 'GAIN', 'LOSS', 'WHOLE_CHR_GAIN', 'WHOLE_CHR_LOSS'
+        self.event_type = (
+            event_type  # 'GAIN', 'LOSS', 'WHOLE_CHR_GAIN', 'WHOLE_CHR_LOSS'
+        )
         self.mean_cnv = mean_cnv
         self.start_pos = start_pos
         self.end_pos = end_pos
@@ -113,7 +115,7 @@ class CNVEvent:
         self.confidence = confidence
         self.arm = arm
         self.proportion_affected = proportion_affected
-    
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for GUI/reporting."""
         return {
@@ -155,7 +157,7 @@ def analyze_chromosome_arms(
     chromosome: str,
     bin_width: int,
     sex_estimate: str,
-    cytobands_df: pd.DataFrame
+    cytobands_df: pd.DataFrame,
 ) -> Tuple[
     Optional[float],
     Optional[float],
@@ -188,9 +190,7 @@ def analyze_chromosome_arms(
 
     logger.debug(f"{chromosome} cytoband names: {chr_cytobands['name'].tolist()}")
 
-    p_arm_cytobands = chr_cytobands[
-        chr_cytobands["name"].str.startswith("p", na=False)
-    ]
+    p_arm_cytobands = chr_cytobands[chr_cytobands["name"].str.startswith("p", na=False)]
 
     p_arm_mean = None
     p_arm_proportion_gain = 0.0
@@ -200,9 +200,11 @@ def analyze_chromosome_arms(
         p_arm_values: List[float] = []
         for _, band in p_arm_cytobands.iterrows():
             start_pos_bin = max(0, int(band["start_pos"] // bin_width))
-            end_pos_bin = min(len(cnv_data[chromosome]) - 1, int(band["end_pos"] // bin_width))
+            end_pos_bin = min(
+                len(cnv_data[chromosome]) - 1, int(band["end_pos"] // bin_width)
+            )
             if end_pos_bin >= start_pos_bin:
-                region_values = cnv_data[chromosome][start_pos_bin:end_pos_bin + 1]
+                region_values = cnv_data[chromosome][start_pos_bin : end_pos_bin + 1]
                 p_arm_values.extend(region_values)
         p_arm_values = _finite_arm_values(p_arm_values)
         if p_arm_values:
@@ -216,9 +218,7 @@ def analyze_chromosome_arms(
         f"gain_prop={p_arm_proportion_gain:.3f}, loss_prop={p_arm_proportion_loss:.3f}"
     )
 
-    q_arm_cytobands = chr_cytobands[
-        chr_cytobands["name"].str.startswith("q", na=False)
-    ]
+    q_arm_cytobands = chr_cytobands[chr_cytobands["name"].str.startswith("q", na=False)]
 
     q_arm_mean = None
     q_arm_proportion_gain = 0.0
@@ -228,9 +228,11 @@ def analyze_chromosome_arms(
         q_arm_values: List[float] = []
         for _, band in q_arm_cytobands.iterrows():
             start_pos_bin = max(0, int(band["start_pos"] // bin_width))
-            end_pos_bin = min(len(cnv_data[chromosome]) - 1, int(band["end_pos"] // bin_width))
+            end_pos_bin = min(
+                len(cnv_data[chromosome]) - 1, int(band["end_pos"] // bin_width)
+            )
             if end_pos_bin >= start_pos_bin:
-                region_values = cnv_data[chromosome][start_pos_bin:end_pos_bin + 1]
+                region_values = cnv_data[chromosome][start_pos_bin : end_pos_bin + 1]
                 q_arm_values.extend(region_values)
         q_arm_values = _finite_arm_values(q_arm_values)
         if q_arm_values:
@@ -287,30 +289,34 @@ def detect_cnv_events(
         List of CNVEvent objects
     """
     events = []
-    
-    logger.debug(f"Detecting CNV events with sex_estimate='{sex_estimate}', bin_width={bin_width}")
-    
+
+    logger.debug(
+        f"Detecting CNV events with sex_estimate='{sex_estimate}', bin_width={bin_width}"
+    )
+
     # Check if resolution is sufficient
     if not is_resolution_sufficient(bin_width):
-        logger.warning(f"Resolution insufficient for CNV calling: bin_width={bin_width}")
+        logger.warning(
+            f"Resolution insufficient for CNV calling: bin_width={bin_width}"
+        )
         return events
-    
+
     # Analyze each chromosome
     logger.debug(f"Available chromosomes: {list(cnv_data.keys())}")
     for chromosome in natsort.natsorted(cnv_data.keys()):
         if chromosome == "chrM" or not chromosome.startswith("chr"):
             continue
-        
+
         # Skip Y chromosome for male samples (expected absence)
         if chromosome == "chrY" and sex_estimate.upper() in ("XY", "MALE"):
             logger.debug(f"Skipping {chromosome} for male sample")
             continue
-        
+
         logger.debug(f"Analyzing chromosome {chromosome} for CNV events")
-        
+
         # Get thresholds
         gain_threshold, loss_threshold = get_cnv_thresholds(chromosome, sex_estimate)
-        
+
         (
             p_arm_mean,
             q_arm_mean,
@@ -350,7 +356,7 @@ def detect_cnv_events(
                 100 * CNV_MAPPABILITY_MIN_FRACTION,
             )
             q_arm_mean = None
-        
+
         # Check for whole chromosome events
         if p_arm_mean is not None and q_arm_mean is not None:
             logger.debug(
@@ -368,7 +374,7 @@ def detect_cnv_events(
                 gain_threshold,
                 loss_threshold,
             )
-            
+
             if is_whole_chr:
                 # Create whole chromosome event
                 chr_cytobands = cytobands_df[cytobands_df["chrom"] == chromosome]
@@ -376,19 +382,23 @@ def detect_cnv_events(
                     start_pos = int(chr_cytobands["start_pos"].min())
                     end_pos = int(chr_cytobands["end_pos"].max())
                     length = end_pos - start_pos
-                    
+
                     # Get genes in chromosome
                     genes = []
                     if gene_df is not None:
-                        genes = gene_df[gene_df["chrom"] == chromosome]["gene"].astype(str).tolist()
-                    
+                        genes = (
+                            gene_df[gene_df["chrom"] == chromosome]["gene"]
+                            .astype(str)
+                            .tolist()
+                        )
+
                     chr_vals = cnv_data[chromosome]
                     chr_mean = float(np.nanmean(np.asarray(chr_vals, dtype=float)))
                     if event_type == "GAIN":
                         arm_prop = max(p_arm_proportion_gain, q_arm_proportion_gain)
                     else:
                         arm_prop = max(p_arm_proportion_loss, q_arm_proportion_loss)
-                    
+
                     event = CNVEvent(
                         chromosome=chromosome,
                         event_type=f"WHOLE_CHR_{event_type}",
@@ -401,7 +411,9 @@ def detect_cnv_events(
                         proportion_affected=arm_prop,
                     )
                     events.append(event)
-                    logger.info(f"Detected whole chromosome {event_type} for {chromosome}")
+                    logger.info(
+                        f"Detected whole chromosome {event_type} for {chromosome}"
+                    )
 
             elif chromosome != "chrY":
                 # Arm-level events only when no whole-chromosome call on this chromosome
@@ -414,22 +426,30 @@ def detect_cnv_events(
                         loss_threshold,
                     )
                     if is_p_event:
-                        chr_cytobands = cytobands_df[cytobands_df["chrom"] == chromosome]
-                        p_bands = chr_cytobands[chr_cytobands["name"].str.startswith("p", na=False)]
+                        chr_cytobands = cytobands_df[
+                            cytobands_df["chrom"] == chromosome
+                        ]
+                        p_bands = chr_cytobands[
+                            chr_cytobands["name"].str.startswith("p", na=False)
+                        ]
                         if not p_bands.empty:
                             start_pos = int(p_bands["start_pos"].min())
                             end_pos = int(p_bands["end_pos"].max())
                             length = end_pos - start_pos
-                            
+
                             # Get genes in p arm
                             genes = []
                             if gene_df is not None:
-                                genes = gene_df[
-                                    (gene_df["chrom"] == chromosome) &
-                                    (gene_df["start_pos"] <= end_pos) &
-                                    (gene_df["end_pos"] >= start_pos)
-                                ]["gene"].astype(str).tolist()
-                            
+                                genes = (
+                                    gene_df[
+                                        (gene_df["chrom"] == chromosome)
+                                        & (gene_df["start_pos"] <= end_pos)
+                                        & (gene_df["end_pos"] >= start_pos)
+                                    ]["gene"]
+                                    .astype(str)
+                                    .tolist()
+                                )
+
                             p_prop = (
                                 p_arm_proportion_gain
                                 if p_event_type == "GAIN"
@@ -448,8 +468,10 @@ def detect_cnv_events(
                                 proportion_affected=p_prop,
                             )
                             events.append(event)
-                            logger.info(f"Detected p-arm {p_event_type} for {chromosome}")
-                
+                            logger.info(
+                                f"Detected p-arm {p_event_type} for {chromosome}"
+                            )
+
                 # Check q arm
                 if q_arm_mean is not None:
                     is_q_event, q_event_type = is_arm_event(
@@ -460,22 +482,30 @@ def detect_cnv_events(
                         loss_threshold,
                     )
                     if is_q_event:
-                        chr_cytobands = cytobands_df[cytobands_df["chrom"] == chromosome]
-                        q_bands = chr_cytobands[chr_cytobands["name"].str.startswith("q", na=False)]
+                        chr_cytobands = cytobands_df[
+                            cytobands_df["chrom"] == chromosome
+                        ]
+                        q_bands = chr_cytobands[
+                            chr_cytobands["name"].str.startswith("q", na=False)
+                        ]
                         if not q_bands.empty:
                             start_pos = int(q_bands["start_pos"].min())
                             end_pos = int(q_bands["end_pos"].max())
                             length = end_pos - start_pos
-                            
+
                             # Get genes in q arm
                             genes = []
                             if gene_df is not None:
-                                genes = gene_df[
-                                    (gene_df["chrom"] == chromosome) &
-                                    (gene_df["start_pos"] <= end_pos) &
-                                    (gene_df["end_pos"] >= start_pos)
-                                ]["gene"].astype(str).tolist()
-                            
+                                genes = (
+                                    gene_df[
+                                        (gene_df["chrom"] == chromosome)
+                                        & (gene_df["start_pos"] <= end_pos)
+                                        & (gene_df["end_pos"] >= start_pos)
+                                    ]["gene"]
+                                    .astype(str)
+                                    .tolist()
+                                )
+
                             q_prop = (
                                 q_arm_proportion_gain
                                 if q_event_type == "GAIN"
@@ -494,7 +524,9 @@ def detect_cnv_events(
                                 proportion_affected=q_prop,
                             )
                             events.append(event)
-                            logger.info(f"Detected q-arm {q_event_type} for {chromosome}")
+                            logger.info(
+                                f"Detected q-arm {q_event_type} for {chromosome}"
+                            )
         else:
             # Single arm chromosome - use stricter threshold
             # Only use this logic if we truly have only one arm (like chrY in some cases)
@@ -520,11 +552,15 @@ def detect_cnv_events(
                     length = end_pos - start_pos
                     genes = []
                     if gene_df is not None:
-                        genes = gene_df[
-                            (gene_df["chrom"] == chromosome)
-                            & (gene_df["start_pos"] <= end_pos)
-                            & (gene_df["end_pos"] >= start_pos)
-                        ]["gene"].astype(str).tolist()
+                        genes = (
+                            gene_df[
+                                (gene_df["chrom"] == chromosome)
+                                & (gene_df["start_pos"] <= end_pos)
+                                & (gene_df["end_pos"] >= start_pos)
+                            ]["gene"]
+                            .astype(str)
+                            .tolist()
+                        )
                     prop = prop_g if evt_type == "GAIN" else prop_l
                     events.append(
                         CNVEvent(
@@ -548,8 +584,10 @@ def detect_cnv_events(
                     )
                 continue
 
-            logger.warning(f"{chromosome}: Only one arm detected - this may indicate a cytoband parsing issue")
-            
+            logger.warning(
+                f"{chromosome}: Only one arm detected - this may indicate a cytoband parsing issue"
+            )
+
             arr = np.asarray(cnv_data[chromosome], dtype=float)
             if not np.any(np.isfinite(arr)):
                 continue
@@ -557,19 +595,23 @@ def detect_cnv_events(
             if not np.isfinite(whole_chr_mean):
                 continue
             single_arm_multiplier = 1.5  # From CNV_EVENT_RULES
-            
+
             if abs(whole_chr_mean) > abs(gain_threshold) * single_arm_multiplier:
                 chr_cytobands = cytobands_df[cytobands_df["chrom"] == chromosome]
                 if not chr_cytobands.empty:
                     start_pos = int(chr_cytobands["start_pos"].min())
                     end_pos = int(chr_cytobands["end_pos"].max())
                     length = end_pos - start_pos
-                    
+
                     # Get genes in chromosome
                     genes = []
                     if gene_df is not None:
-                        genes = gene_df[gene_df["chrom"] == chromosome]["gene"].astype(str).tolist()
-                    
+                        genes = (
+                            gene_df[gene_df["chrom"] == chromosome]["gene"]
+                            .astype(str)
+                            .tolist()
+                        )
+
                     event_type = "GAIN" if whole_chr_mean > gain_threshold else "LOSS"
                     event = CNVEvent(
                         chromosome=chromosome,
@@ -580,21 +622,23 @@ def detect_cnv_events(
                         length=length,
                         genes=genes,
                         confidence="Medium",  # Single arm events are less certain
-                        proportion_affected=1.0  # Entire chromosome
+                        proportion_affected=1.0,  # Entire chromosome
                     )
                     events.append(event)
-                    logger.info(f"Detected single-arm whole chromosome {event_type} for {chromosome}")
-    
+                    logger.info(
+                        f"Detected single-arm whole chromosome {event_type} for {chromosome}"
+                    )
+
     return events
 
 
 def get_cnv_summary(events: List[CNVEvent]) -> Dict[str, Any]:
     """
     Generate a summary of CNV events.
-    
+
     Args:
         events: List of CNVEvent objects
-    
+
     Returns:
         Dictionary with summary statistics
     """
@@ -607,24 +651,24 @@ def get_cnv_summary(events: List[CNVEvent]) -> Dict[str, Any]:
         "high_confidence_events": 0,
         "medium_confidence_events": 0,
     }
-    
+
     for event in events:
         if event.event_type.startswith("WHOLE_CHR_"):
             summary["whole_chromosome_events"].append(event)
         else:
             summary["arm_events"].append(event)
-        
+
         if event.genes:
             summary["gene_containing_events"].append(event)
             summary["total_genes_affected"].update(event.genes)
-        
+
         if event.confidence == "High":
             summary["high_confidence_events"] += 1
         elif event.confidence == "Medium":
             summary["medium_confidence_events"] += 1
-    
+
     summary["total_genes_affected"] = len(summary["total_genes_affected"])
-    
+
     return summary
 
 

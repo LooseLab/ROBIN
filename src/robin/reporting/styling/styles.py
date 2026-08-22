@@ -4,13 +4,14 @@ styles.py
 This module contains styling-related code for the ROBIN report generation.
 """
 
-from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+import logging
+import os
+
 from reportlab.lib.colors import HexColor
+from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.platypus import TableStyle
-import os
-import logging
 
 logger = logging.getLogger(__name__)
 

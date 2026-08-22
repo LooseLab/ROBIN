@@ -216,7 +216,9 @@ class MinKnowStreamMonitor:
             self._positions[name] = updated
         self._emit_current()
 
-    def _run_protocol_stream(self, description: Any, stop_event: threading.Event) -> None:
+    def _run_protocol_stream(
+        self, description: Any, stop_event: threading.Event
+    ) -> None:
         name = description.name
         try:
             connection = self._connect_position(description, name)
@@ -260,7 +262,9 @@ class MinKnowStreamMonitor:
         try:
             import minknow_api.acquisition_pb2 as acquisition_pb2
 
-            for acquisition_run in connection.acquisition.watch_current_acquisition_run():
+            for (
+                acquisition_run
+            ) in connection.acquisition.watch_current_acquisition_run():
                 if stop_event.is_set() or self._stop_event.is_set():
                     break
                 with self._positions_lock:

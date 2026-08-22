@@ -3,7 +3,6 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-
 DEFAULT_CONSENT_VERSION = "v1"
 CONSENT_VERSION_ENV = "ROBIN_CONSENT_VERSION"
 

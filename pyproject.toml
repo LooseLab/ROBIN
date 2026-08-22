@@ -142,7 +142,7 @@ allow-direct-references = true
 
 [tool.black]
 line-length = 88
-target-version = ['py38']
+target-version = ['py312']
 include = '\.pyi?$'
 extend-exclude = '''
 /(
@@ -155,6 +155,7 @@ extend-exclude = '''
   | \.venv
   | build
   | dist
+  | src/robin/submodules
 )/
 '''
 
@@ -163,6 +164,7 @@ profile = "black"
 multi_line_output = 3
 line_length = 88
 known_first_party = ["robin"]
+skip_glob = ["src/robin/submodules/*"]
 
 [tool.mypy]
 python_version = "3.8"

@@ -4,7 +4,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from robin.gui.components.sample_audit import _audit_rows_for_sample, _export_sample_audit_csv
+from robin.gui.components.sample_audit import (
+    _audit_rows_for_sample,
+    _export_sample_audit_csv,
+)
 from robin.security.store import SecurityStore
 
 

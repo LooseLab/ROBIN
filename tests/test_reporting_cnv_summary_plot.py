@@ -218,9 +218,24 @@ def test_add_genome_panel_coverage_points_draws_scatter_and_mean_line() -> None:
 
     # Plotted points are outliers only; all-target mean is passed separately.
     panel_points = [
-        {"position_bp": 1_000_000.0, "coverage_val": 20.0, "direction": "gain", "label": "GENE1"},
-        {"position_bp": 2_000_000.0, "coverage_val": 40.0, "direction": "loss", "label": "GENE2"},
-        {"position_bp": 3_000_000.0, "coverage_val": 30.0, "direction": "gain", "label": "GENE3"},
+        {
+            "position_bp": 1_000_000.0,
+            "coverage_val": 20.0,
+            "direction": "gain",
+            "label": "GENE1",
+        },
+        {
+            "position_bp": 2_000_000.0,
+            "coverage_val": 40.0,
+            "direction": "loss",
+            "label": "GENE2",
+        },
+        {
+            "position_bp": 3_000_000.0,
+            "coverage_val": 30.0,
+            "direction": "gain",
+            "label": "GENE3",
+        },
     ]
 
     assert (
@@ -246,12 +261,29 @@ def test_add_genome_panel_coverage_points_falls_back_to_outlier_mean() -> None:
     ax_cnv.twinx.return_value = ax_cov
 
     panel_points = [
-        {"position_bp": 1_000_000.0, "coverage_val": 20.0, "direction": "gain", "label": "GENE1"},
-        {"position_bp": 2_000_000.0, "coverage_val": 40.0, "direction": "loss", "label": "GENE2"},
-        {"position_bp": 3_000_000.0, "coverage_val": 30.0, "direction": "gain", "label": "GENE3"},
+        {
+            "position_bp": 1_000_000.0,
+            "coverage_val": 20.0,
+            "direction": "gain",
+            "label": "GENE1",
+        },
+        {
+            "position_bp": 2_000_000.0,
+            "coverage_val": 40.0,
+            "direction": "loss",
+            "label": "GENE2",
+        },
+        {
+            "position_bp": 3_000_000.0,
+            "coverage_val": 30.0,
+            "direction": "gain",
+            "label": "GENE3",
+        },
     ]
 
-    assert _add_genome_panel_coverage_points(ax_cnv, panel_points, 250_000_000.0) is True
+    assert (
+        _add_genome_panel_coverage_points(ax_cnv, panel_points, 250_000_000.0) is True
+    )
     assert ax_cov.axhline.call_args[0][0] == 30.0  # fallback: mean of 20, 40, 30
 
 
@@ -259,7 +291,9 @@ def test_downsample_cnv_for_plot_groups_values() -> None:
     from robin.analysis.cnv_analysis import downsample_cnv_for_plot
 
     values = np.array([1.0, 3.0, 5.0, 7.0], dtype=float)
-    x_bp, out = downsample_cnv_for_plot(values, analysis_bin_width=12_000, plot_bin_width=24_000)
+    x_bp, out = downsample_cnv_for_plot(
+        values, analysis_bin_width=12_000, plot_bin_width=24_000
+    )
     assert len(out) == 2
     assert out[0] == 2.0
     assert out[1] == 6.0
@@ -274,7 +308,9 @@ def test_downsample_cnv_chromosome_track_keeps_full_x_axis() -> None:
     n_bins = 1000
     values = np.linspace(0.0, 1.0, n_bins)
     x_mb, out, x_max_mb = downsample_cnv_chromosome_track(
-        values, analysis_bw, plot_bin_width=500_000,
+        values,
+        analysis_bw,
+        plot_bin_width=500_000,
     )
     assert x_max_mb == n_bins * analysis_bw / 1_000_000
     assert len(out) < n_bins
@@ -437,19 +473,20 @@ def test_per_chromosome_plot_uses_analysis_bin_width_by_default() -> None:
 
 def test_cnv_chromosome_fig_height_fits_four_per_page() -> None:
     from robin.reporting.plotting import (
-        CNV_CHROMOSOME_PLOTS_PER_PAGE,
         CNV_CHROMOSOME_PLOT_SPACER_PT,
+        CNV_CHROMOSOME_PLOTS_PER_PAGE,
         CNV_REPORT_FRAME_PADDING_PT,
         cnv_chromosome_fig_height_for_page,
     )
 
     page_height = 9.34
     plot_height = cnv_chromosome_fig_height_for_page(page_height)
-    spacer_inch = (CNV_CHROMOSOME_PLOTS_PER_PAGE - 1) * CNV_CHROMOSOME_PLOT_SPACER_PT / 72.0
+    spacer_inch = (
+        (CNV_CHROMOSOME_PLOTS_PER_PAGE - 1) * CNV_CHROMOSOME_PLOT_SPACER_PT / 72.0
+    )
     frame_inch = page_height - CNV_REPORT_FRAME_PADDING_PT / 72.0
     assert (
-        CNV_CHROMOSOME_PLOTS_PER_PAGE * plot_height + spacer_inch
-        <= frame_inch + 1e-6
+        CNV_CHROMOSOME_PLOTS_PER_PAGE * plot_height + spacer_inch <= frame_inch + 1e-6
     )
     assert plot_height < 2.5
 
@@ -483,7 +520,9 @@ def test_twelve_chromosome_pdf_images_fit_three_pages() -> None:
     elements = []
     for plot_idx in range(12):
         buf = io.BytesIO()
-        PILImage.new("RGB", (int(width_inch * 100), int(height_inch * 100)), "white").save(
+        PILImage.new(
+            "RGB", (int(width_inch * 100), int(height_inch * 100)), "white"
+        ).save(
             buf,
             format="JPEG",
         )

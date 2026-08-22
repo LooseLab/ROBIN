@@ -4,13 +4,14 @@ pdf_extractor.py
 This module handles extraction of data from PDF reports and stores it for analysis.
 """
 
-import os
-import logging
-import re
 import json
+import logging
+import os
+import re
 from datetime import datetime
-import PyPDF2
 from typing import Dict, Optional
+
+import PyPDF2
 
 logger = logging.getLogger(__name__)
 

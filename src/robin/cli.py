@@ -26,6 +26,7 @@ Code Quality Improvements:
 
 # Suppress pkg_resources deprecation warnings from sorted_nearest
 import warnings
+
 warnings.filterwarnings(
     "ignore", message="pkg_resources is deprecated", category=UserWarning
 )
@@ -34,41 +35,48 @@ warnings.filterwarnings(
     "ignore", message="The figure layout has changed to tight", category=UserWarning
 )
 
-import os
-import sys
 import csv
+import logging
+import os
 import shutil
+import sys
 import tempfile
 from pathlib import Path
-from typing import Optional, List, Dict, Tuple, Any, Iterable
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 import click
-import logging
 
 # Check if we're in development mode
-is_development_mode = os.environ.get("ROBIN_DEV_MODE", "").lower() in ("1", "true", "yes", "on")
+is_development_mode = os.environ.get("ROBIN_DEV_MODE", "").lower() in (
+    "1",
+    "true",
+    "yes",
+    "on",
+)
 
-from robin.workflow_simple import default_file_classifier, Job
+from robin.workflow_simple import Job, default_file_classifier
 
 # Many analysis handlers have optional third-party dependencies. Import them lazily
 # so lightweight commands (e.g. `robin utils update-models`) still work.
 _analysis_import_error: Optional[BaseException] = None
 try:
     from robin.analysis.bam_preprocessor import bam_preprocessing_handler
-    from robin.analysis.mgmt_analysis import mgmt_handler
-    from robin.analysis.cnv_analysis import cnv_handler
     from robin.analysis.bed_conversion import bed_conversion_handler
-    from robin.analysis.sturgeon_analysis import sturgeon_handler
-    from robin.analysis.nanodx_analysis import nanodx_handler, pannanodx_handler
-    from robin.analysis.random_forest_analysis import random_forest_handler
-    from robin.analysis.marlin_analysis import marlin_handler
-    from robin.analysis.lamprey_analysis import lamprey_handler
-    from robin.analysis.tucan_analysis import tucan_handler
-    from robin.analysis.target_analysis import target_handler
+    from robin.analysis.cnv_analysis import cnv_handler
     from robin.analysis.fusion_analysis import fusion_handler
     from robin.analysis.itd_analysis import itd_handler
+    from robin.analysis.lamprey_analysis import lamprey_handler
+    from robin.analysis.marlin_analysis import marlin_handler
+    from robin.analysis.mgmt_analysis import (
+        extract_mgmt_site_rows_from_bed,
+        mgmt_handler,
+    )
+    from robin.analysis.nanodx_analysis import nanodx_handler, pannanodx_handler
+    from robin.analysis.random_forest_analysis import random_forest_handler
+    from robin.analysis.sturgeon_analysis import sturgeon_handler
+    from robin.analysis.target_analysis import target_handler
+    from robin.analysis.tucan_analysis import tucan_handler
     from robin.analysis.utilities.matkit import run_matkit
-    from robin.analysis.mgmt_analysis import extract_mgmt_site_rows_from_bed
 except Exception as e:
     _analysis_import_error = e
     bam_preprocessing_handler = None  # type: ignore[assignment]
@@ -105,73 +113,75 @@ from robin.workflow_config import merge_workflow_params
 
 def _download_missing_models(missing_files, models_dir):
     """Download missing model files (same asset manifest logic as ``robin utils update-models``)."""
-    import json
     import hashlib
-    import urllib.request
-    import urllib.error
+    import json
     import os
-    
+    import urllib.error
+    import urllib.request
+
     print("\n🔄 Attempting to download missing models...")
-    
+
     # Find project root from models_dir location
     # models_dir is src/robin/models, so project root is 3 levels up
     project_root = models_dir.parent.parent.parent
-    
+
     # Load assets manifest
     try:
         assets_file = project_root / "assets.json"
         if not assets_file.exists():
-            print(f"❌ assets.json not found at {assets_file}. Cannot download models automatically.")
+            print(
+                f"❌ assets.json not found at {assets_file}. Cannot download models automatically."
+            )
             return False
-        
-        with open(assets_file, 'r') as f:
+
+        with open(assets_file, "r") as f:
             manifest = json.load(f)
     except Exception as e:
         print(f"❌ Failed to load assets manifest: {e}")
         return False
-    
+
     # Asset name mapping
     asset_mapping = {
         "general.zip": "general_model",
-        "Capper_et_al_NN_v2.pkl": "capper_model", 
-        "pancan_devel_v5i_NN_v2.pkl": "pancan_model"
+        "Capper_et_al_NN_v2.pkl": "capper_model",
+        "pancan_devel_v5i_NN_v2.pkl": "pancan_model",
     }
-    
-    github_token = os.getenv('GITHUB_TOKEN')
+
+    github_token = os.getenv("GITHUB_TOKEN")
     if not github_token:
         print("ℹ️  No GITHUB_TOKEN found. Trying public download...")
-    
+
     success_count = 0
     for filename in missing_files:
         if filename not in asset_mapping:
             print(f"⚠️  Unknown model file: {filename}")
             continue
-            
+
         asset_name = asset_mapping[filename]
         if asset_name not in manifest["assets"]:
             print(f"❌ Asset '{asset_name}' not found in manifest")
             continue
-            
+
         asset_info = manifest["assets"][asset_name]
         asset_url = asset_info["url"]
         expected_sha256 = asset_info["sha256"]
-        
+
         target_path = models_dir / filename
-        
+
         try:
             print(f"\n📥 Downloading {filename}...")
-            
+
             # Download the file
             headers = {}
             if github_token:
                 headers["Authorization"] = f"Bearer {github_token}"
-            
+
             request = urllib.request.Request(asset_url, headers=headers)
-            
+
             with urllib.request.urlopen(request) as response:
-                with open(target_path, 'wb') as f:
+                with open(target_path, "wb") as f:
                     f.write(response.read())
-            
+
             # Verify checksum
             print("🔍 Verifying checksum...")
             sha256_hash = hashlib.sha256()
@@ -179,17 +189,17 @@ def _download_missing_models(missing_files, models_dir):
                 for chunk in iter(lambda: f.read(4096), b""):
                     sha256_hash.update(chunk)
             calculated_sha256 = sha256_hash.hexdigest()
-            
+
             if calculated_sha256 != expected_sha256:
                 print(f"❌ Checksum mismatch for {filename}")
                 print(f"Expected: {expected_sha256}")
                 print(f"Got:      {calculated_sha256}")
                 target_path.unlink()
                 continue
-            
+
             print(f"✅ Successfully downloaded {filename}")
             success_count += 1
-            
+
         except urllib.error.HTTPError as e:
             if e.code == 401:
                 print(f"❌ Authentication failed for {filename}. Need GitHub token.")
@@ -199,16 +209,16 @@ def _download_missing_models(missing_files, models_dir):
                 print(f"❌ HTTP error {e.code} downloading {filename}: {e.reason}")
         except Exception as e:
             print(f"❌ Failed to download {filename}: {e}")
-    
+
     return success_count == len(missing_files)
 
 
 def _check_models_or_exit():
     """Ensure required runtime assets exist; auto-download missing ones."""
     try:
-        from robin.utils.model_checker import get_models_directory, check_model_files
-        from robin.utils.model_updater import update_models as _update_models
         from robin.utils.clinvar_manager import ensure_clinvar_files
+        from robin.utils.model_checker import check_model_files, get_models_directory
+        from robin.utils.model_updater import update_models as _update_models
     except Exception as e:
         click.echo(f"❌ Could not load asset bootstrap helpers: {e}", err=True)
         sys.exit(1)
@@ -335,6 +345,7 @@ def _echo_styled(message: str, level: str = "info") -> None:
     style = styles.get(level, "white")
     _RICH_CONSOLE.print(message, style=style)
 
+
 # Disclaimer text for user acknowledgment
 DISCLAIMER_TEXT = EXTENDED_DISCLAIMER_TEXT
 
@@ -394,7 +405,9 @@ def _get_user_acknowledgment() -> bool:
         click.echo("=" * 70)
         click.echo(DISCLAIMER_TEXT)
         click.echo("=" * 70)
-    _echo_styled("\nTo proceed, please type 'I agree' (exactly as shown):", level="warn")
+    _echo_styled(
+        "\nTo proceed, please type 'I agree' (exactly as shown):", level="warn"
+    )
     try:
         response = input().strip()
     except (KeyboardInterrupt, EOFError):
@@ -413,7 +426,12 @@ def _get_user_acknowledgment() -> bool:
 
 def _warn_if_process_large_bams() -> None:
     """If ROBIN_PROCESS_LARGE_BAMS is set, print a warning not to use with live runs."""
-    if os.environ.get("ROBIN_PROCESS_LARGE_BAMS", "0").strip().lower() in ("1", "true", "yes", "on"):
+    if os.environ.get("ROBIN_PROCESS_LARGE_BAMS", "0").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    ):
         _echo_styled(
             "Warning: ROBIN_PROCESS_LARGE_BAMS is enabled. Do not use this option alongside live runs.",
             level="warn",
@@ -505,7 +523,9 @@ def _get_security_services():
 
 
 @users.command("bootstrap-admin")
-@click.option("--username", default="admin", show_default=True, help="Initial admin username.")
+@click.option(
+    "--username", default="admin", show_default=True, help="Initial admin username."
+)
 @click.option(
     "--from-legacy-hash",
     is_flag=True,
@@ -554,7 +574,9 @@ def users_bootstrap_admin(username: str, from_legacy_hash: bool) -> None:
     else:
         password = click.prompt("Password", hide_input=True, confirmation_prompt=True)
         try:
-            user_id = auth.create_user(username, password, role="admin", must_change_password=False)
+            user_id = auth.create_user(
+                username, password, role="admin", must_change_password=False
+            )
         except Exception as e:
             click.echo(f"Failed to create admin user '{username}': {e}", err=True)
             sys.exit(1)
@@ -575,7 +597,9 @@ def users_bootstrap_admin(username: str, from_legacy_hash: bool) -> None:
 
 @users.command("create")
 @click.argument("username", type=str)
-@click.option("--role", type=click.Choice(["admin", "user"]), default="user", show_default=True)
+@click.option(
+    "--role", type=click.Choice(["admin", "user"]), default="user", show_default=True
+)
 @click.option("--email", type=str, default="", help="Contact email for this account.")
 @click.option(
     "--clinical-role",
@@ -601,7 +625,6 @@ def users_create(
 ) -> None:
     """Create a GUI user account."""
     try:
-        from robin.security.user_metadata import CLINICAL_ROLE_KEY, EMAIL_KEY
         from robin.security.user_approvals import (
             ADMIN_USER_APPROVALS_UPDATED_EVENT,
             MINKNOW_REMOTE_CONTROL_KEY,
@@ -610,6 +633,7 @@ def users_create(
             approval_audit_details,
             default_approvals,
         )
+        from robin.security.user_metadata import CLINICAL_ROLE_KEY, EMAIL_KEY
 
         store, auth, audit = _get_security_services()
     except ImportError as e:
@@ -763,7 +787,9 @@ def users_list() -> None:
     default=None,
     help="Clinical role label (e.g. Consultant, Scientist).",
 )
-@click.option("--notes", type=str, default=None, help="Internal notes about this account.")
+@click.option(
+    "--notes", type=str, default=None, help="Internal notes about this account."
+)
 def users_set_profile(
     username: str,
     email: Optional[str],
@@ -792,7 +818,9 @@ def users_set_profile(
     if notes is not None:
         updates[NOTES_KEY] = notes
     if not updates:
-        click.echo("Provide at least one of --email, --clinical-role, or --notes.", err=True)
+        click.echo(
+            "Provide at least one of --email, --clinical-role, or --notes.", err=True
+        )
         sys.exit(1)
 
     try:
@@ -862,7 +890,9 @@ def users_set_approvals(
         click.echo(f"User '{username}' not found.", err=True)
         sys.exit(1)
     if store.user_has_role(user.id, "admin"):
-        click.echo("Administrators always have all approvals; nothing to update.", err=True)
+        click.echo(
+            "Administrators always have all approvals; nothing to update.", err=True
+        )
         sys.exit(1)
 
     updates = {}
@@ -934,9 +964,7 @@ def users_consent_status(consent_version: str) -> None:
         status = "accepted" if row["has_consent"] else "pending"
         agreed = row["agreed_at"] or "never"
         active = "active" if row["is_active"] else "inactive"
-        click.echo(
-            f" - {row['username']} ({active}): {status} (agreed_at={agreed})"
-        )
+        click.echo(f" - {row['username']} ({active}): {status} (agreed_at={agreed})")
 
 
 @users.command("deactivate")
@@ -1030,7 +1058,11 @@ def users_revoke_role(username: str, role: str) -> None:
     if user is None:
         click.echo(f"User '{username}' not found.", err=True)
         sys.exit(1)
-    if role == "admin" and store.user_has_role(user.id, "admin") and store.count_active_admins() <= 1:
+    if (
+        role == "admin"
+        and store.user_has_role(user.id, "admin")
+        and store.count_active_admins() <= 1
+    ):
         click.echo("Cannot revoke admin role from the last active admin.", err=True)
         sys.exit(1)
     if not store.revoke_role(user.id, role):
@@ -1053,11 +1085,15 @@ def audit() -> None:
 
 @audit.command("list")
 @click.option("--user", "username", type=str, default="", help="Filter by username.")
-@click.option("--event", "event_type", type=str, default="", help="Filter by event type.")
+@click.option(
+    "--event", "event_type", type=str, default="", help="Filter by event type."
+)
 @click.option("--from-ts", type=str, default="", help="Start timestamp (UTC ISO8601).")
 @click.option("--to-ts", type=str, default="", help="End timestamp (UTC ISO8601).")
 @click.option("--limit", type=int, default=50, show_default=True)
-def audit_list(username: str, event_type: str, from_ts: str, to_ts: str, limit: int) -> None:
+def audit_list(
+    username: str, event_type: str, from_ts: str, to_ts: str, limit: int
+) -> None:
     """List recent audit events."""
     try:
         store, _, _ = _get_security_services()
@@ -1084,12 +1120,16 @@ def audit_list(username: str, event_type: str, from_ts: str, to_ts: str, limit: 
 
 @audit.command("export")
 @click.option("--user", "username", type=str, default="", help="Filter by username.")
-@click.option("--event", "event_type", type=str, default="", help="Filter by event type.")
+@click.option(
+    "--event", "event_type", type=str, default="", help="Filter by event type."
+)
 @click.option("--from-ts", type=str, default="", help="Start timestamp (UTC ISO8601).")
 @click.option("--to-ts", type=str, default="", help="End timestamp (UTC ISO8601).")
 @click.option("--limit", type=int, default=5000, show_default=True)
 @click.option("--out", "out_path", type=click.Path(path_type=Path), required=True)
-def audit_export(username: str, event_type: str, from_ts: str, to_ts: str, limit: int, out_path: Path) -> None:
+def audit_export(
+    username: str, event_type: str, from_ts: str, to_ts: str, limit: int, out_path: Path
+) -> None:
     """Export audit events to CSV."""
     try:
         store, _, _ = _get_security_services()
@@ -1172,7 +1212,9 @@ def mgmt(output_dir: Path, recursive: bool, out_path: Path) -> None:
         )
         sys.exit(1)
 
-    output_stream = sys.stdout if str(out_path) == "-" else open(out_path, "w", newline="")
+    output_stream = (
+        sys.stdout if str(out_path) == "-" else open(out_path, "w", newline="")
+    )
     try:
         writer = csv.writer(output_stream, delimiter="\t")
         writer.writerow(
@@ -1197,9 +1239,7 @@ def mgmt(output_dir: Path, recursive: bool, out_path: Path) -> None:
             sample_id = run_dir.name
             rel_run_path = os.path.relpath(run_dir, output_dir)
 
-            with tempfile.NamedTemporaryFile(
-                suffix=".bed", delete=False
-            ) as temp_bed:
+            with tempfile.NamedTemporaryFile(suffix=".bed", delete=False) as temp_bed:
                 temp_bed_path = temp_bed.name
 
             try:
@@ -1229,8 +1269,12 @@ def mgmt(output_dir: Path, recursive: bool, out_path: Path) -> None:
                 meth_rev = int(row.get("meth_rev", 0))
                 meth_total = meth_fwd + meth_rev
                 cov_total = int(row.get("cov_total", 0))
-                meth_pct = round((meth_total / cov_total) * 100.0, 2) if cov_total else 0.0
-                site_label = str(row.get("site", "")).split(" ")[0] if row.get("site") else ""
+                meth_pct = (
+                    round((meth_total / cov_total) * 100.0, 2) if cov_total else 0.0
+                )
+                site_label = (
+                    str(row.get("site", "")).split(" ")[0] if row.get("site") else ""
+                )
                 writer.writerow(
                     [
                         sample_id,
@@ -1298,7 +1342,9 @@ def update_clinvar() -> None:
     is_flag=True,
     help="Overwrite existing model files (default: skip existing).",
 )
-def update_models(models_dir: Optional[Path], manifest_path: Optional[Path], overwrite: bool) -> None:
+def update_models(
+    models_dir: Optional[Path], manifest_path: Optional[Path], overwrite: bool
+) -> None:
     """Download/update ROBIN model files using the assets manifest."""
     try:
         from robin.utils.model_checker import get_models_directory
@@ -1329,24 +1375,25 @@ def _remove_panel_from_system(panel_name: str) -> bool:
             click.echo(f"Error: Cannot remove built-in panel '{panel_name}'", err=True)
             click.echo("Built-in panels (rCNS2, AML) cannot be removed.", err=True)
             return False
-        
+
         # Get resources directory
         try:
             from robin import resources
+
             resources_dir = Path(resources.__file__).parent
         except ImportError:
             click.echo("Error: Could not locate ROBIN resources directory", err=True)
             return False
-        
+
         # Check if panel exists
         panel_filename = f"{panel_name}_panel_name_uniq.bed"
         panel_path = resources_dir / panel_filename
-        
+
         if not panel_path.exists():
             click.echo(f"Error: Panel '{panel_name}' not found", err=True)
             click.echo(f"Expected file: {panel_path}", err=True)
             return False
-        
+
         # Confirm removal
         source_preview = resources_dir / panel_source_filename(panel_name)
         click.echo(f"Panel '{panel_name}' will be removed:")
@@ -1355,17 +1402,19 @@ def _remove_panel_from_system(panel_name: str) -> bool:
         if source_preview.exists():
             click.echo(f"  Original upload: {source_preview}")
             click.echo(f"  Size: {source_preview.stat().st_size} bytes")
-        
+
         # Ask for confirmation
         try:
-            confirm = input(f"\nAre you sure you want to remove panel '{panel_name}'? Type 'yes' to confirm: ").strip()
-            if confirm.lower() != 'yes':
+            confirm = input(
+                f"\nAre you sure you want to remove panel '{panel_name}'? Type 'yes' to confirm: "
+            ).strip()
+            if confirm.lower() != "yes":
                 click.echo("Panel removal cancelled.")
                 return False
         except (KeyboardInterrupt, EOFError):
             click.echo("\nPanel removal cancelled.")
             return False
-        
+
         # Remove processed BED and optional stored original upload
         panel_path.unlink()
         source_path = resources_dir / panel_source_filename(panel_name)
@@ -1377,7 +1426,7 @@ def _remove_panel_from_system(panel_name: str) -> bool:
         click.echo(f"Removed file: {panel_path}")
 
         return True
-        
+
     except Exception as e:
         click.echo(f"Error removing panel: {e}", err=True)
         return False
@@ -1386,43 +1435,41 @@ def _remove_panel_from_system(panel_name: str) -> bool:
 @main.command()
 @click.argument("panel_name", type=str)
 @click.option(
-    "--force",
-    "-f",
-    is_flag=True,
-    help="Skip confirmation prompt (use with caution)"
+    "--force", "-f", is_flag=True, help="Skip confirmation prompt (use with caution)"
 )
 def remove_panel(panel_name: str, force: bool) -> None:
     """Remove a custom panel from ROBIN.
-    
+
     PANEL_NAME: Name of the panel to remove
-    
+
     Built-in panels (rCNS2, AML) cannot be removed.
     """
     if not _get_user_acknowledgment():
         sys.exit(1)
-    
+
     # Validate panel name
     if not panel_name or not panel_name.strip():
         click.echo("Error: Panel name cannot be empty", err=True)
         sys.exit(1)
-    
+
     panel_name = panel_name.strip()
-    
+
     # Check if it's a built-in panel
     built_in_panels = {"rCNS2", "AML"}
     if panel_name in built_in_panels:
         click.echo(f"Error: Cannot remove built-in panel '{panel_name}'", err=True)
         click.echo("Built-in panels (rCNS2, AML) cannot be removed.", err=True)
         sys.exit(1)
-    
+
     # Get resources directory
     try:
         from robin import resources
+
         resources_dir = Path(resources.__file__).parent
     except ImportError:
         click.echo("Error: Could not locate ROBIN resources directory", err=True)
         sys.exit(1)
-    
+
     # Check if panel exists
     panel_filename = f"{panel_name}_panel_name_uniq.bed"
     panel_path = resources_dir / panel_filename
@@ -1441,18 +1488,20 @@ def remove_panel(panel_name: str, force: bool) -> None:
     if source_path.exists():
         click.echo(f"  Original upload: {source_path}")
         click.echo(f"  Size: {source_path.stat().st_size} bytes")
-    
+
     # Confirm removal unless --force is used
     if not force:
         try:
-            confirm = input(f"\nAre you sure you want to remove panel '{panel_name}'? Type 'yes' to confirm: ").strip()
-            if confirm.lower() != 'yes':
+            confirm = input(
+                f"\nAre you sure you want to remove panel '{panel_name}'? Type 'yes' to confirm: "
+            ).strip()
+            if confirm.lower() != "yes":
                 click.echo("Panel removal cancelled.")
                 return
         except (KeyboardInterrupt, EOFError):
             click.echo("\nPanel removal cancelled.")
             return
-    
+
     # Remove processed BED and optional stored original
     try:
         panel_path.unlink()
@@ -1472,19 +1521,19 @@ def list_panels() -> None:
     """List all available panels in ROBIN."""
     if not _get_user_acknowledgment():
         sys.exit(1)
-    
+
     panels = _get_available_panels()
-    
+
     click.echo("Available panels in ROBIN:\n")
-    
+
     # Built-in panels
     built_in_panels = ["rCNS2", "AML"]
     custom_panels = [p for p in panels if p not in built_in_panels]
-    
+
     click.echo("BUILT-IN PANELS:")
     for panel in built_in_panels:
         click.echo(f"  • {panel}")
-    
+
     if custom_panels:
         click.echo("\nCUSTOM PANELS:")
         for panel in custom_panels:
@@ -1492,10 +1541,12 @@ def list_panels() -> None:
     else:
         click.echo("\nCUSTOM PANELS:")
         click.echo("  (none)")
-    
+
     click.echo(f"\nTotal panels: {len(panels)}")
     click.echo("\nUsage: Use --target-panel <panel_name> in workflow commands")
-    click.echo("Example: robin workflow /path/to/bams --workflow mgmt,target --target-panel rCNS2")
+    click.echo(
+        "Example: robin workflow /path/to/bams --workflow mgmt,target --target-panel rCNS2"
+    )
     click.echo("\nPanel management:")
     click.echo("  • Add panel: robin add-panel <bed_file> <panel_name>")
     click.echo("  • Remove panel: robin remove-panel <panel_name>")
@@ -1569,49 +1620,59 @@ def list_job_types() -> None:
 def _validate_bed_file(bed_path: Path) -> Tuple[bool, List[str]]:
     """Validate BED file format and return (is_valid, error_messages)."""
     errors = []
-    
+
     if not bed_path.exists():
         errors.append(f"BED file does not exist: {bed_path}")
         return False, errors
-    
+
     if not bed_path.is_file():
         errors.append(f"Path is not a file: {bed_path}")
         return False, errors
-    
+
     try:
-        with open(bed_path, 'r') as f:
+        with open(bed_path, "r") as f:
             line_count = 0
             for line_num, line in enumerate(f, 1):
                 line = line.strip()
-                if not line or line.startswith('#'):
+                if not line or line.startswith("#"):
                     continue
-                
+
                 line_count += 1
-                parts = line.split('\t')
-                
+                parts = line.split("\t")
+
                 if len(parts) < 3:
-                    errors.append(f"Line {line_num}: Invalid BED format - must have at least 3 columns (chromosome, start, end)")
+                    errors.append(
+                        f"Line {line_num}: Invalid BED format - must have at least 3 columns (chromosome, start, end)"
+                    )
                     continue
-                
+
                 # Validate chromosome
                 chrom = parts[0]
-                if not chrom.startswith('chr'):
-                    errors.append(f"Line {line_num}: Chromosome must start with 'chr': {chrom}")
-                
+                if not chrom.startswith("chr"):
+                    errors.append(
+                        f"Line {line_num}: Chromosome must start with 'chr': {chrom}"
+                    )
+
                 # Validate start and end positions
                 try:
                     start = int(parts[1])
                     end = int(parts[2])
                     if start < 0 or end < 0:
-                        errors.append(f"Line {line_num}: Start and end positions must be non-negative")
+                        errors.append(
+                            f"Line {line_num}: Start and end positions must be non-negative"
+                        )
                     if start >= end:
-                        errors.append(f"Line {line_num}: Start position must be less than end position")
+                        errors.append(
+                            f"Line {line_num}: Start position must be less than end position"
+                        )
                 except ValueError:
-                    errors.append(f"Line {line_num}: Start and end positions must be integers")
-                
+                    errors.append(
+                        f"Line {line_num}: Start and end positions must be integers"
+                    )
+
                 # Column 4 may be a gene name, a placeholder ('.'), or absent (3-col BED).
                 # Placeholders are annotated from all_genes2.bed during add-panel.
-                
+
                 # Optional: validate 6-column BED format if present
                 if len(parts) >= 6:
                     # Validate score (5th column) - should be numeric or "."
@@ -1620,26 +1681,32 @@ def _validate_bed_file(bed_path: Path) -> Tuple[bool, List[str]]:
                         try:
                             score_int = int(score)
                             if score_int < 0:
-                                errors.append(f"Line {line_num}: Score must be non-negative")
+                                errors.append(
+                                    f"Line {line_num}: Score must be non-negative"
+                                )
                         except ValueError:
-                            errors.append(f"Line {line_num}: Score must be an integer or '.'")
-                    
+                            errors.append(
+                                f"Line {line_num}: Score must be an integer or '.'"
+                            )
+
                     # Validate strand (6th column) - should be + or -
                     strand = parts[5].strip()
-                    if strand not in ['+', '-']:
-                        errors.append(f"Line {line_num}: Strand must be '+' or '-', got: {strand}")
-                
+                    if strand not in ["+", "-"]:
+                        errors.append(
+                            f"Line {line_num}: Strand must be '+' or '-', got: {strand}"
+                        )
+
                 # Limit error reporting to first 10 errors
                 if len(errors) >= 10:
                     errors.append("... (additional errors truncated)")
                     break
-            
+
             if line_count == 0:
                 errors.append("BED file contains no valid data lines")
-    
+
     except Exception as e:
         errors.append(f"Error reading BED file: {e}")
-    
+
     return len(errors) == 0, errors
 
 
@@ -1689,14 +1756,18 @@ def _load_all_genes_dataframe(genes_bed: Path):
     return genes.reset_index(drop=True)
 
 
-def _annotate_placeholder_intervals_with_genes(panel_df, genes_df) -> List[Dict[str, object]]:
+def _annotate_placeholder_intervals_with_genes(
+    panel_df, genes_df
+) -> List[Dict[str, object]]:
     """Intersect placeholder panel intervals with the gene reference.
 
     Returns gene-body rows (chrom/start/end/gene) for each overlapping gene.
     """
     annotated: List[Dict[str, object]] = []
     seen_genes: set[str] = set()
-    genes_by_chrom = {chrom: group for chrom, group in genes_df.groupby("chrom", sort=False)}
+    genes_by_chrom = {
+        chrom: group for chrom, group in genes_df.groupby("chrom", sort=False)
+    }
 
     for chrom, intervals in panel_df.groupby("chrom", sort=False):
         gene_chrom = genes_by_chrom.get(chrom)
@@ -1742,18 +1813,18 @@ def _generate_unique_gene_bed(input_bed_path: Path, output_bed_path: Path) -> bo
             # Try 6-column format first (chrom, start, end, gene, score, strand)
             df = pd.read_csv(
                 input_bed_path,
-                sep='\t',
+                sep="\t",
                 header=None,
-                names=['chrom', 'start', 'end', 'gene', 'score', 'strand'],
-                comment='#'
+                names=["chrom", "start", "end", "gene", "score", "strand"],
+                comment="#",
             )
         except ValueError:
             # Fallback to 4-column / 3-column format
             raw = pd.read_csv(
                 input_bed_path,
-                sep='\t',
+                sep="\t",
                 header=None,
-                comment='#',
+                comment="#",
             )
             if raw.shape[1] < 3:
                 click.echo("Error: BED file must have at least 3 columns", err=True)
@@ -1761,7 +1832,7 @@ def _generate_unique_gene_bed(input_bed_path: Path, output_bed_path: Path) -> bo
             raw = raw.iloc[:, :4].copy()
             while raw.shape[1] < 4:
                 raw[raw.shape[1]] = "."
-            raw.columns = ['chrom', 'start', 'end', 'gene']
+            raw.columns = ["chrom", "start", "end", "gene"]
             df = raw
 
         df["chrom"] = df["chrom"].astype(str)
@@ -1832,17 +1903,14 @@ def _generate_unique_gene_bed(input_bed_path: Path, output_bed_path: Path) -> bo
         processed_df = pd.DataFrame(processed_regions)
 
         # Remove duplicates based on gene name (keep first occurrence)
-        processed_df = processed_df.drop_duplicates(subset=['gene'], keep='first')
+        processed_df = processed_df.drop_duplicates(subset=["gene"], keep="first")
 
         # Sort by chromosome and position
-        processed_df = processed_df.sort_values(['chrom', 'start', 'end'])
+        processed_df = processed_df.sort_values(["chrom", "start", "end"])
 
         # Write to output file in standard 4-column BED format
-        processed_df[['chrom', 'start', 'end', 'gene']].to_csv(
-            output_bed_path,
-            sep='\t',
-            header=False,
-            index=False
+        processed_df[["chrom", "start", "end", "gene"]].to_csv(
+            output_bed_path, sep="\t", header=False, index=False
         )
 
         click.echo(
@@ -1854,7 +1922,7 @@ def _generate_unique_gene_bed(input_bed_path: Path, output_bed_path: Path) -> bo
             )
         )
         return True
-        
+
     except Exception as e:
         click.echo(f"Error generating unique gene BED file: {e}", err=True)
         return False
@@ -1863,26 +1931,26 @@ def _generate_unique_gene_bed(input_bed_path: Path, output_bed_path: Path) -> bo
 def _get_available_panels() -> List[str]:
     """Get list of available panels from resources directory."""
     panels = ["rCNS2", "AML"]  # Built-in panels
-    
+
     try:
         # Try to find the resources directory without importing robin module
         # Look for the resources directory relative to this file
         current_file = Path(__file__)
         resources_dir = current_file.parent.parent / "robin" / "resources"
-        
+
         if resources_dir.exists():
             # Look for custom panels (files ending with _panel_name_uniq.bed)
             for bed_file in resources_dir.glob("*_panel_name_uniq.bed"):
                 panel_name = bed_file.stem.replace("_panel_name_uniq", "")
                 if panel_name not in panels:
                     panels.append(panel_name)
-            
+
             panels.sort()
-        
+
     except Exception:
         # Fallback to built-in panels only - don't fail on any import or other errors
         pass
-    
+
     return panels
 
 
@@ -2001,17 +2069,17 @@ def _register_panel_in_system(panel_name: str, bed_path: Path) -> bool:
     try:
         # Create a simple registration by copying the BED file to resources
         # and updating any necessary configuration files
-        
+
         # For now, we'll just ensure the file is in the right location
         # The actual registration happens when the panel is referenced by name
         # in analysis modules like target_analysis.py and fusion_work.py
-        
+
         click.echo(f"Panel '{panel_name}' registered successfully")
         click.echo(f"BED file location: {bed_path}")
         click.echo(f"Panel can now be used with --target-panel {panel_name}")
-        
+
         return True
-        
+
     except Exception as e:
         click.echo(f"Error registering panel: {e}", err=True)
         return False
@@ -2023,22 +2091,22 @@ def _register_panel_in_system(panel_name: str, bed_path: Path) -> bool:
 @click.option(
     "--validate-only",
     is_flag=True,
-    help="Only validate the BED file format without adding the panel"
+    help="Only validate the BED file format without adding the panel",
 )
 def add_panel(bed_file: Path, panel_name: str, validate_only: bool) -> None:
     """Add a custom panel to ROBIN.
-    
+
     BED_FILE: Path to the BED file containing panel regions
     PANEL_NAME: Name for the panel (e.g., 'CustomPanel', 'MyPanel')
-    
+
     The BED file should be in standard format with at least 3 columns:
     chromosome, start, end [, gene_name(s) [, score, strand]]
-    
+
     Supported formats:
     - 3-column: chr1, 1000000, 2000000
     - 4-column: chr1, 1000000, 2000000, GENE1
     - 6-column: chr1, 1000000, 2000000, GENE1, 0, +
-    
+
     Gene names can be comma-separated for regions covering multiple genes.
     When gene names are missing or '.', intervals are annotated by intersecting
     with the packaged all_genes2.bed reference. Named intervals keep their
@@ -2050,53 +2118,62 @@ def add_panel(bed_file: Path, panel_name: str, validate_only: bool) -> None:
     """
     if not _get_user_acknowledgment():
         sys.exit(1)
-    
+
     # Validate panel name
     if not panel_name or not panel_name.strip():
         click.echo("Error: Panel name cannot be empty", err=True)
         sys.exit(1)
-    
+
     panel_name = panel_name.strip()
-    
+
     # Check for reserved panel names
     reserved_names = {"rCNS2", "AML"}
     if panel_name in reserved_names:
-        click.echo(f"Error: Panel name '{panel_name}' is reserved. Please choose a different name.", err=True)
+        click.echo(
+            f"Error: Panel name '{panel_name}' is reserved. Please choose a different name.",
+            err=True,
+        )
         sys.exit(1)
-    
+
     click.echo(f"Validating BED file: {bed_file}")
-    
+
     # Validate BED file format
     is_valid, errors = _validate_bed_file(bed_file)
-    
+
     if not is_valid:
         click.echo("BED file validation failed:", err=True)
         for error in errors:
             click.echo(f"  • {error}", err=True)
         sys.exit(1)
-    
+
     click.echo("BED file format validation passed")
-    
+
     if validate_only:
         click.echo("Validation complete. Use without --validate-only to add the panel.")
         return
-    
+
     # Generate output paths
     try:
         from robin import resources
+
         resources_dir = Path(resources.__file__).parent
     except ImportError:
         click.echo("Error: Could not locate ROBIN resources directory", err=True)
         sys.exit(1)
-    
+
     output_filename = f"{panel_name}_panel_name_uniq.bed"
     output_path = resources_dir / output_filename
     source_path = resources_dir / panel_source_filename(panel_name)
 
     # Check if panel already exists
     if output_path.exists():
-        click.echo(f"Error: Panel '{panel_name}' already exists at {output_path}", err=True)
-        click.echo("Please choose a different panel name or remove the existing panel first.", err=True)
+        click.echo(
+            f"Error: Panel '{panel_name}' already exists at {output_path}", err=True
+        )
+        click.echo(
+            "Please choose a different panel name or remove the existing panel first.",
+            err=True,
+        )
         sys.exit(1)
     if source_path.exists():
         click.echo(f"Error: File already exists: {source_path}", err=True)
@@ -2137,7 +2214,9 @@ def add_panel(bed_file: Path, panel_name: str, validate_only: bool) -> None:
     click.echo(f"  Processed BED (unique genes): {output_path}")
     click.echo(f"  Original upload: {source_path}")
     click.echo(f"Usage: Use --target-panel {panel_name} in workflow commands")
-    click.echo(f"Example: robin workflow /path/to/bams --workflow mgmt,target --target-panel {panel_name}")
+    click.echo(
+        f"Example: robin workflow /path/to/bams --workflow mgmt,target --target-panel {panel_name}"
+    )
     click.echo(f"Remove: robin remove-panel {panel_name}")
 
 
@@ -2265,10 +2344,13 @@ def _create_ray_workflow_runner(
     try:
         # Prefer Ray Core implementation
         import asyncio
+
         from robin import workflow_ray as wrn
 
         class _RayCoreWrapper:
-            def __init__(self, reference: Optional[Path] = None, target_panel: str = None):
+            def __init__(
+                self, reference: Optional[Path] = None, target_panel: str = None
+            ):
                 self.manager = type(
                     "_DummyManager", (), {"get_priority_info": lambda _self: {}}
                 )()
@@ -2300,6 +2382,7 @@ def _create_ray_workflow_runner(
                 try:
                     # Try to get coordinator with retries
                     import time
+
                     from robin import workflow_ray as wrn
 
                     max_retries = 5
@@ -2360,6 +2443,7 @@ def _create_ray_workflow_runner(
                     )
                     # Try to get coordinator with retries
                     import time
+
                     from robin import workflow_ray as wrn
 
                     max_retries = 5
@@ -2442,6 +2526,7 @@ def _create_ray_workflow_runner(
                         f"[Finalize] Submitting target BAM finalization for sample '{sid_for_log}'..."
                     )
                     import time
+
                     from robin import workflow_ray as wrn
 
                     max_retries = 5
@@ -2592,8 +2677,8 @@ def _initialize_ray(num_cpus: Optional[int], include_dashboard: bool = True) -> 
 
         if not ray.is_initialized():
             # Suppress Ray logging to prevent interference with progress bars
-            import logging
             import json
+            import logging
 
             ray_logger = logging.getLogger("ray")
             ray_logger.setLevel(logging.ERROR)
@@ -2760,7 +2845,7 @@ def _register_handlers(
     center: str = None,
 ) -> None:
     """Register all workflow handlers with the runner."""
-    
+
     # Validate target panel
     available_panels = _get_available_panels()
     if target_panel not in available_panels:
@@ -2772,11 +2857,11 @@ def _register_handlers(
         # Don't reset to rCNS2 - allow custom panels to be used
     else:
         click.echo(f"Using target panel: {target_panel}")
-    
+
     # Track handlers that should accept target_panel
     handlers_requiring_panel = {"target", "fusion", "cnv", "itd"}
     registered_panel_handlers = set()
-    
+
     for (
         queue_type,
         job_type,
@@ -2799,7 +2884,12 @@ def _register_handlers(
                     handler, work_dir_path, ref_path, center_param, panel_param
                 ):
                     return lambda job: handler(
-                        job, work_dir=str(work_dir_path), reference=str(ref_path), target_panel=job.context.metadata.get("target_panel", panel_param)
+                        job,
+                        work_dir=str(work_dir_path),
+                        reference=str(ref_path),
+                        target_panel=job.context.metadata.get(
+                            "target_panel", panel_param
+                        ),
                     )
 
                 final_handler = create_handler_with_work_dir_and_ref(
@@ -2818,6 +2908,7 @@ def _register_handlers(
                     handler_func, work_dir, reference
                 )
             elif reference and job_type == "bed_conversion":
+
                 def create_bed_conversion_handler_with_work_dir_and_ref(
                     handler, work_dir_path, ref_path
                 ):
@@ -2881,22 +2972,37 @@ def _register_handlers(
                     )
                 else:
                     # Standard work directory handling for other job types
-                    def create_handler_with_work_dir(handler, work_dir_path, center_param):
+                    def create_handler_with_work_dir(
+                        handler, work_dir_path, center_param
+                    ):
                         return lambda job: handler(job, work_dir=str(work_dir_path))
 
-                    final_handler = create_handler_with_work_dir(handler_func, work_dir, center)
+                    final_handler = create_handler_with_work_dir(
+                        handler_func, work_dir, center
+                    )
         elif reference and job_type == "target":
             # Reference genome only (no work_dir needed) with target panel
             def create_handler_with_ref(handler, ref_path, center_param, panel_param):
-                return lambda job: handler(job, reference=str(ref_path), target_panel=job.context.metadata.get("target_panel", panel_param))
+                return lambda job: handler(
+                    job,
+                    reference=str(ref_path),
+                    target_panel=job.context.metadata.get("target_panel", panel_param),
+                )
 
-            final_handler = create_handler_with_ref(handler_func, reference, center, target_panel)
+            final_handler = create_handler_with_ref(
+                handler_func, reference, center, target_panel
+            )
         elif job_type in ["fusion", "cnv", "itd"]:
             # Analysis with target panel only (no work_dir needed)
             def create_analysis_handler_with_panel(handler, panel_param):
-                return lambda job: handler(job, target_panel=job.context.metadata.get("target_panel", panel_param))
+                return lambda job: handler(
+                    job,
+                    target_panel=job.context.metadata.get("target_panel", panel_param),
+                )
 
-            final_handler = create_analysis_handler_with_panel(handler_func, target_panel)
+            final_handler = create_analysis_handler_with_panel(
+                handler_func, target_panel
+            )
         elif job_type == "preprocessing":
             # Special handling for preprocessing to pass center
             def create_preprocessing_handler(handler, center_param):
@@ -2909,6 +3015,7 @@ def _register_handlers(
         # Track handlers that require target_panel
         if job_type in handlers_requiring_panel:
             import inspect
+
             sig = inspect.signature(handler_func)
             if "target_panel" in sig.parameters:
                 registered_panel_handlers.add(job_type)
@@ -2926,7 +3033,7 @@ def _register_handlers(
                 f"Warning: Failed to register handler for {queue_type}:{job_type}: {e}",
                 err=True,
             )
-    
+
     # Report on panel handler registration
     missing_panel_handlers = handlers_requiring_panel - registered_panel_handlers
     if missing_panel_handlers:
@@ -2935,7 +3042,9 @@ def _register_handlers(
             err=True,
         )
     else:
-        click.echo(f"Successfully registered panel-aware handlers: {registered_panel_handlers}")
+        click.echo(
+            f"Successfully registered panel-aware handlers: {registered_panel_handlers}"
+        )
 
 
 def _register_command_handlers(
@@ -3038,15 +3147,15 @@ def _display_workflow_config(
 ) -> None:
     """Display workflow configuration information."""
     _echo_styled(f"Center: {center}", level="info")
-    
+
     if no_process_existing:
-            _echo_styled(
+        _echo_styled(
             f"Starting workflow on {path} for BAM files (skipping existing files)..."
-            )
+        )
     else:
-            _echo_styled(
+        _echo_styled(
             f"Starting workflow on {path} for BAM files (will process existing files first)..."
-            )
+        )
 
     if work_dir:
         _echo_styled(f"Output directory: {work_dir}", level="info")
@@ -3099,9 +3208,7 @@ def _display_workflow_config(
         if queue_priority:
             click.echo(f"  - Queue priorities: {list(queue_priority)}")
     else:
-        _echo_styled(
-            "Distributed computing: Disabled (using threading)", level="warn"
-        )
+        _echo_styled("Distributed computing: Disabled (using threading)", level="warn")
         click.echo("Worker configuration:")
         if legacy_analysis_queue:
             click.echo(
@@ -3421,22 +3528,22 @@ def workflow(
 
         # Check for required model files first
         _check_models_or_exit()
-        
+
         # Validate reference genome if provided
         if reference:
             try:
                 # Import the validation function from matkit
                 from robin.analysis.utilities.matkit import _ensure_fasta_index
-                
+
                 # Convert Path to string for the validation function
                 ref_path = str(reference) if isinstance(reference, Path) else reference
-                
+
                 # Use click.echo for visibility even when log level is ERROR
                 _echo_styled(f"Validating reference genome: {reference}", level="info")
-                
+
                 # Validate and ensure index exists
                 _ensure_fasta_index(ref_path)
-                
+
                 _echo_styled(
                     f"Reference genome validated and indexed: {reference}",
                     level="success",
@@ -3449,7 +3556,7 @@ def workflow(
                 )
                 click.echo(f"❌ {error_msg}", err=True)
                 sys.exit(1)
-        
+
         # Require user acknowledgment before proceeding
         if not _get_user_acknowledgment():
             sys.exit(1)
@@ -3520,7 +3627,9 @@ def workflow(
                         )
 
                     if preset in {"p2i", "standard"}:
-                        init_kwargs["num_cpus"] = 2 if preset == "p2i" else 6  # Increased from 4 to 6 for standard
+                        init_kwargs["num_cpus"] = (
+                            2 if preset == "p2i" else 6
+                        )  # Increased from 4 to 6 for standard
                     try:
                         ray.init(**init_kwargs)
                     except TypeError:
@@ -3570,6 +3679,7 @@ def workflow(
             # Run Ray Core implementation
             try:
                 import asyncio
+
                 from robin import workflow_ray as wrn
 
                 asyncio.run(
@@ -3606,6 +3716,7 @@ def workflow(
                 # Attempt to shutdown Ray gracefully
                 try:
                     import ray
+
                     if ray.is_initialized():
                         print("[SHUTDOWN] Shutting down Ray coordinator...")
                         # Get the coordinator and shutdown gracefully
@@ -3690,7 +3801,9 @@ def workflow(
                 click.echo(f"Job deduplication enabled for: {valid_dedup_jobs}")
 
         # Register handlers and command handlers
-        _register_handlers(runner, legacy_analysis_queue, work_dir, target_panel, reference, center)
+        _register_handlers(
+            runner, legacy_analysis_queue, work_dir, target_panel, reference, center
+        )
         _register_command_handlers(runner, command_map, legacy_analysis_queue)
 
         # For Ray workflow, reinitialize processors after handlers are registered
@@ -3753,7 +3866,9 @@ def workflow(
                         workflow_steps=workflow_steps,
                         monitored_directory=str(work_dir) if work_dir else str(path),
                         center=center,
-                        workflow_toml=str(toml_config.resolve()) if toml_config else None,
+                        workflow_toml=(
+                            str(toml_config.resolve()) if toml_config else None
+                        ),
                     )
 
                     # Now install workflow hooks for real-time monitoring

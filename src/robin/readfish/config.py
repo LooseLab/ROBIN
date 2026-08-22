@@ -35,18 +35,24 @@ class ReadfishConfig:
     start_wait_poll_seconds: float = 10.0
 
     @classmethod
-    def from_mapping(cls, data: Optional[Mapping[str, Any]]) -> Optional[ReadfishConfig]:
+    def from_mapping(
+        cls, data: Optional[Mapping[str, Any]]
+    ) -> Optional[ReadfishConfig]:
         """Return a config when a ``[readfish]`` table is present."""
         if not isinstance(data, Mapping):
             return None
         if not data:
             return cls()
 
-        dorado_address = _optional_str(data.get("dorado_address")) or DEFAULT_DORADO_ADDRESS
+        dorado_address = (
+            _optional_str(data.get("dorado_address")) or DEFAULT_DORADO_ADDRESS
+        )
         log_dir = _optional_str(data.get("log_dir"))
         minimap2_index = _optional_str(data.get("minimap2_index"))
         dorado_config = _optional_str(data.get("dorado_config"))
-        readfish_executable = _optional_str(data.get("readfish_executable")) or "readfish"
+        readfish_executable = (
+            _optional_str(data.get("readfish_executable")) or "readfish"
+        )
         live_region_name = _optional_str(data.get("live_region_name")) or "robin_panel"
         mappy_rs_threads = max(4, int(data.get("mappy_rs_threads", 4)))
         live_toml_max_bin_width_bp = _positive_int(
@@ -80,7 +86,9 @@ class ReadfishConfig:
         else:
             base = output_dir
         base.mkdir(parents=True, exist_ok=True)
-        safe_sample = "".join(ch if ch.isalnum() or ch in "-_" else "_" for ch in sample_id)
+        safe_sample = "".join(
+            ch if ch.isalnum() or ch in "-_" else "_" for ch in sample_id
+        )
         return base / f"readfish_{safe_sample}.log"
 
 

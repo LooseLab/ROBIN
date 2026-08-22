@@ -12,7 +12,11 @@ from typing import Any, Optional
 from nicegui import run, ui
 
 from robin.gui.theme import client_timer, stop_timer
-from robin.minknow.config import MinKnowSettings, preset_path_from_environ, workflow_toml_from_environ
+from robin.minknow.config import (
+    MinKnowSettings,
+    preset_path_from_environ,
+    workflow_toml_from_environ,
+)
 from robin.minknow.monitor import (
     MinKnowPollResult,
     fetch_sequencer_status,
@@ -34,25 +38,79 @@ from robin.minknow.sample_id import (
 )
 from robin.minknow.stream_monitor import acquire_stream_monitor
 from robin.minknow.toml_config import MinKnowWorkflowConfig, load_minknow_toml
+from robin.minknow.watch import process_auto_watch, watch_position_run
 from robin.minknow.workflow_refs import (
     load_workflow_config_for_refs,
     workflow_context_from_runner,
 )
 from robin.workflow_config import load_minknow_from_workflow_toml
-from robin.minknow.watch import process_auto_watch, watch_position_run
 
 LOGGER = logging.getLogger(__name__)
 
 _TABLE_COLUMNS = [
-    {"name": "position", "label": "Position", "field": "position", "sortable": True, "align": "left"},
-    {"name": "state", "label": "State", "field": "state", "sortable": True, "align": "left"},
-    {"name": "protocol_state", "label": "Protocol", "field": "protocol_state", "sortable": True, "align": "left"},
-    {"name": "sample_id", "label": "Sample ID", "field": "sample_id", "sortable": True, "align": "left"},
-    {"name": "protocol_run_id", "label": "Run ID", "field": "protocol_run_id", "sortable": True, "align": "left"},
-    {"name": "flow_cell_id", "label": "Flow cell", "field": "flow_cell_id", "sortable": True, "align": "left"},
-    {"name": "passed_reads", "label": "Passed reads", "field": "passed_reads", "sortable": True, "align": "left"},
-    {"name": "watch_path", "label": "Watch path", "field": "watch_path", "sortable": True, "align": "left"},
-    {"name": "actions", "label": "", "field": "actions", "sortable": False, "align": "right"},
+    {
+        "name": "position",
+        "label": "Position",
+        "field": "position",
+        "sortable": True,
+        "align": "left",
+    },
+    {
+        "name": "state",
+        "label": "State",
+        "field": "state",
+        "sortable": True,
+        "align": "left",
+    },
+    {
+        "name": "protocol_state",
+        "label": "Protocol",
+        "field": "protocol_state",
+        "sortable": True,
+        "align": "left",
+    },
+    {
+        "name": "sample_id",
+        "label": "Sample ID",
+        "field": "sample_id",
+        "sortable": True,
+        "align": "left",
+    },
+    {
+        "name": "protocol_run_id",
+        "label": "Run ID",
+        "field": "protocol_run_id",
+        "sortable": True,
+        "align": "left",
+    },
+    {
+        "name": "flow_cell_id",
+        "label": "Flow cell",
+        "field": "flow_cell_id",
+        "sortable": True,
+        "align": "left",
+    },
+    {
+        "name": "passed_reads",
+        "label": "Passed reads",
+        "field": "passed_reads",
+        "sortable": True,
+        "align": "left",
+    },
+    {
+        "name": "watch_path",
+        "label": "Watch path",
+        "field": "watch_path",
+        "sortable": True,
+        "align": "left",
+    },
+    {
+        "name": "actions",
+        "label": "",
+        "field": "actions",
+        "sortable": False,
+        "align": "right",
+    },
 ]
 
 _ACTIONS_SLOT = """
@@ -104,7 +162,9 @@ def _workflow_toml_path(
     return None
 
 
-def _load_workflow_minknow_config(path: Optional[Path]) -> Optional[MinKnowWorkflowConfig]:
+def _load_workflow_minknow_config(
+    path: Optional[Path],
+) -> Optional[MinKnowWorkflowConfig]:
     if path is None or not path.is_file():
         return None
     try:
@@ -283,10 +343,14 @@ def add_minknow_sequencer_section(
 
             manual_controls = ui.row().classes("w-full gap-2 flex-wrap items-end")
             with manual_controls:
-                host_input = ui.input(
-                    "MinKNOW host",
-                    value=state["host"],
-                ).props("outlined dense").classes("min-w-[12rem] flex-1")
+                host_input = (
+                    ui.input(
+                        "MinKNOW host",
+                        value=state["host"],
+                    )
+                    .props("outlined dense")
+                    .classes("min-w-[12rem] flex-1")
+                )
                 enabled_switch = ui.switch(
                     "Monitor",
                     value=state["enabled"],
@@ -350,10 +414,14 @@ def add_minknow_sequencer_section(
                         position_picker_row = ui.row().classes(
                             "w-full gap-2 flex-wrap items-center"
                         )
-                        position_fallback_input = ui.input(
-                            "Position",
-                            placeholder="e.g. P2S_000000-A",
-                        ).props("outlined dense").classes("w-full")
+                        position_fallback_input = (
+                            ui.input(
+                                "Position",
+                                placeholder="e.g. P2S_000000-A",
+                            )
+                            .props("outlined dense")
+                            .classes("w-full")
+                        )
 
                         with ui.expansion(
                             "Run settings",
@@ -367,10 +435,14 @@ def add_minknow_sequencer_section(
                                         "([minknow] section) or set host and preset "
                                         "path below."
                                     ).classes("text-xs text-slate-500")
-                                    preset_input = ui.input(
-                                        "Preset TOML",
-                                        value=state.get("workflow_toml") or "",
-                                    ).props("outlined dense").classes("w-full")
+                                    preset_input = (
+                                        ui.input(
+                                            "Preset TOML",
+                                            value=state.get("workflow_toml") or "",
+                                        )
+                                        .props("outlined dense")
+                                        .classes("w-full")
+                                    )
                                     preset_input.on(
                                         "blur",
                                         lambda: state.update(
@@ -383,45 +455,65 @@ def add_minknow_sequencer_section(
                                     )
 
                                 with ui.row().classes("w-full gap-2 flex-wrap"):
-                                    experiment_group_input = ui.input(
-                                        "Experiment group",
-                                        value="ROBIN_RUN",
-                                    ).props("outlined dense readonly").classes(
-                                        "flex-1 min-w-[12rem]"
+                                    experiment_group_input = (
+                                        ui.input(
+                                            "Experiment group",
+                                            value="ROBIN_RUN",
+                                        )
+                                        .props("outlined dense readonly")
+                                        .classes("flex-1 min-w-[12rem]")
                                     )
-                                    duration_input = ui.number(
-                                        "Duration (hours)",
-                                        value=24,
-                                        min=0.1,
-                                        step=0.5,
-                                    ).props("outlined dense").classes(
-                                        "flex-1 min-w-[10rem]"
+                                    duration_input = (
+                                        ui.number(
+                                            "Duration (hours)",
+                                            value=24,
+                                            min=0.1,
+                                            step=0.5,
+                                        )
+                                        .props("outlined dense")
+                                        .classes("flex-1 min-w-[10rem]")
                                     )
 
-                                kit_input = ui.input(
-                                    "Sequencing kit",
-                                    value="SQK-LSK114",
-                                ).props("outlined dense readonly").classes("w-full")
-                                simplex_input = ui.input(
-                                    "Basecall simplex model",
-                                ).props("outlined dense readonly").classes("w-full")
-                                modified_input = ui.input(
-                                    "Modified models (comma-separated)",
-                                ).props("outlined dense readonly").classes("w-full")
+                                kit_input = (
+                                    ui.input(
+                                        "Sequencing kit",
+                                        value="SQK-LSK114",
+                                    )
+                                    .props("outlined dense readonly")
+                                    .classes("w-full")
+                                )
+                                simplex_input = (
+                                    ui.input(
+                                        "Basecall simplex model",
+                                    )
+                                    .props("outlined dense readonly")
+                                    .classes("w-full")
+                                )
+                                modified_input = (
+                                    ui.input(
+                                        "Modified models (comma-separated)",
+                                    )
+                                    .props("outlined dense readonly")
+                                    .classes("w-full")
+                                )
                                 with ui.row().classes("w-full gap-2 flex-wrap"):
-                                    bam_reads_input = ui.number(
-                                        "BAM reads per file",
-                                        value=50_000,
-                                        min=1,
-                                        step=1000,
-                                    ).props("outlined dense readonly").classes(
-                                        "flex-1 min-w-[12rem]"
+                                    bam_reads_input = (
+                                        ui.number(
+                                            "BAM reads per file",
+                                            value=50_000,
+                                            min=1,
+                                            step=1000,
+                                        )
+                                        .props("outlined dense readonly")
+                                        .classes("flex-1 min-w-[12rem]")
                                     )
                                     if show_simulation_field:
-                                        simulation_input = ui.input(
-                                            "Simulation bulk FAST5",
-                                        ).props("outlined dense").classes(
-                                            "flex-1 min-w-[12rem]"
+                                        simulation_input = (
+                                            ui.input(
+                                                "Simulation bulk FAST5",
+                                            )
+                                            .props("outlined dense")
+                                            .classes("flex-1 min-w-[12rem]")
                                         )
 
                                 reference_label = ui.label("").classes(
@@ -434,10 +526,14 @@ def add_minknow_sequencer_section(
                                     "text-xs text-slate-500 w-full"
                                 )
 
-                        sample_id_input = ui.input(
-                            "Sample ID / MinKNOW RUN ID",
-                            placeholder="Registered MD5 or MinKNOW RUN ID",
-                        ).props("outlined dense").classes("w-full")
+                        sample_id_input = (
+                            ui.input(
+                                "Sample ID / MinKNOW RUN ID",
+                                placeholder="Registered MD5 or MinKNOW RUN ID",
+                            )
+                            .props("outlined dense")
+                            .classes("w-full")
+                        )
 
                         with ui.expansion(
                             "Register sample identifiers",
@@ -454,48 +550,70 @@ def add_minknow_sequencer_section(
                                 "text-xs text-slate-600 dark:text-slate-400 w-full mb-2"
                             )
 
-                            id_mode = ui.toggle(
-                                {
-                                    "custom": "Use my sample ID",
-                                    "md5": "Generate MD5 ID",
-                                },
-                                value="custom",
-                            ).props("no-caps dense").classes("w-full")
+                            id_mode = (
+                                ui.toggle(
+                                    {
+                                        "custom": "Use my sample ID",
+                                        "md5": "Generate MD5 ID",
+                                    },
+                                    value="custom",
+                                )
+                                .props("no-caps dense")
+                                .classes("w-full")
+                            )
 
                             md5_fields = ui.column().classes("w-full min-w-0 gap-2")
                             with md5_fields:
-                                gen_test_id = ui.input(
-                                    "Test ID (required for MD5)"
-                                ).props("outlined dense").classes("w-full")
+                                gen_test_id = (
+                                    ui.input("Test ID (required for MD5)")
+                                    .props("outlined dense")
+                                    .classes("w-full")
+                                )
                             md5_fields.set_visibility(False)
 
                             custom_fields = ui.column().classes("w-full min-w-0 gap-2")
                             with custom_fields:
-                                custom_run_id = ui.input(
-                                    "MinKNOW RUN ID (required)",
-                                    placeholder="e.g. HOSP-2024-8841",
-                                ).props("outlined dense").classes("w-full font-mono")
-                                custom_test_id = ui.input(
-                                    "Test ID (optional)"
-                                ).props("outlined dense").classes("w-full")
+                                custom_run_id = (
+                                    ui.input(
+                                        "MinKNOW RUN ID (required)",
+                                        placeholder="e.g. HOSP-2024-8841",
+                                    )
+                                    .props("outlined dense")
+                                    .classes("w-full font-mono")
+                                )
+                                custom_test_id = (
+                                    ui.input("Test ID (optional)")
+                                    .props("outlined dense")
+                                    .classes("w-full")
+                                )
 
-                            gen_first = ui.input("First name (optional)").props(
-                                "outlined dense"
-                            ).classes("w-full")
-                            gen_last = ui.input("Last name (optional)").props(
-                                "outlined dense"
-                            ).classes("w-full")
+                            gen_first = (
+                                ui.input("First name (optional)")
+                                .props("outlined dense")
+                                .classes("w-full")
+                            )
+                            gen_last = (
+                                ui.input("Last name (optional)")
+                                .props("outlined dense")
+                                .classes("w-full")
+                            )
                             gen_dob = ui.date_input(
                                 "Date of birth (required when encrypting)",
                                 value=None,
                             ).classes("w-full")
-                            gen_nhs = ui.input(
-                                "Hospital number (optional)"
-                            ).props("outlined dense").classes("w-full")
-                            gen_notes = ui.textarea(
-                                "Notes (optional)",
-                                placeholder="Free-text notes stored encrypted with identifiers",
-                            ).props("outlined dense autogrow").classes("w-full")
+                            gen_nhs = (
+                                ui.input("Hospital number (optional)")
+                                .props("outlined dense")
+                                .classes("w-full")
+                            )
+                            gen_notes = (
+                                ui.textarea(
+                                    "Notes (optional)",
+                                    placeholder="Free-text notes stored encrypted with identifiers",
+                                )
+                                .props("outlined dense autogrow")
+                                .classes("w-full")
+                            )
 
                             def _sync_id_mode() -> None:
                                 is_md5 = id_mode.value == "md5"
@@ -602,9 +720,13 @@ def add_minknow_sequencer_section(
                     if not name:
                         return False
                     result = state.get("last_result")
-                    status = getattr(result, "status", None) if result is not None else None
+                    status = (
+                        getattr(result, "status", None) if result is not None else None
+                    )
                     if status is not None:
-                        from robin.minknow.watch import position_has_active_run as _row_active
+                        from robin.minknow.watch import (
+                            position_has_active_run as _row_active,
+                        )
 
                         for position in status.positions:
                             if position.name == name:
@@ -659,13 +781,17 @@ def add_minknow_sequencer_section(
                                 radio_value = (
                                     preferred if preferred in names else names[0]
                                 )
-                                state["position_radio"] = ui.radio(
-                                    names,
-                                    value=radio_value,
-                                    on_change=lambda e: _apply_selected_position(
-                                        e.value
-                                    ),
-                                ).props("inline").classes("w-full")
+                                state["position_radio"] = (
+                                    ui.radio(
+                                        names,
+                                        value=radio_value,
+                                        on_change=lambda e: _apply_selected_position(
+                                            e.value
+                                        ),
+                                    )
+                                    .props("inline")
+                                    .classes("w-full")
+                                )
                                 position_fallback_input.set_visibility(False)
                                 _apply_selected_position(radio_value)
                             else:
@@ -726,9 +852,7 @@ def add_minknow_sequencer_section(
 
                 def _build_preset_from_form(base: RobinRunPreset) -> RobinRunPreset:
                     if simulation_input is not None:
-                        simulation_path = (
-                            (simulation_input.value or "").strip() or None
-                        )
+                        simulation_path = (simulation_input.value or "").strip() or None
                     else:
                         simulation_path = base.simulation_bulk_file
                     position = (state.get("selected_position") or "").strip()
@@ -749,9 +873,7 @@ def add_minknow_sequencer_section(
             summary_label = ui.label("Waiting for stream connection…").classes(
                 "classification-insight-foot w-full"
             )
-            meta_label = ui.label("").classes(
-                "text-xs workflow-monitor-meta w-full"
-            )
+            meta_label = ui.label("").classes("text-xs workflow-monitor-meta w-full")
             warning_label = ui.label("").classes(
                 "text-xs text-amber-700 dark:text-amber-300 w-full"
             )
@@ -781,9 +903,13 @@ def add_minknow_sequencer_section(
                     LOGGER.debug("MinKNOW actions slot failed", exc_info=True)
 
                 if not compact:
+
                     def _on_position_row_click(event) -> None:
                         row = event.args
-                        if isinstance(event.args, (list, tuple)) and len(event.args) > 1:
+                        if (
+                            isinstance(event.args, (list, tuple))
+                            and len(event.args) > 1
+                        ):
                             row = event.args[1]
                         if not isinstance(row, dict):
                             return
@@ -839,9 +965,7 @@ def add_minknow_sequencer_section(
 
         if result.error:
             error_label.set_text(result.error)
-            summary_label.set_text(
-                format_poll_summary(result, host=state["host"])
-            )
+            summary_label.set_text(format_poll_summary(result, host=state["host"]))
             meta_label.set_text("")
             warning_label.set_text("")
             stream_indicator.set_visibility(False)
@@ -1044,7 +1168,11 @@ def add_minknow_sequencer_section(
             )
             return
 
-        mode = (start_controls.get("id_mode").value if start_controls.get("id_mode") else None) or "custom"
+        mode = (
+            start_controls.get("id_mode").value
+            if start_controls.get("id_mode")
+            else None
+        ) or "custom"
         sample_id_field = (start_controls["sample_id_input"].value or "").strip()
         custom_run = (
             (start_controls["custom_run_id"].value or "").strip()

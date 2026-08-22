@@ -4,17 +4,20 @@ Variant Analysis Section for ROBIN Reports.
 This module handles the Pathogenic Variant analysis section of the report.
 """
 
-import os
 import logging
+import os
 import re
+
 import pandas as pd
-from reportlab.lib.units import inch
-from reportlab.platypus import Paragraph, Spacer, Table, TableStyle, PageBreak
-from reportlab.lib.styles import ParagraphStyle
 from reportlab.lib.colors import HexColor
-from ..sections.base import ReportSection
+from reportlab.lib.styles import ParagraphStyle
+from reportlab.lib.units import inch
+from reportlab.platypus import PageBreak, Paragraph, Spacer, Table, TableStyle
+
 from robin import resources
 from robin.analysis.variant_classification import is_clinvar_significant_from_info
+
+from ..sections.base import ReportSection
 
 logger = logging.getLogger(__name__)
 
@@ -80,7 +83,9 @@ class VariantAnalysis:
                     if self._is_clinvar_significant(info_str):
                         pathogenic_count += 1
                         logger.debug(
-                            "Found ClinVar-significant variant at %s:%s", fields[0], fields[1]
+                            "Found ClinVar-significant variant at %s:%s",
+                            fields[0],
+                            fields[1],
                         )
 
                         variant_data = {
@@ -455,7 +460,9 @@ class VariantsSection(ReportSection):
                 "Note: Variants are classified as pathogenic based on ClinVar annotations. "
                 "Disease associations are derived from ClinVar's CLNDN field where available."
             )
-            clinvar_release = getattr(self.report, "clinvar_metadata", {}).get("file_date")
+            clinvar_release = getattr(self.report, "clinvar_metadata", {}).get(
+                "file_date"
+            )
             if clinvar_release:
                 note_text += f" ClinVar release: {clinvar_release}."
             self.elements.append(Paragraph(note_text, note_style))

@@ -85,7 +85,9 @@ def _file_ok(path: Path) -> bool:
     return path.exists() and path.is_file() and path.stat().st_size > 0
 
 
-def _download_url_to_file(url: str, target_path: Path, *, timeout_s: int = 3600) -> None:
+def _download_url_to_file(
+    url: str, target_path: Path, *, timeout_s: int = 3600
+) -> None:
     """Download ``url`` to ``target_path`` atomically (temp file + rename)."""
     target_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -144,7 +146,9 @@ def _download_url_to_file(url: str, target_path: Path, *, timeout_s: int = 3600)
                         downloaded += len(chunk)
                         if total and downloaded % (50 * chunk_size) < chunk_size:
                             pct = 100.0 * downloaded / total
-                            print(f"  MARLIN download: {pct:.1f}% ({downloaded}/{total} bytes)")
+                            print(
+                                f"  MARLIN download: {pct:.1f}% ({downloaded}/{total} bytes)"
+                            )
 
         if total is not None and downloaded != total:
             raise RuntimeError(
@@ -203,13 +207,20 @@ def resolve_model_path(
     download_url = url or os.environ.get(ENV_MODEL_URL) or DEFAULT_MARLIN_MODEL_URL
     try:
         _download_url_to_file(download_url, path)
-    except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, OSError) as exc:
+    except (
+        urllib.error.URLError,
+        urllib.error.HTTPError,
+        TimeoutError,
+        OSError,
+    ) as exc:
         raise RuntimeError(
             f"Failed to download MARLIN model from {download_url} to {path}: {exc}"
         ) from exc
 
     if not _file_ok(path):
-        raise RuntimeError(f"MARLIN model download completed but file is missing: {path}")
+        raise RuntimeError(
+            f"MARLIN model download completed but file is missing: {path}"
+        )
     return path
 
 

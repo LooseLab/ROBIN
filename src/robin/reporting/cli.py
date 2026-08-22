@@ -4,11 +4,12 @@ cli.py
 Command-line interface for the ROBIN report generation tool.
 """
 
-import sys
-import click
 import logging
+import sys
 from pathlib import Path
 from typing import Optional
+
+import click
 
 from robin.reporting.report import create_pdf
 

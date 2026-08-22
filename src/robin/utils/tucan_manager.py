@@ -60,7 +60,9 @@ def get_default_num_cpgs() -> int:
     try:
         value = int(raw)
     except ValueError as exc:
-        raise ValueError(f"Invalid {ENV_NUM_CPGS}={raw!r}; expected an integer") from exc
+        raise ValueError(
+            f"Invalid {ENV_NUM_CPGS}={raw!r}; expected an integer"
+        ) from exc
     if value <= 0:
         raise ValueError(f"{ENV_NUM_CPGS} must be positive, got {value}")
     return value
@@ -251,7 +253,9 @@ def resolve_model_zip(
     model_dir = cache / MODEL_DIR_NAME
     if not _dir_has_model_assets(model_dir):
         _download_hf_model(model_dir)
-    _create_model_zip(model_dir, path if path.parent == cache else cache / MODEL_ZIP_NAME)
+    _create_model_zip(
+        model_dir, path if path.parent == cache else cache / MODEL_ZIP_NAME
+    )
     # If caller requested a custom path outside cache, copy/create there.
     final = path if path.suffix.lower() == ".zip" else cache / MODEL_ZIP_NAME
     if final != (cache / MODEL_ZIP_NAME) and _file_ok(cache / MODEL_ZIP_NAME):

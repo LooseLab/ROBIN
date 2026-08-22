@@ -6,13 +6,14 @@ This module provides functionality to create and update master.csv files
 for each sample, tracking comprehensive metadata across multiple BAM files.
 """
 
+import logging
 import os
 import tempfile
-import pandas as pd
-from typing import Dict, Any
-from dataclasses import dataclass
-import logging
 import time
+from dataclasses import dataclass
+from typing import Any, Dict
+
+import pandas as pd
 
 # Per-sample file lock for master.csv read-modify-write
 from robin.analysis.master_bed_generator import FileLock
@@ -38,9 +39,11 @@ class MasterCSVManager:
         """
         df = pd.DataFrame([data])
         csv_dir = os.path.dirname(csv_path)
-        temp_fd, temp_path = tempfile.mkstemp(dir=csv_dir, prefix='.master_', suffix='.csv.tmp')
+        temp_fd, temp_path = tempfile.mkstemp(
+            dir=csv_dir, prefix=".master_", suffix=".csv.tmp"
+        )
         try:
-            with os.fdopen(temp_fd, 'w') as f:
+            with os.fdopen(temp_fd, "w") as f:
                 df.to_csv(f, index=False)
                 f.flush()
                 os.fsync(f.fileno())
@@ -84,7 +87,7 @@ class MasterCSVManager:
     def _load_existing_data(self, csv_path: str) -> Dict[str, Any]:
         """
         Load existing data from CSV or create default structure.
-        
+
         No read locking is used because:
         1. Writers use atomic write-and-rename, so readers never see partial files
         2. Worst case is reading slightly stale data (acceptable for monitoring)
@@ -92,25 +95,35 @@ class MasterCSVManager:
         """
         # Start with default structure to ensure all fields are present
         data = self._get_default_structure()
-        
+
         if os.path.exists(csv_path):
             try:
                 # Read without locking - atomic writes ensure we never see partial data
                 df = pd.read_csv(csv_path)
                 if not df.empty:
                     csv_data = df.iloc[0].to_dict()
-                    
+
                     # Merge CSV data with default structure (CSV data takes precedence)
                     for key, value in csv_data.items():
-                        if value is not None and not (isinstance(value, float) and pd.isna(value)):
+                        if value is not None and not (
+                            isinstance(value, float) and pd.isna(value)
+                        ):
                             data[key] = value
-                    
+
                     # Ensure string fields are properly converted to strings
                     # to prevent float objects from being passed to split() methods
                     string_fields = [
-                        "devices", "basecall_models", "modbase_models", "run_time", "flowcell_ids",
-                        "run_info_run_time", "run_info_device", "run_info_model", 
-                        "run_info_flow_cell", "samples_overview_job_types", "analysis_panel"
+                        "devices",
+                        "basecall_models",
+                        "modbase_models",
+                        "run_time",
+                        "flowcell_ids",
+                        "run_info_run_time",
+                        "run_info_device",
+                        "run_info_model",
+                        "run_info_flow_cell",
+                        "samples_overview_job_types",
+                        "analysis_panel",
                     ]
                     for field in string_fields:
                         if field in data and data[field] is not None:
@@ -119,7 +132,7 @@ class MasterCSVManager:
                 print(f"Warning: Error reading existing CSV: {e}")
 
         return data
-    
+
     def _get_default_structure(self) -> Dict[str, Any]:
         return {
             "counter_bam_passed": 0,
@@ -324,7 +337,8 @@ class MasterCSVManager:
                 existing_data = self._load_existing_data(master_csv_path)
                 existing_data["samples_overview_active_jobs"] = int(
                     overview.get(
-                        "active_jobs", existing_data.get("samples_overview_active_jobs", 0)
+                        "active_jobs",
+                        existing_data.get("samples_overview_active_jobs", 0),
                     )
                 )
                 existing_data["samples_overview_pending_jobs"] = int(
@@ -335,7 +349,8 @@ class MasterCSVManager:
                 )
                 existing_data["samples_overview_total_jobs"] = int(
                     overview.get(
-                        "total_jobs", existing_data.get("samples_overview_total_jobs", 0)
+                        "total_jobs",
+                        existing_data.get("samples_overview_total_jobs", 0),
                     )
                 )
                 existing_data["samples_overview_completed_jobs"] = int(
@@ -346,7 +361,8 @@ class MasterCSVManager:
                 )
                 existing_data["samples_overview_failed_jobs"] = int(
                     overview.get(
-                        "failed_jobs", existing_data.get("samples_overview_failed_jobs", 0)
+                        "failed_jobs",
+                        existing_data.get("samples_overview_failed_jobs", 0),
                     )
                 )
                 jt_value = overview.get("job_types")
@@ -374,7 +390,9 @@ class MasterCSVManager:
                 try:
                     last_seen = float(overview.get("last_seen"))
                 except Exception:
-                    last_seen = float(existing_data.get("samples_overview_last_seen", 0.0))
+                    last_seen = float(
+                        existing_data.get("samples_overview_last_seen", 0.0)
+                    )
                 existing_data["samples_overview_last_seen"] = last_seen
                 self._write_csv_internal(existing_data, master_csv_path)
 

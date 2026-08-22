@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 import asyncio
-from pathlib import Path
-from typing import Any, Dict, List, Optional
 import csv
 import logging
 import zlib
+from pathlib import Path
+from typing import Any, Dict, List, Optional
 
 # Classification charts — design.md §8.8 (ECharts; brand / diagnostic palette)
 _BRAND_GREEN = "#10b981"
@@ -146,7 +146,9 @@ def _apply_palette_to_ts_chart(ts: Any, palette: Dict[str, str]) -> None:
 
 def _active_tumour_palette() -> List[str]:
     """Categorical bar/line colours: deep on light UI, brighter on dark UI."""
-    return _CLASS_TUMOUR_PALETTE_DARK if _is_dark_mode() else _CLASS_TUMOUR_PALETTE_LIGHT
+    return (
+        _CLASS_TUMOUR_PALETTE_DARK if _is_dark_mode() else _CLASS_TUMOUR_PALETTE_LIGHT
+    )
 
 
 def _tumour_category_color(index: int) -> str:
@@ -160,6 +162,7 @@ def _color_for_class_name(name: str) -> str:
     pal = _active_tumour_palette()
     raw = zlib.adler32(name.encode("utf-8", errors="replace")) & 0xFFFFFFFF
     return pal[raw % len(pal)]
+
 
 try:
     from robin.classification_config import (
@@ -303,9 +306,9 @@ def _bar_chart_mark_line(
 # Import section visibility helpers
 try:
     from robin.gui.config import (
+        CLASSIFICATION_STEPS,
         get_visible_classification_steps,
         launcher_visibility_context,
-        CLASSIFICATION_STEPS,
     )
 except ImportError:
     get_visible_classification_steps = lambda *a, **k: {"sturgeon", "nanodx", "random_forest", "pannanodx", "marlin", "lamprey", "tucan"}  # type: ignore[assignment]
@@ -330,7 +333,7 @@ def add_classification_section(sample_dir: Path, launcher: Any = None) -> None:
     )
     if not enabled_classification_steps:
         return
-    
+
     # Map workflow step names to tool display names
     tool_to_step_map = {
         "Sturgeon": "sturgeon",
@@ -341,9 +344,11 @@ def add_classification_section(sample_dir: Path, launcher: Any = None) -> None:
         "Lamprey (research)": "lamprey",
         "Tucan": "tucan",
     }
-    
-    with ui.element("div").classes("classification-insight-shell w-full min-w-0").props(
-        "id=classification-section"
+
+    with (
+        ui.element("div")
+        .classes("classification-insight-shell w-full min-w-0")
+        .props("id=classification-section")
     ):
         ui.label("Classification").classes(
             "classification-insight-heading text-headline-small"
@@ -366,7 +371,7 @@ def add_classification_section(sample_dir: Path, launcher: Any = None) -> None:
             exp = (
                 ui.expansion(tool_name, icon="analytics")
                 .classes("w-full")
-                .props(f'id=classification-detail-{tool_step}')
+                .props(f"id=classification-detail-{tool_step}")
             )
             with exp:
                 summary_labels = None
@@ -425,7 +430,12 @@ def add_classification_section(sample_dir: Path, launcher: Any = None) -> None:
                             "conf": ndx_conf,
                             "probes": ndx_feats,
                         }
-                elif tool_name in ("Random Forest", "MARLIN", "Lamprey (research)", "Tucan"):
+                elif tool_name in (
+                    "Random Forest",
+                    "MARLIN",
+                    "Lamprey (research)",
+                    "Tucan",
+                ):
                     with ui.element("div").classes(
                         "classification-insight-card w-full min-w-0 mb-2"
                     ):
@@ -457,7 +467,9 @@ def add_classification_section(sample_dir: Path, launcher: Any = None) -> None:
                 ui.label(f"{tool_name} current classification").classes(
                     "classification-insight-meta"
                 )
-                _thr = _confidence_thresholds_for_classifier(tool_to_step_map[tool_name])
+                _thr = _confidence_thresholds_for_classifier(
+                    tool_to_step_map[tool_name]
+                )
                 pal = _echart_surface_palette()
                 bar = ui.echart(
                     {
@@ -527,9 +539,7 @@ def add_classification_section(sample_dir: Path, launcher: Any = None) -> None:
                         ],
                         "media": _echart_media_responsive_bar(),
                     }
-                ).classes(
-                    "w-full min-h-[300px] h-[340px] sm:min-h-[320px] sm:h-80"
-                )
+                ).classes("w-full min-h-[300px] h-[340px] sm:min-h-[320px] sm:h-80")
                 ui.label(f"{tool_name} confidence over time").classes(
                     "classification-insight-meta mt-2"
                 )
@@ -606,9 +616,7 @@ def add_classification_section(sample_dir: Path, launcher: Any = None) -> None:
                         "series": [],
                         "media": _echart_media_responsive_ts(pal),
                     }
-                ).classes(
-                    "w-full min-h-[320px] h-[380px] sm:min-h-[280px] sm:h-72"
-                )
+                ).classes("w-full min-h-[320px] h-[380px] sm:min-h-[280px] sm:h-72")
                 charts[tool_name] = {
                     "bar": bar,
                     "ts": ts,
@@ -652,8 +660,8 @@ def add_classification_section(sample_dir: Path, launcher: Any = None) -> None:
                 pass
 
     from robin.gui.theme import (
-        register_theme_sync_callback,
         client_timer,
+        register_theme_sync_callback,
         stop_timer,
     )
 
@@ -734,7 +742,12 @@ def add_classification_section(sample_dir: Path, launcher: Any = None) -> None:
                 number_probes: Optional[int] = None
                 try:
                     lr = rows[-1]
-                    for nk in ("number_probes", "Number_probes", "covered_cpgs", "probes"):
+                    for nk in (
+                        "number_probes",
+                        "Number_probes",
+                        "covered_cpgs",
+                        "probes",
+                    ):
                         raw = lr.get(nk)
                         if raw is not None and str(raw).strip() != "":
                             number_probes = int(float(raw))
@@ -765,7 +778,9 @@ def add_classification_section(sample_dir: Path, launcher: Any = None) -> None:
                 bar_color = _BRAND_GREEN
             else:
                 lab = labels[i] if i < len(labels) else ""
-                bar_color = _color_for_class_name(lab) if lab else _tumour_category_color(i)
+                bar_color = (
+                    _color_for_class_name(lab) if lab else _tumour_category_color(i)
+                )
             out.append(
                 {
                     "value": v,
@@ -797,7 +812,11 @@ def add_classification_section(sample_dir: Path, launcher: Any = None) -> None:
             if not file_path or not file_path.exists():
                 return
             mode = charts[tool_name].get("mode", "percent")
-            data = preloaded if preloaded is not None else _read_scores_csv(file_path, mode)
+            data = (
+                preloaded
+                if preloaded is not None
+                else _read_scores_csv(file_path, mode)
+            )
             if not data:
                 return
             bar = charts[tool_name]["bar"]
@@ -1007,9 +1026,7 @@ def add_classification_section(sample_dir: Path, launcher: Any = None) -> None:
                         npv = data.get("number_probes")
                         if npv is not None:
                             label = (
-                                "Features"
-                                if tool_name == "Random Forest"
-                                else "Probes"
+                                "Features" if tool_name == "Random Forest" else "Probes"
                             )
                             labels_map["probes"].set_text(f"{label}: {int(npv)}")
                     except Exception:
@@ -1030,7 +1047,9 @@ def add_classification_section(sample_dir: Path, launcher: Any = None) -> None:
         """Refresh classification data (synchronous; for contexts without asyncio loop)."""
         try:
             if not sample_dir or not sample_dir.exists():
-                logging.warning(f"[Classification] Sample directory not found: {sample_dir}")
+                logging.warning(
+                    f"[Classification] Sample directory not found: {sample_dir}"
+                )
                 return
 
             import time
@@ -1091,7 +1110,9 @@ def add_classification_section(sample_dir: Path, launcher: Any = None) -> None:
         """Parse score CSVs off the event loop, then update ECharts on the main thread."""
         try:
             if not sample_dir or not sample_dir.exists():
-                logging.warning(f"[Classification] Sample directory not found: {sample_dir}")
+                logging.warning(
+                    f"[Classification] Sample directory not found: {sample_dir}"
+                )
                 return
 
             import time
@@ -1146,9 +1167,7 @@ def add_classification_section(sample_dir: Path, launcher: Any = None) -> None:
                 mode = charts[tool_name].get("mode", "percent")
                 data = await asyncio.to_thread(_read_scores_csv, file_path, mode)
                 if data:
-                    _update_charts_from_file(
-                        tool_name, cfg["file"], preloaded=data
-                    )
+                    _update_charts_from_file(tool_name, cfg["file"], preloaded=data)
                 if tool_name in file_mtimes:
                     charts[tool_name]["last_mtime"] = file_mtimes[tool_name]
         except Exception as e:
@@ -1163,9 +1182,11 @@ def add_classification_section(sample_dir: Path, launcher: Any = None) -> None:
             return
         asyncio.create_task(_refresh_classification_async())
 
-    def _check_and_update_file(tool_name: str, filename: str, file_path: Path, charts: Dict[str, Any]) -> None:
+    def _check_and_update_file(
+        tool_name: str, filename: str, file_path: Path, charts: Dict[str, Any]
+    ) -> None:
         """Check file and update charts if needed.
-        
+
         Note: This function is now called only when the file has changed,
         so we can skip the mtime check here (it's done upstream).
         """
@@ -1176,7 +1197,9 @@ def add_classification_section(sample_dir: Path, launcher: Any = None) -> None:
             pass
 
     # Start the refresh timer (every 30 seconds)
-    refresh_timer = client_timer(30.0, _refresh_classification, active=True, immediate=False)
+    refresh_timer = client_timer(
+        30.0, _refresh_classification, active=True, immediate=False
+    )
     # Initial refresh after the page is rendered
     client_timer(0.5, _refresh_classification, once=True)
     try:

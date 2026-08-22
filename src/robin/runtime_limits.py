@@ -5,7 +5,6 @@ from __future__ import annotations
 import os
 from typing import Dict
 
-
 _NATIVE_THREAD_ENV_VARS = (
     "POLARS_MAX_THREADS",
     "RAYON_NUM_THREADS",

@@ -38,9 +38,12 @@ class local_folder_picker(ui.dialog):
         self.multiple = multiple
         self.selected_paths: List[str] = []
 
-        with self, ui.card().classes(
-            "robin-dialog-surface workflow-folder-picker p-4 "
-            "w-full max-w-2xl min-w-[18rem]"
+        with (
+            self,
+            ui.card().classes(
+                "robin-dialog-surface workflow-folder-picker p-4 "
+                "w-full max-w-2xl min-w-[18rem]"
+            ),
         ):
             with ui.row().classes("w-full items-start gap-3 min-w-0"):
                 with ui.column().classes("gap-0 flex-1 min-w-0"):

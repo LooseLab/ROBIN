@@ -1,17 +1,17 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional, Sequence, Tuple
-from pathlib import Path
-
 import asyncio
+import importlib.resources as importlib_resources
 import json
-import natsort
-import numpy as np
-from functools import lru_cache
 import logging
 import pickle
 import time
-import importlib.resources as importlib_resources
+from functools import lru_cache
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Sequence, Tuple
+
+import natsort
+import numpy as np
 import pandas as pd
 
 try:
@@ -19,19 +19,6 @@ try:
 except ImportError:  # pragma: no cover
     ui = None
 
-from robin.gui.theme import (
-    styled_table,
-    register_theme_sync_callback,
-    get_user_dark_mode,
-    client_timer,
-    stop_timer,
-)
-from robin.analysis.cnv_classification import (
-    CNVEvent,
-    detect_cnv_events,
-    format_cnv_events_card_lines,
-    format_cnv_events_section_summary,
-)
 from robin.analysis.cnv_analysis import (
     compute_cnv_log2_from_ploidy,
     downsample_cnv_for_plot,
@@ -39,6 +26,12 @@ from robin.analysis.cnv_analysis import (
     prepare_cnv_calling_track,
     resolve_cnv_calling_track,
     resolve_cnv_plot_bin_width,
+)
+from robin.analysis.cnv_classification import (
+    CNVEvent,
+    detect_cnv_events,
+    format_cnv_events_card_lines,
+    format_cnv_events_section_summary,
 )
 from robin.analysis.cnv_regional import (
     SIGNIFICANT_CNV_STATES,
@@ -50,11 +43,16 @@ from robin.analysis.cnv_regional import (
 )
 from robin.analysis.itd_work import load_gene_target_coverage
 from robin.classification_config import get_cnv_thresholds
+from robin.gui.theme import (
+    client_timer,
+    get_user_dark_mode,
+    register_theme_sync_callback,
+    stop_timer,
+    styled_table,
+)
 
 # Same chromosome set as reporting (plotting.py): chr0–chr22, chrX, chrY only
-CNV_PLOT_CONTIGS = frozenset(
-    ["chr" + str(i) for i in range(0, 23)] + ["chrX", "chrY"]
-)
+CNV_PLOT_CONTIGS = frozenset(["chr" + str(i) for i in range(0, 23)] + ["chrX", "chrY"])
 
 _CNV_PLOT_BIN_KEY_DEFAULT = "Data default"
 _CNV_PLOT_BIN_OPTIONS = {
@@ -156,7 +154,10 @@ def _load_cnv_gene_locations(gene_names: tuple[str, ...]) -> tuple[Dict[str, Any
     return tuple(
         sorted(
             intervals.values(),
-            key=lambda row: (order.get(str(row["gene"]).casefold(), 10**9), row["chrom"]),
+            key=lambda row: (
+                order.get(str(row["gene"]).casefold(), 10**9),
+                row["chrom"],
+            ),
         )
     )
 
@@ -432,7 +433,11 @@ def _build_configured_gene_coverage_points(
     for row in _configured_genes_on_chrom(gene_locations, selected):
         gene = str(row["gene"])
         chrom = str(row["chrom"])
-        if selected == "All" and chrom not in chrom_offsets and chrom not in abs_plot_map:
+        if (
+            selected == "All"
+            and chrom not in chrom_offsets
+            and chrom not in abs_plot_map
+        ):
             continue
         coverage = cov_lookup.get(gene.casefold())
         if coverage is None or not np.isfinite(coverage):
@@ -838,7 +843,11 @@ def _apply_cnv_abs_y_window(chart: Any, y_lo: float, y_hi: float) -> None:
     """Pin the abs-chart Y axis and slider to a marker-aware window."""
     try:
         dz_list = chart.options.get("dataZoom")
-        if isinstance(dz_list, list) and len(dz_list) > 1 and isinstance(dz_list[1], dict):
+        if (
+            isinstance(dz_list, list)
+            and len(dz_list) > 1
+            and isinstance(dz_list[1], dict)
+        ):
             dz_list[1]["startValue"] = float(y_lo)
             dz_list[1]["endValue"] = float(y_hi)
             dz_list[1]["filterMode"] = "none"
@@ -1442,9 +1451,7 @@ def _apply_cnv_echart_chrome(echart: Any, dark: bool) -> None:
                         dz[":labelFormatter"] = _CNV_Y_VALUE_FORMATTER_JS
                     dz["borderColor"] = p["axis_line"]
                     dz["fillerColor"] = (
-                        "rgba(51, 65, 85, 0.35)"
-                        if dark
-                        else "rgba(148, 163, 184, 0.2)"
+                        "rgba(51, 65, 85, 0.35)" if dark else "rgba(148, 163, 184, 0.2)"
                     )
                     dz["handleStyle"] = {
                         "color": p["text"],
@@ -1498,7 +1505,9 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
     configured_gene_locations = _load_cnv_gene_locations(configured_gene_names)
     if configured_gene_names:
         found = {str(row["gene"]).casefold() for row in configured_gene_locations}
-        missing = [name for name in configured_gene_names if name.casefold() not in found]
+        missing = [
+            name for name in configured_gene_names if name.casefold() not in found
+        ]
         if missing:
             logging.warning(
                 "No packaged GRCh38 location found for configured CNV genes: %s",
@@ -1540,9 +1549,7 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
                         cnv_var = ui.label("Variance: --").classes(
                             "classification-insight-meta"
                         )
-            with ui.row().classes(
-                "w-full gap-3 items-center mb-2 flex-wrap mt-2"
-            ):
+            with ui.row().classes("w-full gap-3 items-center mb-2 flex-wrap mt-2"):
                 ui.label("Chromosome").classes("classification-insight-meta")
                 cnv_chrom_select = ui.select(options={"All": "All"}, value="All").style(
                     "width: 160px"
@@ -1590,9 +1597,7 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
                             == _CNV_GENE_COVERAGE_FILTER_OUTLIERS,
                         )
                         .props("dense")
-                        .tooltip(
-                            "Left: all configured genes · Right: outliers only"
-                        )
+                        .tooltip("Left: all configured genes · Right: outliers only")
                     )
                     cnv_gene_cov_filter.value = (
                         _gene_cov_filter == _CNV_GENE_COVERAGE_FILTER_OUTLIERS
@@ -1625,9 +1630,7 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
                     cnv_scale = (
                         ui.switch(value=_y_scale == "log")
                         .props("dense")
-                        .tooltip(
-                            "Left: linear ploidy · Right: log2(ploidy / expected)"
-                        )
+                        .tooltip("Left: linear ploidy · Right: log2(ploidy / expected)")
                     )
                     cnv_scale.value = _y_scale == "log"
                     ui.label("Log2").classes("classification-insight-meta")
@@ -1636,12 +1639,16 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
                     options=_CNV_PLOT_BIN_OPTIONS,
                     value=_CNV_PLOT_BIN_KEY_DEFAULT,
                 ).style("width: 120px")
-                cnv_bp_label = ui.label("Breakpoints").classes(
-                    "classification-insight-meta ml-2"
-                ).style("display: none")
-                with ui.row().classes("items-center gap-1").style(
-                    "display: none"
-                ) as cnv_bp_row:
+                cnv_bp_label = (
+                    ui.label("Breakpoints")
+                    .classes("classification-insight-meta ml-2")
+                    .style("display: none")
+                )
+                with (
+                    ui.row()
+                    .classes("items-center gap-1")
+                    .style("display: none") as cnv_bp_row
+                ):
                     ui.label("Hide").classes("classification-insight-meta")
                     cnv_bp = (
                         ui.switch(value=bool(_cnv_ui_state.get("show_bp", True)))
@@ -1660,9 +1667,7 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
                     cnv_height = (
                         ui.switch(value=_double_height)
                         .props("dense")
-                        .tooltip(
-                            "Left: standard scatter height · Right: double height"
-                        )
+                        .tooltip("Left: standard scatter height · Right: double height")
                     )
                     cnv_height.value = _double_height
                     ui.label("Tall").classes("classification-insight-meta")
@@ -1670,7 +1675,11 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
                 cnv_abs = ui.echart(
                     {
                         "backgroundColor": "transparent",
-                        "title": {"text": "CNV scatter plot", "left": "center", "top": 10},
+                        "title": {
+                            "text": "CNV scatter plot",
+                            "left": "center",
+                            "top": 10,
+                        },
                         "grid": {
                             "left": "5%",
                             "right": "5%",
@@ -1701,7 +1710,12 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
                             },
                         ],
                         "series": [
-                            {"type": "scatter", "name": "CNV", "symbolSize": 3, "data": []},
+                            {
+                                "type": "scatter",
+                                "name": "CNV",
+                                "symbolSize": 3,
+                                "data": [],
+                            },
                             {
                                 "type": "scatter",
                                 "name": "centromeres_highlight",
@@ -1728,11 +1742,17 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
                 ).classes(
                     f"w-full {_CNV_ABS_HEIGHT_CLASS_TALL if _double_height else _CNV_ABS_HEIGHT_CLASS} cnv-genome-abs-chart"
                 )
-            with ui.element("div").classes("w-full target-coverage-panel__plot-wrap mt-2"):
+            with ui.element("div").classes(
+                "w-full target-coverage-panel__plot-wrap mt-2"
+            ):
                 cnv_diff = ui.echart(
                     {
                         "backgroundColor": "transparent",
-                        "title": {"text": "Difference plot", "left": "center", "top": 10},
+                        "title": {
+                            "text": "Difference plot",
+                            "left": "center",
+                            "top": 10,
+                        },
                         "grid": {
                             "left": "5%",
                             "right": "5%",
@@ -1804,7 +1824,12 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
             )
             regional_cnv_columns = [
                 {"name": "chrom", "label": "Chr", "field": "chrom", "sortable": True},
-                {"name": "region", "label": "Region", "field": "region", "sortable": True},
+                {
+                    "name": "region",
+                    "label": "Region",
+                    "field": "region",
+                    "sortable": True,
+                },
                 {
                     "name": "start_mb",
                     "label": "Start (Mb)",
@@ -1843,10 +1868,15 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
                 {"name": "panel_genes", "label": "Panel genes", "field": "panel_genes"},
             ]
             _, regional_cnv_table = styled_table(
-                columns=regional_cnv_columns, rows=[], pagination=20, class_size="table-xs"
+                columns=regional_cnv_columns,
+                rows=[],
+                pagination=20,
+                class_size="table-xs",
             )
             try:
-                regional_cnv_table.props('multi-sort rows-per-page-options="[10,20,50,0]"')
+                regional_cnv_table.props(
+                    'multi-sort rows-per-page-options="[10,20,50,0]"'
+                )
             except Exception:
                 pass
 
@@ -1857,18 +1887,64 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
             cnv_events_summary = ui.label("No CNV events detected").classes(
                 "classification-insight-meta mb-2"
             )
-        
+
         # CNV Events Table
         cnv_events_columns = [
-            {"name": "chromosome", "label": "Chr", "field": "chromosome", "sortable": True},
-            {"name": "event_type", "label": "Event Type", "field": "event_type", "sortable": True},
+            {
+                "name": "chromosome",
+                "label": "Chr",
+                "field": "chromosome",
+                "sortable": True,
+            },
+            {
+                "name": "event_type",
+                "label": "Event Type",
+                "field": "event_type",
+                "sortable": True,
+            },
             {"name": "arm", "label": "Arm", "field": "arm", "sortable": True},
-            {"name": "start_mb", "label": "Start (Mb)", "field": "start_mb", "sortable": True, "align": "right"},
-            {"name": "end_mb", "label": "End (Mb)", "field": "end_mb", "sortable": True, "align": "right"},
-            {"name": "length_mb", "label": "Length (Mb)", "field": "length_mb", "sortable": True, "align": "right"},
-            {"name": "mean_cnv_str", "label": "Mean CNV", "field": "mean_cnv_str", "sortable": True, "align": "right"},
-            {"name": "confidence", "label": "Confidence", "field": "confidence", "sortable": True, "align": "center"},
-            {"name": "proportion_affected", "label": "% Affected", "field": "proportion_affected", "sortable": True, "align": "right"},
+            {
+                "name": "start_mb",
+                "label": "Start (Mb)",
+                "field": "start_mb",
+                "sortable": True,
+                "align": "right",
+            },
+            {
+                "name": "end_mb",
+                "label": "End (Mb)",
+                "field": "end_mb",
+                "sortable": True,
+                "align": "right",
+            },
+            {
+                "name": "length_mb",
+                "label": "Length (Mb)",
+                "field": "length_mb",
+                "sortable": True,
+                "align": "right",
+            },
+            {
+                "name": "mean_cnv_str",
+                "label": "Mean CNV",
+                "field": "mean_cnv_str",
+                "sortable": True,
+                "align": "right",
+            },
+            {
+                "name": "confidence",
+                "label": "Confidence",
+                "field": "confidence",
+                "sortable": True,
+                "align": "center",
+            },
+            {
+                "name": "proportion_affected",
+                "label": "% Affected",
+                "field": "proportion_affected",
+                "sortable": True,
+                "align": "right",
+            },
             {"name": "genes_str", "label": "Genes", "field": "genes_str"},
         ]
         _, cnv_events_table = styled_table(
@@ -1995,7 +2071,7 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
                 return
             # Allocate budgets proportional to visible counts with a small floor
             budgets = []
-            
+
             for sub in vis_data:
                 share = int(max(1, round((len(sub) / total) * max_points)))
                 budgets.append(share)
@@ -2070,12 +2146,16 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
             )
             return df
         except Exception:
-            return pd.DataFrame(columns=["chrom", "start_pos", "end_pos", "name", "stain"])
+            return pd.DataFrame(
+                columns=["chrom", "start_pos", "end_pos", "name", "stain"]
+            )
 
     @lru_cache(maxsize=1)
     def _load_centromere_bed_df() -> pd.DataFrame:
         try:
-            res_path = importlib_resources.files("robin.resources") / "cenSatRegions.bed"
+            res_path = (
+                importlib_resources.files("robin.resources") / "cenSatRegions.bed"
+            )
             return pd.read_csv(
                 res_path,
                 sep="\t",
@@ -2118,6 +2198,7 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
                     master_csv_path = sample_dir / "master.csv"
                     if master_csv_path.exists():
                         import pandas as pd
+
                         df = pd.read_csv(master_csv_path)
                         if not df.empty and "analysis_panel" in df.columns:
                             panel_val = df.iloc[0]["analysis_panel"]
@@ -2125,7 +2206,7 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
                                 panel = str(panel_val).strip()
                 except Exception:
                     pass
-            
+
             # Map panel to BED filename
             bed_filename = None
             if not panel:
@@ -2138,7 +2219,7 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
             else:
                 # Check for custom panel
                 bed_filename = f"{panel}_panel_name_uniq.bed"
-            
+
             # Try to load the panel-specific BED file
             try:
                 res_path = importlib_resources.files("robin.resources") / bed_filename
@@ -2151,10 +2232,12 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
                     )
             except Exception:
                 pass
-            
+
             # Fallback to unique_genes.bed if panel-specific file not found
             try:
-                res_path = importlib_resources.files("robin.resources") / "unique_genes.bed"
+                res_path = (
+                    importlib_resources.files("robin.resources") / "unique_genes.bed"
+                )
                 if res_path.exists():
                     return pd.read_csv(
                         res_path,
@@ -2164,10 +2247,10 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
                     )
             except Exception:
                 pass
-                
+
         except Exception:
             pass
-            
+
         return pd.DataFrame(columns=["chrom", "start_pos", "end_pos", "gene"])
 
     def _sex_label(xy_val: Any) -> str:
@@ -2229,6 +2312,7 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
             if frames:
                 out = pd.concat(frames, ignore_index=True)
                 if not out.empty:
+
                     def _rank(label: Any) -> int:
                         try:
                             s = str(label)
@@ -2284,7 +2368,7 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
                 # Load cytobands and genes
                 cyto_df = _load_cytobands_df()
                 gene_df = _load_gene_bed(sample_dir)
-                
+
                 # Detect CNV events using centralized rules
                 events = detect_cnv_events(
                     cnv_data=data,
@@ -2295,21 +2379,23 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
                     support_cnv_data=analysis_log2,
                     support_bin_width=int(binw),
                 )
-                
+
                 # Update events table
                 events_rows = []
                 for event in events:
                     event_dict = event.to_dict()
                     # Format proportion as percentage
-                    event_dict["proportion_affected"] = f"{event.proportion_affected:.1%}"
+                    event_dict["proportion_affected"] = (
+                        f"{event.proportion_affected:.1%}"
+                    )
                     events_rows.append(event_dict)
-                
+
                 cnv_events_table.rows = events_rows
                 try:
                     cnv_events_table.update()
                 except Exception:
                     pass
-                
+
                 # Update summaries (insight card + events section)
                 whole_text, arm_text = format_cnv_events_card_lines(events)
                 cnv_whole_chr_summary.set_text(whole_text)
@@ -2376,11 +2462,7 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
                 pass
             selected = state.get("selected_chrom", "All")
             use_log = state.get("y_scale", "linear") == "log"
-            abs_plot_map = (
-                cnv_log2_map
-                if use_log and cnv_log2_map
-                else cnv_map
-            )
+            abs_plot_map = cnv_log2_map if use_log and cnv_log2_map else cnv_map
             raw_color_mode = state.get("color_mode", "chromosome")
             # normalize color mode to expected keys
             lval = str(raw_color_mode).strip().lower()
@@ -2411,9 +2493,9 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
                 cnv_abs.options["yAxis"][0]["name"] = "Log2 ratio (ploidy / expected)"
                 cnv_abs.options["title"]["text"] = "CNV scatter plot"
                 cnv_abs.options["title"]["top"] = 4
-                cnv_abs.options["title"]["subtext"] = (
-                    "log2(ploidy / expected copy number); 0 = normal"
-                )
+                cnv_abs.options["title"][
+                    "subtext"
+                ] = "log2(ploidy / expected copy number); 0 = normal"
                 cnv_abs.options["grid"]["top"] = "26%"
             else:
                 cnv_abs.options["yAxis"][0]["name"] = "Ploidy"
@@ -2471,9 +2553,7 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
                 )
                 if filter_mode not in _CNV_GENE_COVERAGE_FILTERS:
                     filter_mode = _CNV_GENE_COVERAGE_FILTER_OUTLIERS
-                plot_map = (
-                    abs_plot_map if isinstance(abs_plot_map, dict) else cnv_map
-                )
+                plot_map = abs_plot_map if isinstance(abs_plot_map, dict) else cnv_map
                 points, _mean_cov = _build_configured_gene_coverage_points(
                     configured_gene_locations,
                     selected=selected,
@@ -2546,18 +2626,14 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
                     chrom_bounds.append((contig, start_bp, end_bp))
                     offset_bp = end_bp
                     if color_mode == "chromosome":
-                        ci = len(
-                            [s for s in series_abs if s.get("type") == "scatter"]
-                        )
+                        ci = len([s for s in series_abs if s.get("type") == "scatter"])
                         series_abs.append(
                             {
                                 "type": "scatter",
                                 "name": contig,
                                 "symbolSize": 3,
                                 "itemStyle": {
-                                    "color": chrom_palette[
-                                        ci % len(chrom_palette)
-                                    ]
+                                    "color": chrom_palette[ci % len(chrom_palette)]
                                 },
                                 "data": pts,
                             }
@@ -2831,7 +2907,7 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
                                     else np.array([])
                                 )
                                 band_areas = []
-                                
+
                                 # Get CNV events for this chromosome to highlight significant events
                                 events = []
                                 try:
@@ -2860,28 +2936,32 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
                                         )
                                 except Exception:
                                     pass
-                                
+
                                 # Create event lookup for highlighting
                                 event_regions = {}
                                 for event in events:
                                     key = f"{event.start_pos}-{event.end_pos}"
                                     event_regions[key] = event
-                                
+
                                 for _, row in bands.iterrows():
-                                    s_bp, e_bp = int(row["start_pos"]), int(row["end_pos"])
+                                    s_bp, e_bp = int(row["start_pos"]), int(
+                                        row["end_pos"]
+                                    )
                                     s_bin = max(0, s_bp // binw_analysis)
-                                    e_bin = min(len(vals) - 1, max(0, e_bp // binw_analysis))
+                                    e_bin = min(
+                                        len(vals) - 1, max(0, e_bp // binw_analysis)
+                                    )
                                     if len(vals) > 0 and e_bin >= s_bin:
                                         mean_val = float(
                                             np.mean(vals[s_bin : e_bin + 1])
                                         )
                                     else:
                                         mean_val = 0.0
-                                    
+
                                     # Check if this region has a significant CNV event
                                     region_key = f"{s_bp}-{e_bp}"
                                     event = event_regions.get(region_key)
-                                    
+
                                     fill_neutral = (
                                         "rgba(255, 255, 255, 0.07)"
                                         if dark_ui
@@ -2889,9 +2969,15 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
                                     )
                                     if event:
                                         # Highlight significant events with stronger colors
-                                        if event.event_type in ("GAIN", "WHOLE_CHR_GAIN"):
+                                        if event.event_type in (
+                                            "GAIN",
+                                            "WHOLE_CHR_GAIN",
+                                        ):
                                             color = "rgba(52, 199, 89, 0.3)"  # gains
-                                        elif event.event_type in ("LOSS", "WHOLE_CHR_LOSS"):
+                                        elif event.event_type in (
+                                            "LOSS",
+                                            "WHOLE_CHR_LOSS",
+                                        ):
                                             color = "rgba(255, 45, 85, 0.3)"  # losses
                                         else:
                                             color = fill_neutral
@@ -2914,9 +3000,7 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
                                                     "show": True,
                                                     "position": "insideTop",
                                                     "color": (
-                                                        "#cbd5e1"
-                                                        if dark_ui
-                                                        else "#555"
+                                                        "#cbd5e1" if dark_ui else "#555"
                                                     ),
                                                     "fontSize": 11,
                                                 },
@@ -2996,7 +3080,7 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
                             chrom_offsets=chrom_offsets,
                             dark=dark_ui,
                         )
-                        
+
                         # Breakpoint candidates as dashed vertical lines
                         try:
                             idx_cyto_abs = next(
@@ -3013,7 +3097,9 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
                             ):
                                 arr = state["bp_array"]
                                 pos = [
-                                    int(r["end_pos"]) for r in arr if r["name"] == selected
+                                    int(r["end_pos"])
+                                    for r in arr
+                                    if r["name"] == selected
                                 ]
                                 lines = [
                                     {
@@ -3043,9 +3129,9 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
 
             # Apply gene zoom before updating chart
             try:
-                sel_gene = launcher._cnv_state.setdefault(
-                    str(sample_dir), {}
-                ).get("selected_gene", "All")
+                sel_gene = launcher._cnv_state.setdefault(str(sample_dir), {}).get(
+                    "selected_gene", "All"
+                )
 
                 gene_interval = None
                 if sel_gene and sel_gene != "All" and selected != "All":
@@ -3084,7 +3170,10 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
                 else:
                     # Reset zoom when "All" is selected
                     try:
-                        if isinstance(cnv_abs.options.get("dataZoom"), list) and cnv_abs.options["dataZoom"]:
+                        if (
+                            isinstance(cnv_abs.options.get("dataZoom"), list)
+                            and cnv_abs.options["dataZoom"]
+                        ):
                             dz = cnv_abs.options["dataZoom"][0]
                             dz.pop("startValue", None)
                             dz.pop("endValue", None)
@@ -3142,9 +3231,9 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
 
             # Gene zoom on difference chart (single-chromosome view)
             try:
-                sel_gene = launcher._cnv_state.setdefault(
-                    str(sample_dir), {}
-                ).get("selected_gene", "All")
+                sel_gene = launcher._cnv_state.setdefault(str(sample_dir), {}).get(
+                    "selected_gene", "All"
+                )
                 for rel_chart in (cnv_diff,):
                     gene_interval = None
                     if sel_gene and sel_gene != "All" and selected != "All":
@@ -3216,7 +3305,9 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
                         f"{int(binw)}:{sex_lbl}"
                     )
                     if state.get("cyto_cache_key") != cache_key:
-                        panel_name, panel_genes_df = load_panel_gene_bed(str(sample_dir))
+                        panel_name, panel_genes_df = load_panel_gene_bed(
+                            str(sample_dir)
+                        )
                         df_all = _compute_all_cytoband_df(data, int(binw), sex_lbl)
                         state["cyto_df_all"] = df_all
                         state["panel_name"] = panel_name
@@ -3269,9 +3360,7 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
                             regional_cnv_table.update()
                         except Exception:
                             pass
-                        regional_cnv_summary.set_text(
-                            "No regional CNV events detected"
-                        )
+                        regional_cnv_summary.set_text("No regional CNV events detected")
                 else:
                     regional_cnv_summary.set_text("CNV data not available")
             except Exception:
@@ -3331,7 +3420,9 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
                         want_scale = "linear"
                     else:
                         want_scale = (
-                            "log" if "log" in scale_key else state.get("y_scale", "linear")
+                            "log"
+                            if "log" in scale_key
+                            else state.get("y_scale", "linear")
                         )
                 if want_scale != state.get("y_scale"):
                     state["y_scale"] = want_scale
@@ -3412,8 +3503,12 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
         cnv_npy_mtime = cnv_npy.stat().st_mtime if cnv_npy.exists() else 0
         cnv2_npy_mtime = cnv2_npy.stat().st_mtime if cnv2_npy.exists() else 0
         cnv3_npy_mtime = cnv3_npy.stat().st_mtime if cnv3_npy.exists() else 0
-        cnv_dict_npy_mtime = cnv_dict_npy.stat().st_mtime if cnv_dict_npy.exists() else 0
-        data_array_npy_mtime = data_array_npy.stat().st_mtime if data_array_npy.exists() else 0
+        cnv_dict_npy_mtime = (
+            cnv_dict_npy.stat().st_mtime if cnv_dict_npy.exists() else 0
+        )
+        data_array_npy_mtime = (
+            data_array_npy.stat().st_mtime if data_array_npy.exists() else 0
+        )
         xy_pkl_mtime = xy_pkl.stat().st_mtime if xy_pkl.exists() else 0
 
         prev_cnv_npy_mtime = state.get("cnv_m", 0)
@@ -3735,9 +3830,9 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
                     arr = np.load(data_array_npy, allow_pickle=True)
                 if hasattr(arr, "dtype") and "name" in arr.dtype.names:
                     state["bp_array"] = arr
-                    selected = launcher._cnv_state.setdefault(
-                        str(sample_dir), {}
-                    ).get("selected_chrom", "All")
+                    selected = launcher._cnv_state.setdefault(str(sample_dir), {}).get(
+                        "selected_chrom", "All"
+                    )
                     breakpoint_lines = []
                     for r in arr:
                         if selected == "All" or r["name"] == selected:
@@ -3753,9 +3848,9 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
         elif data_array_npy.exists() and not data_array_npy_changed:
             if state.get("bp_array") is not None:
                 try:
-                    selected = launcher._cnv_state.setdefault(
-                        str(sample_dir), {}
-                    ).get("selected_chrom", "All")
+                    selected = launcher._cnv_state.setdefault(str(sample_dir), {}).get(
+                        "selected_chrom", "All"
+                    )
                     arr = state["bp_array"]
                     breakpoint_lines = []
                     for r in arr:
@@ -3845,10 +3940,10 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
             key = str(sample_dir)
             state = launcher._cnv_state.get(key, {})
             selected = state.get("selected_chrom", "All")
-            
+
             # Show breakpoints controls only when viewing individual chromosomes
             should_show = selected != "All"
-            
+
             try:
                 display_value = "block" if should_show else "none"
                 cnv_bp_label.style(f"display: {display_value}")
@@ -3956,7 +4051,9 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
             try:
                 cnv_abs.run_chart_method("resize")
             except Exception:
-                logging.debug("CNV scatter resize after height change failed", exc_info=True)
+                logging.debug(
+                    "CNV scatter resize after height change failed", exc_info=True
+                )
 
         def _on_height(ev):
             st = launcher._cnv_state.setdefault(str(sample_dir), {})
@@ -3971,7 +4068,9 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
 
         def _on_color(ev):
             st = launcher._cnv_state.setdefault(str(sample_dir), {})
-            st["color_mode"] = "value" if _switch_bool(ev, default=False) else "chromosome"
+            st["color_mode"] = (
+                "value" if _switch_bool(ev, default=False) else "chromosome"
+            )
             try:
                 if isinstance(getattr(cnv_color, "value", None), bool):
                     st["color_mode"] = "value" if cnv_color.value else "chromosome"
@@ -3983,7 +4082,11 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
 
         def _on_plot_bin(ev):
             st = launcher._cnv_state.setdefault(str(sample_dir), {})
-            v = getattr(ev, "args", None) if hasattr(ev, "args") else getattr(ev, "value", None)
+            v = (
+                getattr(ev, "args", None)
+                if hasattr(ev, "args")
+                else getattr(ev, "value", None)
+            )
             if v is None and hasattr(ev, "value"):
                 v = ev.value
             st["plot_bin_width"] = _cnv_plot_bin_bp_from_ui(v)

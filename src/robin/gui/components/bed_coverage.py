@@ -1,15 +1,15 @@
 from __future__ import annotations
 
-from typing import Any, Dict, Optional
-from pathlib import Path
-import logging
 import json
+import logging
 import os
-from datetime import datetime
-import threading
 import queue
+import threading
+from datetime import datetime
+from pathlib import Path
+from typing import Any, Dict, Optional
 
-from robin.gui.theme import get_user_dark_mode, client_timer, stop_timer
+from robin.gui.theme import client_timer, get_user_dark_mode, stop_timer
 
 try:
     from nicegui import ui
@@ -124,7 +124,9 @@ def _load_visualization_data(sample_dir: Path) -> Optional[Dict[str, Any]]:
                         return {
                             "series": series,
                             "entry_count": len(entries),
-                            "point_count": sum(len(s.get("data") or []) for s in series),
+                            "point_count": sum(
+                                len(s.get("data") or []) for s in series
+                            ),
                         }
         except Exception as e:
             logger.warning(f"Could not rebuild BED coverage viz from log: {e}")
@@ -217,13 +219,13 @@ def add_bed_coverage_section(launcher: Any, sample_dir: Path) -> None:
             n_series = len(chart_data.get("series") or [])
             n_points = chart_data.get("point_count")
             if n_points is None:
-                n_points = sum(len(s.get("data") or []) for s in (chart_data.get("series") or []))
+                n_points = sum(
+                    len(s.get("data") or []) for s in (chart_data.get("series") or [])
+                )
             n_entries = chart_data.get("entry_count")
             x_mode = chart_data.get("x_axis_mode") or "wall_clock"
             if state["bed_summary"]:
-                bits = [
-                    f"{n_series} BED type{'s' if n_series != 1 else ''} tracked"
-                ]
+                bits = [f"{n_series} BED type{'s' if n_series != 1 else ''} tracked"]
                 if n_entries:
                     bits.append(f"{n_entries} master generations logged")
                 if n_points:
@@ -266,7 +268,9 @@ def add_bed_coverage_section(launcher: Any, sample_dir: Path) -> None:
                             state["chart"].options["xAxis"]["type"] = "time"
                             state["chart"].options["xAxis"]["name"] = "Time"
                             state["chart"].options["xAxis"].pop("min", None)
-                            state["chart"].options["xAxis"].pop("axisLabel", None)                    # Update yAxis to format values as percentages
+                            state["chart"].options["xAxis"].pop(
+                                "axisLabel", None
+                            )  # Update yAxis to format values as percentages
                     if "yAxis" in state["chart"].options:
                         state["chart"].options["yAxis"]["axisLabel"] = {
                             "formatter": "{value}%"
@@ -336,7 +340,10 @@ def add_bed_coverage_section(launcher: Any, sample_dir: Path) -> None:
                     return {"mtime": None, "chart_data": None}
 
                 # Skip if mtime hasn't changed and we already have data
-                if current_mtime == state.get("mtime") and state.get("chart_data") is not None:
+                if (
+                    current_mtime == state.get("mtime")
+                    and state.get("chart_data") is not None
+                ):
                     logger.debug("[BED Coverage] Data unchanged, skipping update")
                     return None  # Signal to skip UI update
 
@@ -385,12 +392,18 @@ def add_bed_coverage_section(launcher: Any, sample_dir: Path) -> None:
             state["update_in_progress"] = False
 
     # Build UI — design.md §9: insight shell, cards, explicit .body--dark CSS
-    with ui.element("div").classes("w-full min-w-0").props("id=analysis-detail-bed-coverage"):
+    with (
+        ui.element("div")
+        .classes("w-full min-w-0")
+        .props("id=analysis-detail-bed-coverage")
+    ):
         with ui.element("div").classes("classification-insight-shell w-full min-w-0"):
             ui.label("BED coverage").classes(
                 "classification-insight-heading text-headline-small"
             )
-            with ui.element("div").classes("classification-insight-card w-full min-w-0"):
+            with ui.element("div").classes(
+                "classification-insight-card w-full min-w-0"
+            ):
                 with ui.column().classes("w-full min-w-0 gap-2 p-2 md:p-3"):
                     with ui.row().classes("items-center gap-2 min-w-0"):
                         ui.icon("layers").classes("classification-insight-icon")

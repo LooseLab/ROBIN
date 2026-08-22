@@ -5,25 +5,28 @@ This module handles the methylation-based classification section of the report,
 including results from Sturgeon, Random Forest, NanoDX, and PannanoDX classifiers.
 """
 
+import logging
 import os
+
+import matplotlib
 import pandas as pd
-from reportlab.platypus import PageBreak, Paragraph, Spacer, Table, Image
 from reportlab.lib.colors import HexColor
 from reportlab.lib.styles import ParagraphStyle
 from reportlab.lib.units import inch
+from reportlab.platypus import Image, PageBreak, Paragraph, Spacer, Table
+
 from ..sections.base import ReportSection
-import logging
-import matplotlib
 
 matplotlib.use("Agg")  # ensure non-interactive backend before importing pyplot
-import matplotlib.pyplot as plt
-import matplotlib.dates as mdates
-import matplotlib.ticker as mticker
-import seaborn as sns
 import io
 
-from robin.classification_config import get_confidence_status
+import matplotlib.dates as mdates
+import matplotlib.pyplot as plt
+import matplotlib.ticker as mticker
+import seaborn as sns
+
 from robin.analysis.mnpflex_hierarchy import mnpflex_hierarchy_has_content
+from robin.classification_config import get_confidence_status
 from robin.reporting.mnpflex_hierarchy import (
     append_mnpflex_classifier_prediction,
     append_mnpflex_top_path_paragraph,
@@ -66,17 +69,26 @@ class ClassificationSection(ReportSection):
         """Create a minimal valid PNG buffer for empty plots."""
         try:
             plt.figure(figsize=(8, 5), facecolor="white")
-            plt.text(0.5, 0.5, "No data available", 
-                    ha='center', va='center', transform=plt.gca().transAxes,
-                    fontsize=14, color='gray')
+            plt.text(
+                0.5,
+                0.5,
+                "No data available",
+                ha="center",
+                va="center",
+                transform=plt.gca().transAxes,
+                fontsize=14,
+                color="gray",
+            )
             plt.title("Classification Plot")
-            plt.axis('off')
-            
+            plt.axis("off")
+
             buf = io.BytesIO()
-            plt.savefig(buf, format="png", dpi=300, bbox_inches="tight", facecolor="white")
+            plt.savefig(
+                buf, format="png", dpi=300, bbox_inches="tight", facecolor="white"
+            )
             plt.close()
             buf.seek(0)
-            
+
             # Validate buffer contains data
             if buf.getvalue():
                 return buf
@@ -85,9 +97,10 @@ class ClassificationSection(ReportSection):
         except Exception:
             # If even this fails, return a minimal PNG
             import base64
+
             # Minimal 1x1 transparent PNG
             png_data = base64.b64decode(
-                'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=='
+                "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
             )
             buf = io.BytesIO(png_data)
             buf.seek(0)
@@ -110,7 +123,9 @@ class ClassificationSection(ReportSection):
 
             # Check if dataframe is empty or has no data
             if df.empty or len(df) == 0:
-                logger.warning(f"Empty dataframe for {classifier_name} time series plot")
+                logger.warning(
+                    f"Empty dataframe for {classifier_name} time series plot"
+                )
                 return self._create_empty_plot_buffer()
 
             # Convert confidence values to percentages if not already
@@ -125,12 +140,16 @@ class ClassificationSection(ReportSection):
             if len(above_threshold) <= 3:
                 top_classes = above_threshold
             else:
-                final_vals = df.loc[df.index[-1], above_threshold].sort_values(ascending=False)
+                final_vals = df.loc[df.index[-1], above_threshold].sort_values(
+                    ascending=False
+                )
                 top_classes = final_vals.head(3).index
 
             # Check if we have any classes to plot
             if len(top_classes) == 0:
-                logger.warning(f"No classes above threshold for {classifier_name} time series plot")
+                logger.warning(
+                    f"No classes above threshold for {classifier_name} time series plot"
+                )
                 return self._create_empty_plot_buffer()
 
             # Get current highest confidence for subtitle
@@ -166,7 +185,9 @@ class ClassificationSection(ReportSection):
                     if len(c) <= len(out) + 3:
                         out = c  # Use full name to avoid collision
                         break
-                    out = c[: min(len(out) + 4, len(c))] + ("..." if len(c) > 20 else "")
+                    out = c[: min(len(out) + 4, len(c))] + (
+                        "..." if len(c) > 20 else ""
+                    )
                 truncated_map[c] = out
             plot_df["Class"] = plot_df["Class"].map(truncated_map)
 
@@ -193,7 +214,9 @@ class ClassificationSection(ReportSection):
                 )
 
                 # Add title and subtitle (compact for 2x2 grid)
-                fig.suptitle(f"{classifier_name}", y=0.98, fontsize=10, fontweight="bold")
+                fig.suptitle(
+                    f"{classifier_name}", y=0.98, fontsize=10, fontweight="bold"
+                )
                 ax.set_title(
                     f"{predicted_class} ({confidence_value:.1f}%)",
                     pad=4,
@@ -204,7 +227,9 @@ class ClassificationSection(ReportSection):
                 ax.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M"))
                 ax.set_xlabel("Time", fontsize=8)
                 ax.set_ylabel("Confidence (%)", fontsize=8)
-                ax.yaxis.set_major_formatter(mticker.PercentFormatter(xmax=100, decimals=0))
+                ax.yaxis.set_major_formatter(
+                    mticker.PercentFormatter(xmax=100, decimals=0)
+                )
 
                 # Set axis ranges
                 ax.set_ylim(0, 100)
@@ -231,28 +256,32 @@ class ClassificationSection(ReportSection):
 
             # Save plot to bytes buffer with high DPI for crisp rendering
             buf = io.BytesIO()
-            fig.savefig(buf, format="png", dpi=300, bbox_inches="tight", facecolor="white")
+            fig.savefig(
+                buf, format="png", dpi=300, bbox_inches="tight", facecolor="white"
+            )
             plt.close(fig)
             buf.seek(0)
-            
+
             # Validate buffer contains valid image data
             if not buf.getvalue():
                 logger.warning(f"Empty buffer for {classifier_name} time series plot")
                 return self._create_empty_plot_buffer()
-            
+
             # Try to validate it's a valid PNG by checking magic bytes
             buf_data = buf.getvalue()
-            if len(buf_data) < 8 or buf_data[:8] != b'\x89PNG\r\n\x1a\n':
-                logger.warning(f"Invalid PNG data for {classifier_name} time series plot")
+            if len(buf_data) < 8 or buf_data[:8] != b"\x89PNG\r\n\x1a\n":
+                logger.warning(
+                    f"Invalid PNG data for {classifier_name} time series plot"
+                )
                 return self._create_empty_plot_buffer()
-            
+
             # Reset buffer position after validation
             buf.seek(0)
             return buf
-            
+
         except Exception as e:
             logger.error(f"Error creating {classifier_name} time series plot: {str(e)}")
-            plt.close('all')  # Close any open figures
+            plt.close("all")  # Close any open figures
             return self._create_empty_plot_buffer()
 
     def add_content(self):
@@ -287,7 +316,10 @@ class ClassificationSection(ReportSection):
                 if not has_hierarchical_summary:
                     # No confident classification - show message + legend in same place
                     self.summary_elements.append(
-                        Paragraph("MNP-Flex Hierarchical Summary", self.styles.styles["Heading3"])
+                        Paragraph(
+                            "MNP-Flex Hierarchical Summary",
+                            self.styles.styles["Heading3"],
+                        )
                     )
                     self.summary_elements.append(Spacer(1, 6))
                     self.summary_elements.append(
@@ -313,7 +345,10 @@ class ClassificationSection(ReportSection):
                 else:
                     # Has hierarchical summary - nested tree with legend
                     self.summary_elements.append(
-                        Paragraph("MNP-Flex Hierarchical Summary", self.styles.styles["Heading3"])
+                        Paragraph(
+                            "MNP-Flex Hierarchical Summary",
+                            self.styles.styles["Heading3"],
+                        )
                     )
                     self.summary_elements.append(Spacer(1, 6))
                     append_mnpflex_classifier_prediction(
@@ -344,7 +379,9 @@ class ClassificationSection(ReportSection):
                     )
                     self.summary_elements.append(Spacer(1, 8))
         except Exception as e:
-            logger.error(f"Error adding MNP-Flex hierarchy to classification summary: {e}")
+            logger.error(
+                f"Error adding MNP-Flex hierarchy to classification summary: {e}"
+            )
 
         # Methylation Classification header - divides MNP-Flex from other classifiers
         self.summary_elements.append(
@@ -453,7 +490,9 @@ class ClassificationSection(ReportSection):
                 for name, buf in plot_buffers[row_start : row_start + plots_per_row]:
                     if buf is not None:
                         buf.seek(0)
-                        row_cells.append(Image(buf, width=plot_width, height=plot_height))
+                        row_cells.append(
+                            Image(buf, width=plot_width, height=plot_height)
+                        )
                     else:
                         row_cells.append(Spacer(plot_width, plot_height))
                 plot_table = Table(
@@ -471,8 +510,10 @@ class ClassificationSection(ReportSection):
 
         # Add explanation text using centralized thresholds
         from robin.classification_config import CLASSIFIER_CONFIDENCE_THRESHOLDS
-        
-        explanation_lines = ["Note: Classification confidence levels are defined as follows:"]
+
+        explanation_lines = [
+            "Note: Classification confidence levels are defined as follows:"
+        ]
         for classifier, thresholds in CLASSIFIER_CONFIDENCE_THRESHOLDS.items():
             explanation_lines.append(
                 f"- {classifier.title()}: High (>={thresholds['high']:.0f}%), "
@@ -481,7 +522,7 @@ class ClassificationSection(ReportSection):
         explanation_lines.append(
             "Multiple classifiers may provide different results based on their training data and methodology."
         )
-        
+
         Explanation_text = Paragraph(
             "\n".join(explanation_lines),
             ParagraphStyle(
@@ -533,9 +574,7 @@ class ClassificationSection(ReportSection):
         # Add detailed results for each classifier
         self.elements.append(PageBreak())
         self.elements.append(
-            Paragraph(
-                "Detailed Classification Results", self.styles.styles["Heading2"]
-            )
+            Paragraph("Detailed Classification Results", self.styles.styles["Heading2"])
         )
         self.elements.append(Spacer(1, 4))
 
@@ -562,9 +601,7 @@ class ClassificationSection(ReportSection):
                     # Build detailed table for top 10 predictions
                     detailed_data = [["Predicted Class", "Confidence Score"]]
                     for class_name, score in top_predictions.items():
-                        confidence = (
-                            score / 100.0 if name == "Random Forest" else score
-                        )
+                        confidence = score / 100.0 if name == "Random Forest" else score
                         detailed_data.append([class_name, f"{confidence:.1%}"])
 
                     detailed_table = self.create_table(
@@ -614,9 +651,7 @@ class ClassificationSection(ReportSection):
                                     "ConfidencePercent": f"{confidence:.1%}",
                                 }
                             )
-                        key = (
-                            f"classification_{name.lower().replace(' ', '_')}_top10"
-                        )
+                        key = f"classification_{name.lower().replace(' ', '_')}_top10"
                         from pandas import DataFrame as _DF
 
                         self.export_frames[key] = _DF(rows)

@@ -48,7 +48,9 @@ def load_minknow_toml(
         raise click.BadParameter(f"Invalid TOML in {path}: {exc}") from exc
 
     if not isinstance(raw, dict):
-        raise click.BadParameter(f"TOML config must be a table at the top level: {path}")
+        raise click.BadParameter(
+            f"TOML config must be a table at the top level: {path}"
+        )
 
     inline_workflow = extract_workflow_ref_keys(raw)
     merged_workflow: dict[str, Any] = dict(inline_workflow)
@@ -106,13 +108,13 @@ def resolve_minknow_gui_config(
 ) -> Optional[MinKnowWorkflowConfig]:
     """Return MinKNOW GUI settings when explicitly configured via TOML or env.
 
-  The GUI sequencer page is shown only when this returns a config with
-  ``settings.enabled`` true. Sources (in order):
+    The GUI sequencer page is shown only when this returns a config with
+    ``settings.enabled`` true. Sources (in order):
 
-  - ``[minknow]`` in the workflow TOML passed to ``robin workflow --toml``
-  - ``[minknow]`` in ``ROBIN_WORKFLOW_TOML``
-  - ``MINKNOW_PRESET`` pointing at a preset / workflow TOML file
-  - ``MINKNOW_ENABLED=true`` or an explicit ``MINKNOW_HOST`` environment variable
+    - ``[minknow]`` in the workflow TOML passed to ``robin workflow --toml``
+    - ``[minknow]`` in ``ROBIN_WORKFLOW_TOML``
+    - ``MINKNOW_PRESET`` pointing at a preset / workflow TOML file
+    - ``MINKNOW_ENABLED=true`` or an explicit ``MINKNOW_HOST`` environment variable
     """
     import os
 

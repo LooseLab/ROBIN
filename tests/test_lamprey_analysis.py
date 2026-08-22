@@ -39,9 +39,10 @@ class FakeSession:
 
 
 def test_sturgeon_matched_confidence_tiers():
-    assert CLASSIFIER_CONFIDENCE_THRESHOLDS["lamprey"] == CLASSIFIER_CONFIDENCE_THRESHOLDS[
-        "sturgeon"
-    ]
+    assert (
+        CLASSIFIER_CONFIDENCE_THRESHOLDS["lamprey"]
+        == CLASSIFIER_CONFIDENCE_THRESHOLDS["sturgeon"]
+    )
 
 
 def test_research_ack_gate(monkeypatch):

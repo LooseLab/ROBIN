@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from robin.analysis.mnpflex_config import MNPFlexConfig
 from robin.analysis.mnpflex_docker import (
     adapt_docker_outputs,
     build_bundle_summary_from_docker_dir,
@@ -14,8 +15,6 @@ from robin.analysis.mnpflex_docker import (
     format_mnpflex_runtime_error,
     run_docker_mnpflex,
 )
-from robin.analysis.mnpflex_config import MNPFlexConfig
-
 
 FIXTURE_DIR = (
     Path(__file__).resolve().parent / "fixtures" / "mnpflex_docker" / "26D22147.MNPFlex"
@@ -52,7 +51,10 @@ def test_build_bundle_summary_from_fixture() -> None:
     assert preds["molecular_superfamily"]["label"] == "Adult-Type Diffuse Gliomas"
     assert preds["molecular_family"]["label"] == "Glioblastoma, IDH-Wildtype"
     assert preds["molecular_class"]["label"] == "Glioblastoma, IDH-Wildtype, RTK2 Type"
-    assert preds["molecular_subclass"]["label"] == "Glioblastoma, IDH-Wildtype, RTK2 Subtype"
+    assert (
+        preds["molecular_subclass"]["label"]
+        == "Glioblastoma, IDH-Wildtype, RTK2 Subtype"
+    )
     assert preds["molecular_class"]["score"] == pytest.approx(0.254857897758484)
     scores = summary["classifier_summary"]["scores"]
     assert len(scores) >= 180
@@ -99,7 +101,9 @@ def test_find_docker_output_dir_supports_nested_layout(tmp_path: Path) -> None:
     nested = tmp_path / "docker_workspace" / "sample.bedstem"
     nested.mkdir(parents=True)
     for path in FIXTURE_DIR.glob("*.csv"):
-        (nested / path.name).write_text(path.read_text(encoding="utf-8"), encoding="utf-8")
+        (nested / path.name).write_text(
+            path.read_text(encoding="utf-8"), encoding="utf-8"
+        )
     found = find_docker_output_dir(tmp_path / "docker_workspace", "sample.bedstem")
     assert found == nested
 
@@ -114,12 +118,15 @@ def test_run_docker_mnpflex_invokes_container(
     docker_dir.mkdir(parents=True)
 
     for path in FIXTURE_DIR.glob("*.csv"):
-        (docker_dir / path.name).write_text(path.read_text(encoding="utf-8"), encoding="utf-8")
+        (docker_dir / path.name).write_text(
+            path.read_text(encoding="utf-8"), encoding="utf-8"
+        )
 
     captured: dict = {}
 
     def fake_run(cmd, **kwargs):
         captured["cmd"] = cmd
+
         class Result:
             returncode = 0
             stdout = ""

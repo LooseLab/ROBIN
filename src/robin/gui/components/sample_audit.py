@@ -15,7 +15,12 @@ if TYPE_CHECKING:
     from robin.gui_launcher import GUILauncher
 
 _AUDIT_COLUMNS = [
-    {"name": "occurred_at", "label": "Time (UTC)", "field": "occurred_at", "align": "left"},
+    {
+        "name": "occurred_at",
+        "label": "Time (UTC)",
+        "field": "occurred_at",
+        "align": "left",
+    },
     {"name": "username", "label": "User", "field": "username", "align": "left"},
     {"name": "event_type", "label": "Event", "field": "event_type", "align": "left"},
     {"name": "target", "label": "Target", "field": "target", "align": "left"},
@@ -42,7 +47,9 @@ _EXPORT_FIELDS = [
 ]
 
 
-def _audit_rows_for_sample(launcher: "GUILauncher", sample_id: str, *, limit: int = 500) -> List[Dict[str, Any]]:
+def _audit_rows_for_sample(
+    launcher: "GUILauncher", sample_id: str, *, limit: int = 500
+) -> List[Dict[str, Any]]:
     events = launcher.security_store.query_audit_events(
         sample_id=sample_id,
         limit=limit,
@@ -65,7 +72,9 @@ def _audit_rows_for_sample(launcher: "GUILauncher", sample_id: str, *, limit: in
     return rows
 
 
-def _export_sample_audit_csv(launcher: "GUILauncher", sample_id: str, *, limit: int = 5000) -> bytes:
+def _export_sample_audit_csv(
+    launcher: "GUILauncher", sample_id: str, *, limit: int = 5000
+) -> bytes:
     events = launcher.security_store.query_audit_events(
         sample_id=sample_id,
         limit=limit,
@@ -91,8 +100,11 @@ def open_sample_audit_dialog(launcher: "GUILauncher", sample_id: str) -> None:
     """Show audit history for a single sample with CSV export."""
     limit = 500
 
-    with ui.dialog() as dialog, ui.card().classes(
-        "robin-dialog-surface p-4 md:p-5 w-full max-w-5xl min-w-[18rem]"
+    with (
+        ui.dialog() as dialog,
+        ui.card().classes(
+            "robin-dialog-surface p-4 md:p-5 w-full max-w-5xl min-w-[18rem]"
+        ),
     ):
         ui.label(f"Audit history — {sample_id}").classes(
             "classification-insight-heading text-headline-small q-mb-sm"
