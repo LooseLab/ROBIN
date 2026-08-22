@@ -27,6 +27,7 @@ jobs:
 
       - name: Format ROBIN-owned Python
         run: |
+          # Deliberately leave vendored/upstream code under src/robin/submodules untouched.
           isort src/robin tests --skip-glob 'src/robin/submodules/*'
           black src/robin tests --exclude 'src/robin/submodules/'
 
