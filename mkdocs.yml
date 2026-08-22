@@ -19,7 +19,6 @@ theme:
     - search.share
     - content.code.copy
   palette:
-    # Editorial Bioinformatics (design.md): emerald shell, slate content in dark mode
     - scheme: default
       primary: custom
       accent: custom
@@ -71,15 +70,14 @@ plugins:
 
 nav:
   - Home: index.md
-  - Releases:
-    - "v0.5 (from v0.1.7)": releases/v0.5.md
   - Getting Started:
+    - Quickstart: getting-started/quickstart.md
     - Installation: getting-started/installation.md
-    - ROBIN Quickstart: getting-started/quickstart.md
-    - At startup (disclaimer, GUI, password): getting-started/startup.md
-    - Library Preparation: getting-started/library-preparation.md
-    - MinKNOW Configuration: getting-started/minknow-configuration.md
-    - MNP-Flex Setup: getting-started/mnpflex.md
+    - Sequencing setup:
+      - Library preparation: getting-started/library-preparation.md
+      - MinKNOW configuration: getting-started/minknow-configuration.md
+    - Starting ROBIN: getting-started/startup.md
+    - MNP-Flex integration: getting-started/mnpflex.md
   - Using ROBIN:
     - Overview: using-robin/index.md
     - First steps and navigation: using-robin/authentication-and-layout.md
@@ -106,3 +104,5 @@ nav:
   - Developer guide:
     - Architecture: architecture/overview.md
     - MinKNOW integration: development/minknow-integration.md
+  - Releases:
+    - "v0.5 (from v0.1.7)": releases/v0.5.md
