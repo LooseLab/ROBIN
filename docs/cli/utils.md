@@ -32,7 +32,7 @@ robin utils update-models --overwrite
 | `--manifest` | Path to `assets.json` (default: packaged manifest or `ROBIN_ASSETS_MANIFEST`). |
 | `--overwrite` | Replace existing files. |
 
-For **private** GitHub-hosted assets, set **`GITHUB_TOKEN`** before running.
+The standard ROBIN asset manifest uses public download locations, so a GitHub access token is not required for normal installation.
 
 More context: [Installation — models](../getting-started/installation.md#step-4-download-models-and-clinvar).
 

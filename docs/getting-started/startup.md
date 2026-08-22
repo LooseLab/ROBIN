@@ -24,7 +24,7 @@
 
 ## 1. Model assets
 
-ROBIN checks **required model files** (same manifest as `robin utils update-models`). If anything is missing, the process exits and tells you to run **`robin utils update-models`** (and **`GITHUB_TOKEN`** if assets are on private GitHub).
+ROBIN checks **required model files** using the same manifest as `robin utils update-models`. If anything is missing, the process exits and tells you to run **`robin utils update-models`**.
 
 ---
 
