@@ -71,8 +71,8 @@ plugins:
 nav:
   - Home: index.md
   - Getting Started:
-    - Quickstart: getting-started/quickstart.md
     - Installation: getting-started/installation.md
+    - Quickstart: getting-started/quickstart.md
     - Sequencing setup:
       - Library preparation: getting-started/library-preparation.md
       - MinKNOW configuration: getting-started/minknow-configuration.md
