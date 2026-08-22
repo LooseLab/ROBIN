@@ -80,6 +80,20 @@ nav:
     - Library Preparation: getting-started/library-preparation.md
     - MinKNOW Configuration: getting-started/minknow-configuration.md
     - MNP-Flex Setup: getting-started/mnpflex.md
+  - Using ROBIN:
+    - Overview: using-robin/index.md
+    - First steps and navigation: using-robin/authentication-and-layout.md
+    - Users, consent, and auditing: using-robin/audit-and-users.md
+    - Tour of the screens: using-robin/pages-and-routes.md
+    - Reading your results: using-robin/sample-results.md
+    - Troubleshooting: using-robin/troubleshooting.md
+  - Analysis pipelines:
+    - Overview: analyses/index.md
+    - Methylation classification: analyses/methylation-classification.md
+    - MGMT promoter methylation: analyses/mgmt.md
+    - Copy-number analysis: analyses/cnv.md
+    - Target coverage and variants: analyses/target-and-variants.md
+    - Structural events (fusion and ITD): analyses/structural-events.md
   - Command-line reference:
     - Overview: cli/index.md
     - workflow command: cli/workflow.md
@@ -89,10 +103,6 @@ nav:
     - Default admin password: cli/password.md
     - GUI users: cli/users.md
     - Audit log: cli/audit.md
-  - Using ROBIN:
-    - Overview: using-robin/index.md
-    - First steps and navigation: using-robin/authentication-and-layout.md
-    - Users, consent, and auditing: using-robin/audit-and-users.md
-    - Tour of the screens: using-robin/pages-and-routes.md
-    - Reading your results: using-robin/sample-results.md
-    - Troubleshooting: using-robin/troubleshooting.md
+  - Developer guide:
+    - Architecture: architecture/overview.md
+    - MinKNOW integration: development/minknow-integration.md
