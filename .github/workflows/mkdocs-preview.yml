@@ -85,4 +85,5 @@ jobs:
           clean: true
 
       - name: Preview URL
-        run: echo "Preview: ${{ steps.preview.outputs.url }}"
+        run: |
+          echo "Preview: ${{ steps.preview.outputs.url }}"
