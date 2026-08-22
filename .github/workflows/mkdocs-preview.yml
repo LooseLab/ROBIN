@@ -1,0 +1,88 @@
+# Build MkDocs for pull requests and publish a preview under /preview/pr-<number>/
+# on the existing gh-pages branch. Production root and /beta/ are preserved.
+
+name: Publish docs preview
+
+on:
+  pull_request:
+    branches:
+      - release_candidate2
+    paths:
+      - "docs/**"
+      - "mkdocs.yml"
+      - "requirements-docs.txt"
+      - ".github/workflows/mkdocs-preview.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: gh-pages-deploy
+  cancel-in-progress: false
+
+jobs:
+  build-and-deploy:
+    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements-docs.txt
+
+      - name: Install MkDocs
+        run: pip install -r requirements-docs.txt
+
+      - name: Set preview URL
+        id: preview
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            PR_NUMBER="${{ github.event.pull_request.number }}"
+          else
+            PR_NUMBER="manual-${GITHUB_RUN_NUMBER}"
+          fi
+          echo "number=${PR_NUMBER}" >> "$GITHUB_OUTPUT"
+          echo "url=https://looselab.github.io/ROBIN/preview/pr-${PR_NUMBER}/" >> "$GITHUB_OUTPUT"
+
+      - name: Build site
+        env:
+          PREVIEW_SITE_URL: ${{ steps.preview.outputs.url }}
+        run: |
+          cp mkdocs.yml mkdocs.preview.yml
+          python - <<'PY'
+          from pathlib import Path
+          import os
+          p = Path("mkdocs.preview.yml")
+          text = p.read_text()
+          lines = text.splitlines()
+          preview_url = os.environ["PREVIEW_SITE_URL"]
+          replaced = False
+          for i, line in enumerate(lines):
+              if line.startswith("site_url:"):
+                  lines[i] = f"site_url: {preview_url}"
+                  replaced = True
+                  break
+          if not replaced:
+              lines.insert(0, f"site_url: {preview_url}")
+          p.write_text("\n".join(lines) + "\n")
+          PY
+          mkdocs build --strict -f mkdocs.preview.yml
+
+      - name: Add .nojekyll
+        run: touch site/.nojekyll
+
+      - name: Deploy preview to GitHub Pages branch
+        uses: JamesIves/github-pages-deploy-action@v4
+        with:
+          folder: site
+          branch: gh-pages
+          target-folder: preview/pr-${{ steps.preview.outputs.number }}
+          clean: true
+
+      - name: Preview URL
+        run: echo "Preview: ${{ steps.preview.outputs.url }}"
