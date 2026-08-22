@@ -8,90 +8,79 @@
     ROBIN is for **research use** at this time. The technology is under active development and validation.
 
 !!! abstract "What ROBIN is"
-    ROBIN helps deliver **same-day molecular insight** from nanopore brain tumour sequencing—so clinicians and families spend less time waiting on classification that can guide treatment. It is built for the lab and the browser: live BAM processing, classifiers, and a web app to follow runs and read results.
+    ROBIN is a real-time analysis and web-monitoring platform for Oxford Nanopore sequencing of CNS tumours. It combines live BAM processing with methylation classification, copy-number analysis, MGMT analysis, targeted analysis and structural-event detection.
 
----
-
-## Why speed matters
-
-<div class="grid" markdown>
-
-<div class="grid-item" markdown>
-<span class="stat-number">12,700</span>
-Annual new cases of brain and other CNS tumours in the UK (2017–2019)
-</div>
-
-<div class="grid-item" markdown>
-<span class="stat-number">35</span>
-People diagnosed **every day**
-</div>
-
-<div class="grid-item" markdown>
-<span class="stat-number">100+</span>
-Distinct brain tumour types—each with different treatment implications
-</div>
-
-</div>
-
-*Source: [Cancer Research UK statistics](https://www.cancerresearchuk.org/health-professional/cancer-statistics/statistics-by-cancer-type/brain-other-cns-and-intracranial-tumours) (2017–2019).*
-
----
-
-## The gap today
-
-Standard pathways can leave patients and teams waiting **many weeks** for a full molecular picture. That delay affects:
-
-- **Patients and families** — prolonged uncertainty  
-- **Treatment planning** — slower decisions on surgery, radiotherapy, trials, and drugs  
-- **Equity** — access to rapid classification varies by site and geography  
-
-ROBIN is one approach aimed at **hours instead of weeks**, with equitable access regardless of location—see our [Neuro-Oncology publication](https://academic.oup.com/neuro-oncology/advance-article/doi/10.1093/neuonc/noaf103/8139084?searchresult=1).
-
----
-
-## What ROBIN delivers
+## Get started
 
 <div class="grid" markdown>
 
 <div class="robin-feature-card" markdown>
-<span class="robin-card-icon" aria-hidden="true">⏱</span>
-### Hours, not weeks
-Molecular profiling aligned to your nanopore run—so teams can plan sooner after surgery.
+### Install ROBIN
+[Installation](getting-started/installation.md) covers the conda environment, package installation and required model assets.
 </div>
 
 <div class="robin-feature-card" markdown>
-<span class="robin-card-icon" aria-hidden="true">🧭</span>
-### Clearer patient journey
-Same-day results can reduce anxiety and support shared decision-making.
+### Run your first workflow
+[Quickstart](getting-started/quickstart.md) takes you from an installed environment to a running analysis and web interface.
 </div>
 
 <div class="robin-feature-card" markdown>
-<span class="robin-card-icon" aria-hidden="true">🏥</span>
-### Built for real workflows
-Web monitoring, classification, CNV, MGMT, fusion, and reporting—where your pipeline enables them.
+### Configure sequencing
+[MinKNOW configuration](getting-started/minknow-configuration.md) covers alignment, modified-base calling and BAM rollover settings.
+</div>
+
+</div>
+
+## Explore ROBIN
+
+<div class="grid" markdown>
+
+<div class="robin-feature-card" markdown>
+### Use the web interface
+[Using ROBIN](using-robin/index.md) covers sign-in, navigation, samples, results and troubleshooting.
+</div>
+
+<div class="robin-feature-card" markdown>
+### Understand the analyses
+[Analysis pipelines](analyses/index.md) explains the purpose, inputs and interpretation of ROBIN's analysis workflows.
+</div>
+
+<div class="robin-feature-card" markdown>
+### Command-line reference
+[CLI reference](cli/index.md) documents `robin workflow`, job types, panels and utilities.
 </div>
 
 </div>
 
 ---
 
-## Explore the documentation
+## Why rapid molecular analysis matters
+
+Brain and CNS tumours encompass many biologically distinct entities, and molecular information increasingly contributes to classification and research workflows. Conventional diagnostic pathways may take days to weeks to assemble the complete molecular picture.
+
+ROBIN was developed to explore whether nanopore sequencing and real-time analysis can shorten that interval substantially. The approach is described in our [Neuro-Oncology publication](https://academic.oup.com/neuro-oncology/advance-article/doi/10.1093/neuonc/noaf103/8139084?searchresult=1).
+
+ROBIN is intended to support research and validation of rapid workflows. Its outputs require expert interpretation and should not be treated as standalone clinical results.
+
+---
+
+## What ROBIN provides
 
 <div class="grid" markdown>
 
 <div class="robin-feature-card" markdown>
-### Install and run
-[Installation](getting-started/installation.md) → [Quickstart](getting-started/quickstart.md) → [Startup behaviour](getting-started/startup.md)
+### Real-time processing
+ROBIN watches aligned BAM output as sequencing progresses and schedules enabled analyses incrementally.
 </div>
 
 <div class="robin-feature-card" markdown>
-### Command line
-[CLI overview](cli/index.md) — `robin workflow`, panels, utilities, password.
+### Complementary analyses
+Methylation classifiers, CNV, MGMT, target/variant analysis and structural-event detection can be combined in one workflow.
 </div>
 
 <div class="robin-feature-card" markdown>
-### Web app (browser)
-[Using ROBIN](using-robin/index.md) — sign-in, samples, results, troubleshooting.
+### Browser-based monitoring
+The web interface brings sample metadata, progress and accumulated analysis results together during a run.
 </div>
 
 </div>
@@ -100,27 +89,20 @@ Web monitoring, classification, CNV, MGMT, fusion, and reporting—where your pi
 
 ## Partners and adoption
 
-We work with clinicians and surgeons in the UK and internationally to move rapid classification toward routine care. If your organisation is interested in implementing ROBIN:
+ROBIN is developed by the **Loose Lab** at the University of Nottingham with collaborators at **Nottingham University Hospitals NHS Trust** and other centres.
 
-- [GitHub repository](https://github.com/LooseLab/robin)  
-- [Contact form](https://forms.gle/kdX2eiPQPdDUpaBE9)  
+- [GitHub repository](https://github.com/LooseLab/ROBIN)
+- [Contact form](https://forms.gle/kdX2eiPQPdDUpaBE9)
 
 ---
 
 ## Information for patients and families
 
-ROBIN is a **research and hospital** tool—not a substitute for medical advice. If you are worried about symptoms:
+ROBIN is a research tool and is not a substitute for medical advice. General information and support are available from:
 
-- **Speak to your GP** urgently about new or worsening neurological symptoms.  
-- **[Cancer Research UK — brain tumours](https://www.cancerresearchuk.org/about-cancer/brain-tumours)** — trusted overview.  
-- **[The Brain Tumour Charity](https://www.thebraintumourcharity.org/)** — support and information.  
-- **[brainstrust](https://www.brainstrust.org.uk/)** — specialist support.  
-- **[Brain Tumour Research](https://www.braintumourresearch.org/)** — research news.  
-- **[MyBrainFirst.org](https://www.mybrainfirst.org/)** — symptom awareness.  
+- [Cancer Research UK — brain tumours](https://www.cancerresearchuk.org/about-cancer/brain-tumours)
+- [The Brain Tumour Charity](https://www.thebraintumourcharity.org/)
+- [brainstrust](https://www.brainstrust.org.uk/)
+- [Brain Tumour Research](https://www.braintumourresearch.org/)
 
-!!! note "Clinical care first"
-    Early diagnosis and the right care pathway matter most. The organisations above can help while molecular technologies continue to roll out across the NHS and beyond.
-
----
-
-ROBIN is developed by the **Loose Lab** (University of Nottingham) with **Nottingham University Hospitals NHS Trust**. [GitHub](https://github.com/LooseLab/robin)
+For concerns about symptoms or treatment, contact an appropriate healthcare professional.
