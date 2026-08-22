@@ -7,14 +7,13 @@ name = "robin"
 version = "0.5.4"
 description = "Real-time Oxford Nanopore oncology analysis and monitoring workflow"
 readme = "README.md"
-license = {text = "MIT"}
+license = {text = "CC-BY-NC-4.0"}
 authors = [
     {name = "Matt Loose", email = "matt.loose@nottingham.ac.uk"},
 ]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
-    "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.12",
 ]
