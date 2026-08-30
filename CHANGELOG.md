@@ -8,6 +8,7 @@ and this project (almost) adheres to [Semantic Versioning](https://semver.org/sp
 ## [Unreleased]
 
 ### Added
+- **ClairS-TO readable runtime image:** SNP calling still runs ClairS-TO as the host UID/GID so bind-mounted outputs are not root-owned. ROBIN derives a local `robin/clairs-to:readable` image with world-readable bundled models, databases, and CNA/Verdict loci, then preflights loci-file access before launching analysis.
 - **ClinVar significance for SNPs:** Variant classification now considers germline pathogenicity (`CLNSIG`), oncogenicity (`ONC`), and somatic clinical impact (`SCI` tiers I/II) via shared `variant_classification` logic. The SNP GUI table adds ONC/SCI columns and a **ClinVar significant only** filter.
 - **ClinVar re-annotation:** The SNP analysis section shows which ClinVar release annotated the sample versus what is installed locally, warns when stale, and offers **Re-annotate with current ClinVar** to re-run snpEff/SnpSift on existing Clair3 outputs without re-calling variants (`annotation_only` workflow path).
 - **SnpSift contig normalization:** VCF chromosomes are normalized from UCSC-style `chrN` to ClinVar GRCh38 naming before SnpSift and restored afterward, so tabix lookups succeed and variants are not dropped.
@@ -30,6 +31,7 @@ and this project (almost) adheres to [Semantic Versioning](https://semver.org/sp
 - **Admin sample management:** The **Administration** page adds a **Sample management** tab (admin only) to permanently delete completed sample output folders or archive them as `tar.gz` files to a server-side destination outside the work directory. Live runs and samples with active or pending jobs are blocked. Archives include analysis outputs and `sample_identifier_manifest.json` but exclude housekeeping folders (for example `_locks` and `_fusion_staging`). Successful archive removes the sample from live tracking; delete and archive actions are audit-logged (`sample.deleted`, `sample.archived`).
 
 ### Changed
+- **ClairS-TO image pin:** SNP/INDEL calling uses a single `CLAIRS_TO_IMAGE` setting, currently `hkubal/clairs-to:v0.4.4`. The image is pulled only if it is not already present locally (the tag is not refreshed on every run).
 - **GUI authentication:** Replaced the shared single-password gate with multi-user accounts. Legacy `gui_password_hash` is used only to bootstrap the first `admin` user when no accounts exist (`robin users bootstrap-admin`).
 - **Research disclaimer:** Removed the global GUI startup agreement dialog and redundant disclaimers on report export dialogs; consent is enforced per user at login. The CLI `I agree` prompt is skipped when an active admin has already accepted the current consent version.
 - **Audit presentation:** Admin and per-sample audit tables list events in reverse chronological order (newest first).
@@ -46,6 +48,9 @@ and this project (almost) adheres to [Semantic Versioning](https://semver.org/sp
 - **Documentation:** MinKNOW and quickstart guidance now explicitly requires 5mC/5hmC modified-base calling in **CpG contexts only** and warns against all-context models.
 - **Dependencies:** Raised the PyArrow requirement from `16.1` to `>=23.0.1` for the updated Parquet processing paths.
 ### Fixed
+- Fixed ClairS-TO CNA/Verdict failing with a misleading “loci file does not appear to exist” error when bundled resource files were present but not readable by the host UID/GID (`0640` archive permissions).
+- Fixed SNP containers executing `/opt/bin/run_clairs_to` as a shell script (`import: not found`) after the derived readable image inherited `ENTRYPOINT ["/bin/sh"]` from the chmod step. Commits now restore the upstream Entrypoint/Cmd, and a layout label forces rebuild of the broken local image.
+- Fixed ASGI `ExceptionGroup` errors in NiceGUI/Socket.IO after long SNP runs (including **SNP: all missing**). Completion toasts are sent only to clients that still have a live Socket.IO connection, and `/_nicegui` polls no longer rewrite session storage on every request.
 - Fixed SnpSift ClinVar annotation failing silently when the tabix index was older than `clinvar.vcf.gz` (SnpSift exited 0 but added no `CLNSIG`/`ONC`/`SCI` fields).
 - Fixed SnpSift dropping most variants and missing known pathogenic sites (for example IDH1 R132H) when sample VCF contigs used `chrN` but ClinVar used numeric chromosome names.
 - Fixed GUI logout crashing when a callback was stored in NiceGUI general storage (not JSON-serializable).

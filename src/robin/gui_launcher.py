@@ -61,6 +61,7 @@ from robin.security import (
 )
 
 from robin.reporting.report import create_pdf
+from robin.gui.client_notify import notify_connected_clients
 from robin.gui.config import resolve_viewer_role
 from robin.reporting.sections.disclaimer_text import EXTENDED_DISCLAIMER_TEXT
 
@@ -907,33 +908,39 @@ class GUILauncher:
         @app.add_middleware
         class AuthMiddleware(BaseHTTPMiddleware):
             async def dispatch(self, request: Request, call_next):
-                # Store request host for theme (e.g. to show Quit only on localhost)
-                try:
-                    url = request.url
-                    host = getattr(url, "hostname", None)
-                    if not host and getattr(url, "host", None):
-                        host = str(url.host).split(":")[0]
-                    app.storage.user["_request_host"] = (host or "").strip()
-                    forwarded_for = request.headers.get("x-forwarded-for", "")
-                    real_ip = request.headers.get("x-real-ip", "")
-                    client_host = request.client.host if request.client else ""
-                    ip = (forwarded_for.split(",")[0].strip() if forwarded_for else "") or real_ip or client_host
-                    app.storage.user["_request_ip"] = ip
-                    app.storage.user["_request_user_agent"] = request.headers.get("user-agent", "")
-                    app.storage.user["_request_id"] = uuid.uuid4().hex
-                    if not app.storage.user.get("_session_id"):
-                        app.storage.user["_session_id"] = uuid.uuid4().hex
-                except Exception:
-                    try:
-                        app.storage.user["_request_host"] = ""
-                        app.storage.user["_request_ip"] = ""
-                        app.storage.user["_request_user_agent"] = ""
-                        app.storage.user["_request_id"] = ""
-                    except Exception:
-                        pass
                 path = request.url.path
+                # Socket.IO / NiceGUI asset polls must not touch session storage.
+                # Mutating app.storage.user on every /_nicegui request (new
+                # _request_id, etc.) can break a long-lived Engine.IO session
+                # after SNP runs for many hours and surfaces as an ASGI
+                # ExceptionGroup in handle_request.
+                skip_session_touch = path.startswith("/_nicegui")
+                if not skip_session_touch:
+                    try:
+                        url = request.url
+                        host = getattr(url, "hostname", None)
+                        if not host and getattr(url, "host", None):
+                            host = str(url.host).split(":")[0]
+                        app.storage.user["_request_host"] = (host or "").strip()
+                        forwarded_for = request.headers.get("x-forwarded-for", "")
+                        real_ip = request.headers.get("x-real-ip", "")
+                        client_host = request.client.host if request.client else ""
+                        ip = (forwarded_for.split(",")[0].strip() if forwarded_for else "") or real_ip or client_host
+                        app.storage.user["_request_ip"] = ip
+                        app.storage.user["_request_user_agent"] = request.headers.get("user-agent", "")
+                        app.storage.user["_request_id"] = uuid.uuid4().hex
+                        if not app.storage.user.get("_session_id"):
+                            app.storage.user["_session_id"] = uuid.uuid4().hex
+                    except Exception:
+                        try:
+                            app.storage.user["_request_host"] = ""
+                            app.storage.user["_request_ip"] = ""
+                            app.storage.user["_request_user_agent"] = ""
+                            app.storage.user["_request_id"] = ""
+                        except Exception:
+                            pass
                 if (
-                    path.startswith("/_nicegui")
+                    skip_session_touch
                     or path in unrestricted_page_routes
                     or path.startswith("/api/v1/")
                 ):
@@ -1827,13 +1834,12 @@ class GUILauncher:
             timeout = data.get('timeout', 5000)
 
             # Create notification in the container
-            with container:
-                ui.notify(
-                    message,
-                    type=notification_type,
-                    timeout=timeout,
-                    position="top-right"
-                )
+            notify_connected_clients(
+                message,
+                type=notification_type,
+                timeout=timeout,
+                position="top-right",
+            )
 
         except Exception as e:
             logging.error(f"Error showing notification in container: {e}")
@@ -1847,12 +1853,11 @@ class GUILauncher:
             notification_type = event_data.get('type', 'info')
             timeout = event_data.get('timeout', 5000)
 
-            # Show notification in the proper UI context
-            ui.notify(
+            notify_connected_clients(
                 message,
                 type=notification_type,
                 timeout=timeout,
-                position="top-right"
+                position="top-right",
             )
 
         except Exception as e:
@@ -2359,13 +2364,10 @@ class GUILauncher:
             else:
                 notification_msg = message
 
-            # Show dismissible notification
-            # NiceGUI notifications are dismissible by default with a close button
-            # timeout=0 makes it persistent until manually dismissed
-            ui.notify(
+            notify_connected_clients(
                 notification_msg,
                 type=level,
-                timeout=0,  # Persistent until manually dismissed (close button available)
+                timeout=8000,
                 position="top-right",
             )
 

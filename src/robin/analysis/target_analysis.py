@@ -34,6 +34,11 @@ import pandas as pd
 import pysam
 from robin.logging_config import get_job_logger
 from robin.analysis.snp_processing import build_snp_display_data
+from robin.utils.clairs_to_docker import (
+    ClairsToImageError,
+    assert_clairs_to_resources_readable,
+    ensure_readable_clairs_to_image,
+)
 from robin.utils.docker_fs import chown_tree_to_host_user, docker_host_user_spec
 
 # Optional import for Docker functionality
@@ -44,6 +49,9 @@ except ImportError:
 
 # BAM flag: supplementary (0x800) | secondary (0x100) — alignments to skip for "primary-only" logic
 _BAM_NON_PRIMARY_MASK = 0x800 | 0x100
+
+# Pinned ClairS-To image used for SNP/INDEL calling (hkubal/clairs-to).
+CLAIRS_TO_IMAGE = "hkubal/clairs-to:v0.4.4"
 
 # Fast Parquet I/O (matches fusion_work / accumulation pipelines)
 _PARQUET_WRITE_KWARGS = {"index": False, "engine": "pyarrow", "compression": "snappy"}
@@ -3470,19 +3478,19 @@ def run_snp_analysis(
             container_reference = f"/data/reference/{os.path.basename(reference)}"  # Reference goes to reference directory
             container_output = "/data/output"
 
-            # Check if Clair3 image exists
+            # Check if ClairS-To image exists
             try:
-                client.images.get("hkubal/clairs-to:latest")
-                logger.info("Clair3 image found: hkubal/clairs-to:latest")
+                client.images.get(CLAIRS_TO_IMAGE)
+                logger.info("ClairS-To image found: %s", CLAIRS_TO_IMAGE)
             except Exception:
                 logger.warning(
-                    "Clair3 image not found, attempting to pull: hkubal/clairs-to:latest"
+                    "ClairS-To image not found, attempting to pull: %s", CLAIRS_TO_IMAGE
                 )
                 try:
-                    client.images.pull("hkubal/clairs-to:latest")
-                    logger.info("Clair3 image pulled successfully")
+                    client.images.pull(CLAIRS_TO_IMAGE)
+                    logger.info("ClairS-To image pulled successfully: %s", CLAIRS_TO_IMAGE)
                 except Exception as pull_error:
-                    logger.error(f"Failed to pull Clair3 image: {pull_error}")
+                    logger.error(f"Failed to pull ClairS-To image: {pull_error}")
                     return ""
 
             # Clean up old debugging - no longer needed with the fixed approach
@@ -3550,6 +3558,22 @@ def run_snp_analysis(
                 )
             elif clair3_user:
                 logger.info("Clair3 containers will run as host user %s", clair3_user)
+
+            # Keep --user <host_uid:host_gid>. If upstream resources are 0640 and
+            # owned by the archive UID, derive a local world-readable image instead
+            # of running as root (which would reintroduce root-owned bind mounts).
+            runtime_image = CLAIRS_TO_IMAGE
+            try:
+                runtime_image = ensure_readable_clairs_to_image(
+                    client, CLAIRS_TO_IMAGE, user=clair3_user
+                )
+                assert_clairs_to_resources_readable(
+                    client, runtime_image, user=clair3_user
+                )
+            except ClairsToImageError as image_error:
+                logger.error("%s", image_error)
+                return ""
+            logger.info("ClairS-TO runtime image: %s", runtime_image)
 
             # Function to split BED file into manageable chunks.
             # Chunks can include multiple chromosomes, constrained by covered genomic span.
@@ -3792,7 +3816,7 @@ def run_snp_analysis(
                 # Create and start container for this region
                 logger.info(f"Creating Clair3 container for region {i+1}...")
                 container_kwargs = {
-                    "image": "hkubal/clairs-to:latest",
+                    "image": runtime_image,
                     "command": command,
                     "volumes": list(volume_bindings.keys()),
                     "host_config": host_config,

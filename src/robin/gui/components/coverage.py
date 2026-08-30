@@ -4767,7 +4767,10 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                     ui.label(
                         "• Reference genome (hg38 recommended) - provided via CLI --reference option"
                     )
-                    ui.label("• Docker running with hkubal/clairs-to:latest image")
+                    ui.label(
+                        "• Docker running with hkubal/clairs-to:latest "
+                        "(ROBIN derives a host-user-readable image; containers still run as your UID/GID)"
+                    )
                     ui.label("• snpEff and SnpSift installed")
 
                 # Add helpful note about file generation
