@@ -1,74 +1,64 @@
 # Installation
 
-!!! abstract "What this page covers"
-    Install ROBIN from this repository: **clone** → **conda environment** → **editable pip install** → **models & ClinVar** → **verify**.  
-    For **running** workflows (MinKNOW, BAM limits, CLI examples), see the repo **[README](https://github.com/LooseLab/ROBIN/blob/main/README.md)**. This page is **install only**.
+Install ROBIN from this repository, create a fresh environment, install the package and download the required model assets.
 
----
+For running ROBIN after installation, continue to the [Quickstart](quickstart.md).
 
 ## Before you start
 
 | You need | Notes |
 |----------|--------|
-| **Git** + **[Git LFS](https://git-lfs.com/)** | Clone includes submodules / LFS assets where used. |
-| **[Conda](https://docs.conda.io/)** | Miniconda or Anaconda. |
-| **Python 3.12** | Provided by the `robin` conda env (`robin.yml`). |
+| **Git** | Used to clone ROBIN and its submodules. Git LFS is not required for the current repository. |
+| **Conda** | Miniconda or Anaconda. |
+| **Python 3.12** | Provided by the `robin` conda environment. |
 
-**Recommended for production:** **64 GB RAM** or more; CPU/GPU per Oxford Nanopore guidance for your sequencer. Docker is optional.
+**Recommended system memory:** 64 GB RAM or more for typical production-scale use. CPU/GPU requirements depend on the Oxford Nanopore sequencing setup. Docker is optional for some downstream analysis paths.
 
----
-
-## ROBIN with Little John
-
-### Step 1: Clone the repository
-
-Include submodules:
+## 1. Clone the repository
 
 ```bash
 git clone --recursive https://github.com/LooseLab/ROBIN.git
 cd ROBIN
 ```
 
-If you already cloned without submodules:
+If the repository was cloned without submodules:
 
 ```bash
 git submodule update --init --recursive
 ```
 
-### Step 2: Create the conda environment
+## 2. Create the conda environment
 
-| File | Role |
-|------|------|
-| **`robin.yml`** | Main env: Python 3.12, scientific stack, bioinformatics, R/Bioconductor (Linux and macOS). |
-| **`robin_linux_extras.yml`** | **Linux only**, optional: use if you hit `libstdc++` / `CXXABI_1.3.15` (see README *Common issues*). |
+ROBIN uses the environment definition in `robin.yml`:
 
 ```bash
 conda env create -f robin.yml
 conda activate robin
 ```
 
-- `pyproject.toml` requires Python **≥ 3.12**; this env matches that.  
-- Prefer a **fresh** env for this codebase—not an older ROBIN env from past releases.
+Use a **fresh environment** for this codebase rather than reusing an environment from an older ROBIN release or another project.
 
-#### If the `robin` environment already exists
+### If the `robin` environment already exists
 
-`robin.yml` sets **`name: robin`**. If create fails because the env exists:
+`robin.yml` defines `name: robin`. Choose one of the following:
 
 | Approach | Command |
 |----------|---------|
-| **Update in place** | `conda env update -n robin -f robin.yml --prune` then `conda activate robin` |
-| **Remove and recreate** | `conda deactivate` → `conda env remove -n robin` → `conda env create -f robin.yml` |
-| **New name** | `conda env create -f robin.yml -n robin_littlejohn` → `conda activate robin_littlejohn` |
+| Update in place | `conda env update -n robin -f robin.yml --prune` |
+| Remove and recreate | `conda env remove -n robin` followed by `conda env create -f robin.yml` |
+| Use another name | `conda env create -f robin.yml -n robin_littlejohn` |
 
-**Linux** — if you see `CXXABI_1.3.15` / wrong `libstdc++`:
+Then activate the environment you intend to use.
+
+### Linux `libstdc++` / `CXXABI_1.3.15` problems
+
+If native libraries resolve against the system `libstdc++` instead of conda's copy, apply the Linux extras environment:
 
 ```bash
 conda env update -n robin -f robin_linux_extras.yml
 ```
 
-(See README *Common issues*.)
-
-### Step 3: Install ROBIN (editable)
+## 3. Install ROBIN
 
 From the repository root:
 
@@ -76,57 +66,48 @@ From the repository root:
 pip install -e .
 ```
 
-This installs the `robin` CLI from your working tree.
+This installs the `robin` command-line interface from your working tree.
 
-**Optional extras** (install only if needed):
+Optional extras are available for features that require additional packages:
 
 | Extra | Command | Use |
 |-------|---------|-----|
-| GUI | `pip install -e '.[gui]'` | NiceGUI launcher (often already in `robin.yml`) |
-| MinKNOW API | `pip install -e '.[minknow]'` | `robin minknow status/watch`; pin `minknow_api` to your Core version — see [MinKNOW configuration](minknow-configuration.md#optional-programmatic-minknow-integration) |
+| GUI | `pip install -e '.[gui]'` | NiceGUI support where not already supplied by the environment |
+| MinKNOW API | `pip install -e '.[minknow]'` | Programmatic MinKNOW integration |
 
-### Step 4: Download models and ClinVar
+See [MinKNOW configuration](minknow-configuration.md) for instrument integration details.
 
-Assets are SHA256-verified. Set **`GITHUB_TOKEN`** if downloads use private GitHub.
+## 4. Download model and annotation assets
 
 ```bash
 robin utils update-models
 robin utils update-clinvar
 ```
 
-Private GitHub:
+Model assets are resolved from the public sources defined in ROBIN's asset manifest and are checksum-verified.
 
-```bash
-export GITHUB_TOKEN=your_personal_access_token
-robin utils update-models
-```
-
-Force re-download models:
+To replace existing model downloads:
 
 ```bash
 robin utils update-models --overwrite
 ```
 
-### Step 5: Verify
+## 5. Verify the installation
 
 ```bash
 robin --help
 robin list-job-types
 ```
 
----
+If both commands run successfully, continue to the [Quickstart](quickstart.md).
 
-## Troubleshooting (install)
+## Troubleshooting
 
-| Issue | What to do |
-|-------|------------|
+| Problem | Check |
+|---------|-------|
 | Missing submodules | `git submodule update --init --recursive` |
-| Model / ClinVar download failures | Set `GITHUB_TOKEN` if required; retry `robin utils update-models --overwrite` and `robin utils update-clinvar` |
-| Wrong conda env | `conda env list` — activate the env created from `robin.yml` |
+| Model or ClinVar download failure | Check network access and retry the relevant `robin utils` command |
+| Wrong environment | Use `conda env list` and activate the environment created from `robin.yml` |
+| Linux native-library error | Apply `robin_linux_extras.yml` as described above |
 
----
-
-## Next steps
-
-- [Quickstart](quickstart.md) — run a workflow  
-- [README — Usage](https://github.com/LooseLab/ROBIN/blob/main/README.md#usage) — deep operational detail  
+For operational problems after ROBIN starts, use [Troubleshooting](../using-robin/troubleshooting.md).

@@ -49,7 +49,6 @@ dependencies:
   - bioconductor-genomeinfodb
 
   # graphics/system deps
-  - git-lfs
   - pkg-config
   - cairo
   - pycairo

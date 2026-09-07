@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2023-present Matt Loose <matt.loose@nottingham.ac.uk>
 #
-# SPDX-License-Identifier: MIT
+# SPDX-License-Identifier: CC-BY-NC-4.0
 
 from pathlib import Path
 

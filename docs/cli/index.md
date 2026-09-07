@@ -1,11 +1,8 @@
 # Command-line reference
 
-!!! abstract "What this section covers"
-    The **`robin`** CLI (Click): **`workflow`**, **job types**, **panels**, **utilities**, and **default admin password**. For a first run, see [Installation](../getting-started/installation.md) and [Quickstart](../getting-started/quickstart.md).
+This section documents the `robin` command-line interface. For a first run, use the [Quickstart](../getting-started/quickstart.md); for installation, see [Installation](../getting-started/installation.md).
 
-Run **`robin --help`** and **`robin <command> --help`** for options in your build.
-
----
+Run `robin --help` and `robin <command> --help` to confirm options in your installed version.
 
 ## Commands
 
@@ -13,61 +10,53 @@ Run **`robin --help`** and **`robin <command> --help`** for options in your buil
 
 <div class="robin-feature-card" markdown>
 ### [`robin workflow`](workflow.md)
-Watch a BAM directory and run the selected pipeline (Ray, optional NiceGUI).
+Watch a BAM directory and run the selected pipeline using Ray or threaded execution, with optional NiceGUI monitoring.
 </div>
 
 <div class="robin-feature-card" markdown>
 ### [`robin list-job-types`](jobs.md)
-Print job types and queue layout for `-w` strings.
+Show available analysis job types and how they map to workflow queues.
 </div>
 
 <div class="robin-feature-card" markdown>
-### [Panels](panels.md)
-`list-panels`, `add-panel`, `remove-panel` — built-in and custom BED panels.
+### [Panel commands](panels.md)
+List built-in panels and add or remove custom BED panels.
 </div>
 
 <div class="robin-feature-card" markdown>
 ### [`robin utils`](utils.md)
-Models, ClinVar, `sequencing-files`, `mgmt`, and more.
+Stage references and panels, update model/ClinVar resources and run utility analyses.
 </div>
 
 <div class="robin-feature-card" markdown>
 ### [`robin password`](password.md)
-Set or replace the default admin password for GUI sign-in.
+Set or replace the default administrator password used by the web interface.
 </div>
 
 </div>
 
----
+## Startup and consent
 
-## Disclaimer (`I agree`)
+Commands that start protected processing may display the research-use disclaimer and require `I agree`. The workflow can also prompt for initial GUI-user setup.
 
-Commands that start processing or change protected state usually show a **research-use disclaimer** and require typing **`I agree`** exactly.
+See [Starting ROBIN](../getting-started/startup.md) for the complete startup sequence.
 
----
-
-## Environment variables (selected)
+## Selected environment variables
 
 | Variable | Effect |
 |----------|--------|
-| `GITHUB_TOKEN` | Private GitHub assets for `robin utils update-models`. |
-| `ROBIN_PROCESS_LARGE_BAMS` | Warns that large-BAM mode must not run alongside live sequencing. |
-| `LJ_BAM_THREADS` | Optional BAM threading ([README — Performance](https://github.com/LooseLab/ROBIN/blob/main/README.md#performance)). |
+| `ROBIN_PROCESS_LARGE_BAMS` | Enables large-BAM behaviour intended for non-live processing; ROBIN warns against combining this with live sequencing. |
+| `LJ_BAM_THREADS` | Controls optional BAM decompression/read threading. |
 
----
-
-## Startup behaviour
-
-**`robin workflow`** runs model checks, optional reference validation, **`I agree`**, and (if the GUI is on) may prompt for the **default admin password** when no GUI users exist — see **[What happens at startup](../getting-started/startup.md)**.
-
----
+Environment variables specific to individual analyses are documented with those analyses or their job configuration.
 
 ## Web interface
 
-Browser guide: **[Using ROBIN](../using-robin/index.md)**.
+For browser navigation, authentication, sample pages and result interpretation, see [Using ROBIN](../using-robin/index.md).
 
----
+## Related
 
-## See also
-
-- [README — Command reference](https://github.com/LooseLab/ROBIN/blob/main/README.md#command-reference)
+- [`robin workflow`](workflow.md)
+- [Job types](jobs.md)
+- [Panel commands](panels.md)
+- [`robin utils`](utils.md)
