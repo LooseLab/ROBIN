@@ -158,12 +158,14 @@ CNV_THRESHOLDS = {
 # CNV Event Detection Rules
 CNV_EVENT_RULES = {
     "whole_chromosome": {
-        "min_proportion_affected": 0.7,  # 70% of bins must support the event
-        "min_arm_proportion": 0.4,  # Each arm must show at least 40% effect
+        # Whole-chromosome GAIN/LOSS is both p and q independently meeting the
+        # arm_specific rules in the same direction. Do not require a higher
+        # occupancy fraction than an arm call: otherwise +p and +q (or −p and
+        # −q) can be reported as two arm events and never as +chr / −chr.
         "single_arm_multiplier": 1.5,  # For single-arm chromosomes, use 1.5x threshold
     },
     "arm_specific": {
-        "min_proportion_affected": 0.4,  # 40% of arm must be affected (reduced from 70%)
+        "min_proportion_affected": 0.4,  # 40% of arm must be affected
     },
     "resolution": {
         "max_bin_width": 10_000_000,  # 10Mb - resolution too low for accurate CNV calling
@@ -194,57 +196,6 @@ def get_cnv_thresholds(chromosome: str, sex_estimate: str) -> Tuple[float, float
     
     return thresholds["gain"], thresholds["loss"]
 
-def is_whole_chromosome_event(
-    p_arm_mean: float,
-    q_arm_mean: float,
-    p_arm_proportion_gain: float,
-    p_arm_proportion_loss: float,
-    q_arm_proportion_gain: float,
-    q_arm_proportion_loss: float,
-    gain_threshold: float,
-    loss_threshold: float,
-) -> Tuple[bool, str]:
-    """
-    Determine if a chromosome shows a whole chromosome event.
-
-    ``p_arm_mean`` / ``q_arm_mean`` are arm-level location statistics (median
-    of finite bins). Proportion checks are direction-specific (gain bins vs
-    loss bins) so a uniform log2 shift across an arm counts toward the call.
-    """
-    rules = CNV_EVENT_RULES["whole_chromosome"]
-
-    both_arms_gained = (
-        p_arm_mean > gain_threshold
-        and q_arm_mean > gain_threshold
-        and (
-            p_arm_proportion_gain > rules["min_proportion_affected"]
-            or q_arm_proportion_gain > rules["min_proportion_affected"]
-        )
-        and (
-            p_arm_proportion_gain > rules["min_arm_proportion"]
-            and q_arm_proportion_gain > rules["min_arm_proportion"]
-        )
-    )
-
-    both_arms_lost = (
-        p_arm_mean < loss_threshold
-        and q_arm_mean < loss_threshold
-        and (
-            p_arm_proportion_loss > rules["min_proportion_affected"]
-            or q_arm_proportion_loss > rules["min_proportion_affected"]
-        )
-        and (
-            p_arm_proportion_loss > rules["min_arm_proportion"]
-            and q_arm_proportion_loss > rules["min_arm_proportion"]
-        )
-    )
-
-    if both_arms_gained:
-        return True, "GAIN"
-    if both_arms_lost:
-        return True, "LOSS"
-    return False, "NORMAL"
-
 def is_arm_event(
     arm_mean: float,
     arm_proportion_gain: float,
@@ -264,6 +215,45 @@ def is_arm_event(
     if arm_mean < loss_threshold and arm_proportion_loss > rules["min_proportion_affected"]:
         return True, "LOSS"
 
+    return False, "NORMAL"
+
+def is_whole_chromosome_event(
+    p_arm_mean: float,
+    q_arm_mean: float,
+    p_arm_proportion_gain: float,
+    p_arm_proportion_loss: float,
+    q_arm_proportion_gain: float,
+    q_arm_proportion_loss: float,
+    gain_threshold: float,
+    loss_threshold: float,
+) -> Tuple[bool, str]:
+    """
+    Determine if a chromosome shows a whole chromosome event.
+
+    Called when both arms independently meet ``is_arm_event`` in the same
+    direction (both GAIN or both LOSS). Opposite-direction arm events
+    (e.g. p GAIN and q LOSS) are not merged.
+
+    ``p_arm_mean`` / ``q_arm_mean`` are arm-level location statistics (median
+    of finite bins). Proportion checks are direction-specific (gain bins vs
+    loss bins) so a uniform log2 shift across an arm counts toward the call.
+    """
+    p_event, p_type = is_arm_event(
+        p_arm_mean,
+        p_arm_proportion_gain,
+        p_arm_proportion_loss,
+        gain_threshold,
+        loss_threshold,
+    )
+    q_event, q_type = is_arm_event(
+        q_arm_mean,
+        q_arm_proportion_gain,
+        q_arm_proportion_loss,
+        gain_threshold,
+        loss_threshold,
+    )
+    if p_event and q_event and p_type == q_type and p_type in ("GAIN", "LOSS"):
+        return True, p_type
     return False, "NORMAL"
 
 def is_resolution_sufficient(bin_width: int) -> bool:

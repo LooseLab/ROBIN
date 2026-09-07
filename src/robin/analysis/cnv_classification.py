@@ -370,7 +370,8 @@ def detect_cnv_events(
             )
             
             if is_whole_chr:
-                # Create whole chromosome event
+                # Both arms independently GAIN or both independently LOSS:
+                # report a single whole-chromosome event (not two arm rows).
                 chr_cytobands = cytobands_df[cytobands_df["chrom"] == chromosome]
                 if not chr_cytobands.empty:
                     start_pos = int(chr_cytobands["start_pos"].min())
