@@ -45,8 +45,8 @@ CNV_COLORS = {
     "gain_edge": "#3D7A4A",
     "loss_edge": "#A94442",
     "gene": "#5C6BC0",
-    "plot_gain": "#DC2626",
-    "plot_loss": "#2563EB",
+    "plot_gain": "#2563EB",
+    "plot_loss": "#DC2626",
     "plot_neutral": "#9CA3AF",
 }
 
