@@ -1208,8 +1208,11 @@ class GUILauncher:
 
     def _is_target_bam_finalize_redundant(self, sample_id: str) -> bool:
         """
-        True when target.bam is already merged/indexed and no batch_*.bam remain.
-        In that case running finalize again only queues noise jobs and confuses the samples table.
+        True when target.bam is already indexed and nothing remains to flush/fold.
+
+        target.bam is now written incrementally during accumulation, so its
+        presence alone is not enough — leftover ``batch_*.bam`` files or pending
+        staging still need a finalize pass.
         """
         if not self.monitored_directory:
             return False
@@ -1219,10 +1222,11 @@ class GUILauncher:
         if not (tb.exists() and tb.is_file() and bai.exists() and bai.is_file()):
             return False
         try:
-            batch_bams = list(sample_dir.glob("batch_*.bam"))
+            from robin.analysis.target_analysis import sample_needs_target_bam_finalize
+
+            return not sample_needs_target_bam_finalize(str(sample_dir))
         except Exception:
             return False
-        return len(batch_bams) == 0
 
     def _seed_finalized_samples_from_disk(self) -> None:
         """Populate _finalized_samples from disk so restarts do not re-trigger finalization."""
@@ -7447,12 +7451,16 @@ class GUILauncher:
                     continue
 
                 # Eligible if SNP can start now (target.bam exists) or if we can
-                # likely finalize first (batch BAMs pending merge).
+                # likely finalize first (leftover batches or pending staging).
                 target_bam = d / "target.bam"
                 can_finalize_first = False
                 if not target_bam.is_file():
                     try:
-                        can_finalize_first = any(d.glob("batch_*.bam"))
+                        from robin.analysis.target_analysis import (
+                            sample_needs_target_bam_finalize,
+                        )
+
+                        can_finalize_first = sample_needs_target_bam_finalize(str(d))
                     except Exception:
                         can_finalize_first = False
                 if target_bam.is_file() or can_finalize_first:
