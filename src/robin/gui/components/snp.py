@@ -1,12 +1,12 @@
 from __future__ import annotations
 
+import logging
 import os
 import threading
 from typing import Any, Callable, Dict, List, Optional
 from pathlib import Path
-import logging
-import json
 from robin.analysis.snp_processing import VariantDisplayStore, VariantTableFilters
+from robin.gui.client_notify import run_javascript_when_connected, schedule_after_page_sent
 from robin.utils.clinvar_manager import compare_sample_clinvar_to_installed
 
 try:
@@ -135,7 +135,7 @@ def navigate_igv_to_snp(chrom: str, pos: int, flank: int = 100) -> None:
             }})();
         """
         
-        ui.run_javascript(js_navigate, timeout=5.0)
+        run_javascript_when_connected(js_navigate)
         
     except Exception as e:
         logger.error(f"Error navigating IGV to SNP {chrom}:{pos}: {e}")
@@ -236,12 +236,13 @@ def _add_clinvar_annotation_controls(
     *,
     compact: bool = False,
     on_status_change: Optional[Callable[[str, str], None]] = None,
+    clinvar_status: Optional[Dict[str, Any]] = None,
 ) -> None:
     """Render ClinVar provenance labels and optional re-annotation trigger."""
     if ui is None:
         return
 
-    status = compare_sample_clinvar_to_installed(sample_dir)
+    status = clinvar_status if clinvar_status is not None else compare_sample_clinvar_to_installed(sample_dir)
     installed_label = status.get("installed_label", "ClinVar (version unknown)")
     sample_label = status.get("sample_label", "Annotation release not recorded")
     is_stale = bool(status.get("is_stale"))
@@ -430,7 +431,10 @@ def _mount_paged_variant_table(
             search_fields=tuple(visible_fields),
         )
 
-    _rows0, total_filtered0 = store.page(page_state["filters"], offset=0, limit=0)
+    if page_state["filters"].is_active:
+        _rows0, total_filtered0 = store.page(page_state["filters"], offset=0, limit=0)
+    else:
+        total_filtered0 = total_variants
     init_pagination = clamp_qtable_server_pagination(
         {
             "sortBy": None,
@@ -456,10 +460,9 @@ def _mount_paged_variant_table(
 
     def _fill_from_pagination(pag: Dict[str, Any]) -> None:
         filters = page_state["filters"]
-        _, total_filtered = store.page(filters, offset=0, limit=0)
         pag = clamp_qtable_server_pagination(
             pag,
-            rows_number=total_filtered,
+            rows_number=int(pag.get("rowsNumber") or total_variants),
             rows_per_page_default=100,
             rows_per_page_max=VARIANT_TABLE_PAGE_MAX,
         )
@@ -467,6 +470,17 @@ def _mount_paged_variant_table(
         page = int(pag["page"])
         start = (page - 1) * rpp
         rows, total_filtered = store.page(filters, offset=start, limit=rpp)
+        pag = clamp_qtable_server_pagination(
+            pag,
+            rows_number=total_filtered,
+            rows_per_page_default=100,
+            rows_per_page_max=VARIANT_TABLE_PAGE_MAX,
+        )
+        if int(pag["page"]) != page or int(pag["rowsPerPage"]) != rpp:
+            rpp = int(pag["rowsPerPage"])
+            page = int(pag["page"])
+            start = (page - 1) * rpp
+            rows, total_filtered = store.page(filters, offset=start, limit=rpp)
         table.rows = [
             _compact_variant_row(
                 row,
@@ -647,7 +661,6 @@ def add_snp_section(launcher: Any, sample_dir: Path) -> None:
         return
 
     snp_regions_map = snp_store.regions_map
-    js_snp_regions_json = json.dumps(snp_regions_map)
 
     def navigate_to_snp_region(snp_key: str) -> None:
         if snp_key in snp_regions_map:
@@ -660,14 +673,7 @@ def add_snp_section(launcher: Any, sample_dir: Path) -> None:
         except (TypeError, ValueError):
             logger.debug("Invalid SNP key for IGV navigation: %s", snp_key)
 
-    js_init_snp_regions = f"""
-        (function() {{
-            window.snpRegionsMap = window.snpRegionsMap || {{}};
-            Object.assign(window.snpRegionsMap, {js_snp_regions_json});
-            console.log('[SNP] Initialized SNP regions map with', Object.keys(window.snpRegionsMap).length, 'pathogenic SNPs');
-        }})();
-    """
-    ui.run_javascript(js_init_snp_regions, timeout=5.0)
+    clinvar_status = compare_sample_clinvar_to_installed(sample_dir)
 
     with ui.element("div").classes("classification-insight-shell w-full min-w-0"):
         ui.label("SNP analysis").classes(
@@ -694,6 +700,7 @@ def add_snp_section(launcher: Any, sample_dir: Path) -> None:
                     launcher,
                     sample_dir,
                     on_status_change=_update_snp_clinvar_status,
+                    clinvar_status=clinvar_status,
                 )
                 snp_clinvar_status_label["element"] = ui.label("").classes(
                     "classification-insight-meta"
@@ -712,13 +719,51 @@ def add_snp_section(launcher: Any, sample_dir: Path) -> None:
         ui.label("INDEL analysis").classes(
             "classification-insight-heading text-headline-small"
         )
-        _add_clinvar_annotation_controls(launcher, sample_dir, compact=True)
+        _add_clinvar_annotation_controls(
+            launcher,
+            sample_dir,
+            compact=True,
+            clinvar_status=clinvar_status,
+        )
 
-        indel_store = VariantDisplayStore.open_indel(clair3_dir)
+        indel_store = VariantDisplayStore.open_indel(clair3_dir, vcf_fallback=False)
         if indel_store is None:
-            ui.label(
-                "INDEL VCF was not found. Run SNP analysis to generate INDEL output."
-            ).classes("classification-insight-meta")
+            indel_host = ui.column().classes("w-full")
+            with indel_host:
+                ui.label("Loading INDEL variants…").classes("classification-insight-meta")
+
+            def _mount_indel_fallback() -> None:
+                indel_host.clear()
+                fallback_store = VariantDisplayStore.open_indel(clair3_dir)
+                if fallback_store is None:
+                    with indel_host:
+                        ui.label(
+                            "INDEL VCF was not found. Run SNP analysis to generate INDEL output."
+                        ).classes("classification-insight-meta")
+                    return
+                if fallback_store.total_variants == 0:
+                    with indel_host:
+                        ui.label("No INDEL variants were found.").classes(
+                            "classification-insight-meta"
+                        )
+                    return
+
+                def navigate_to_indel_region(indel_key: str) -> None:
+                    try:
+                        chrom, pos_str = indel_key.split(":", 1)
+                        navigate_igv_to_snp(chrom, int(str(pos_str).replace(",", "")))
+                    except (TypeError, ValueError):
+                        logger.debug("Invalid INDEL key for IGV navigation: %s", indel_key)
+
+                with indel_host:
+                    _mount_paged_variant_table(
+                        fallback_store,
+                        details_title="INDEL details",
+                        event_prefix="indel",
+                        navigate_region=navigate_to_indel_region,
+                    )
+
+            schedule_after_page_sent(_mount_indel_fallback)
             return
         if indel_store.total_variants == 0:
             ui.label("No INDEL variants were found.").classes("classification-insight-meta")

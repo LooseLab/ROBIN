@@ -397,6 +397,17 @@ class VariantTableFilters:
     search_text: str = ""
     search_fields: Sequence[str] = field(default_factory=tuple)
 
+    @property
+    def is_active(self) -> bool:
+        """True when any user filter would change the unfiltered row set."""
+        return bool(
+            self.pass_only
+            or self.significant_only
+            or self.min_qual is not None
+            or self.min_dp is not None
+            or str(self.search_text or "").strip()
+        )
+
 
 def _is_truthy_flag(value: Any) -> bool:
     if isinstance(value, bool):
@@ -582,7 +593,18 @@ class VariantDisplayStore:
     ) -> Tuple[List[Dict[str, Any]], int]:
         lf = pl.scan_parquet(str(self.parquet_path))
         lf = _apply_parquet_filters(lf, filters, list(self._parquet_column_names()))
-        total = int(lf.select(pl.len()).collect().item() or 0)
+        known_total: Optional[int] = None
+        if not filters.is_active:
+            raw_total = self.summary.get("total_variants")
+            if raw_total is not None:
+                try:
+                    known_total = int(raw_total)
+                except (TypeError, ValueError):
+                    known_total = None
+        if known_total is not None:
+            total = known_total
+        else:
+            total = int(lf.select(pl.len()).collect().item() or 0)
         if limit <= 0 or total == 0:
             return [], total
         frame = lf.slice(offset, limit).collect()

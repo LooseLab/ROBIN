@@ -591,6 +591,337 @@ def _load_processed_pickle(file_path: Path) -> Optional[Dict[str, Any]]:
         return None
 
 
+def build_fusion_pairs_table_rows(
+    sample_dir: Path,
+    *,
+    show_fusion_target: bool = True,
+    show_fusion_genome: bool = False,
+) -> List[Dict[str, Any]]:
+    """Load fusion pickle data, cluster breakpoints, and return table rows.
+
+    Intended for the More Details page. Call from a worker thread so page
+    construction does not wait on pickle load + clustering.
+    """
+    import re
+
+    sample_dir = Path(sample_dir)
+    fusion_data = None
+    target_file = sample_dir / "fusion_candidates_master_processed.pkl"
+    genome_file = sample_dir / "fusion_candidates_all_processed.pkl"
+    try:
+        if show_fusion_target and target_file.exists():
+            fusion_data = _load_processed_pickle(target_file)
+        elif show_fusion_genome and genome_file.exists():
+            fusion_data = _load_processed_pickle(genome_file)
+    except Exception as exc:
+        logging.warning("Failed to load fusion data: %s", exc)
+        return []
+
+    if not fusion_data:
+        return []
+    annotated_data = fusion_data.get("annotated_data", pd.DataFrame())
+    if annotated_data is None or annotated_data.empty:
+        return []
+    goodpairs = fusion_data.get("goodpairs", pd.Series())
+    if goodpairs is not None and not goodpairs.empty and goodpairs.sum() > 0:
+        aligned_goodpairs = goodpairs.reindex(annotated_data.index, fill_value=False)
+        filtered_data = annotated_data[aligned_goodpairs]
+    else:
+        filtered_data = annotated_data
+    clustered_data = _cluster_fusion_reads(
+        filtered_data,
+        max_distance=10000,
+        use_breakpoint_validation=True,
+    )
+    if clustered_data is None or clustered_data.empty:
+        return []
+
+    built_rows: List[Dict[str, Any]] = []
+    for _, row in clustered_data.iterrows():
+        if all(col in row for col in ["gene1_start", "gene1_end", "gene2_start", "gene2_end"]):
+            start1_raw = int(row["gene1_start"])
+            end1_raw = int(row["gene1_end"])
+            start2_raw = int(row["gene2_start"])
+            end2_raw = int(row["gene2_end"])
+        else:
+            pos1_str = str(row.get("gene1_position", ""))
+            pos2_str = str(row.get("gene2_position", ""))
+            pos1_match = re.match(r"(\d+)[-–—](\d+)", pos1_str.replace(",", ""))
+            pos2_match = re.match(r"(\d+)[-–—](\d+)", pos2_str.replace(",", ""))
+            if pos1_match and pos2_match:
+                start1_raw = int(pos1_match.group(1))
+                end1_raw = int(pos1_match.group(2))
+                start2_raw = int(pos2_match.group(1))
+                end2_raw = int(pos2_match.group(2))
+            else:
+                pos1_single = re.search(r"(\d+)", pos1_str.replace(",", ""))
+                pos2_single = re.search(r"(\d+)", pos2_str.replace(",", ""))
+                if pos1_single and pos2_single:
+                    start1_raw = end1_raw = int(pos1_single.group(1))
+                    start2_raw = end2_raw = int(pos2_single.group(1))
+                else:
+                    continue
+        padding = 10000
+        min1 = min(start1_raw, end1_raw)
+        max1 = max(start1_raw, end1_raw)
+        min2 = min(start2_raw, end2_raw)
+        max2 = max(start2_raw, end2_raw)
+        chr1 = str(row.get("chr1", "Unknown"))
+        chr2 = str(row.get("chr2", "Unknown"))
+        built_rows.append(
+            {
+                "fusion_pair": row.get("fusion_pair", ""),
+                "chr1": chr1,
+                "pos1": f"{min1:,}-{max1:,}" if min1 != max1 else f"{min1:,}",
+                "chr2": chr2,
+                "pos2": f"{min2:,}-{max2:,}" if min2 != max2 else f"{min2:,}",
+                "reads": int(row.get("reads", 0)),
+                "region": (
+                    f"{chr1}:{max(1, min1 - padding)}-{max1 + padding} "
+                    f"{chr2}:{max(1, min2 - padding)}-{max2 + padding}"
+                ),
+                "__row_idx": len(built_rows),
+                "action": "",
+            }
+        )
+    return built_rows
+
+
+def _navigate_igv_to_region(region: str) -> None:
+    """Jump the More Details IGV browser to ``region`` without blocking the UI."""
+    if ui is None or not region:
+        return
+    from robin.gui.client_notify import run_javascript_when_connected
+
+    escaped_region = str(region).replace("\\", "\\\\").replace("'", "\\'").replace('"', '\\"')
+    run_javascript_when_connected(
+        f"""
+        (function() {{
+            try {{
+                if (window.lj_igv && window.lj_igv_browser_ready) {{
+                    window.lj_igv.search('{escaped_region}');
+                    return;
+                }}
+                setTimeout(function() {{
+                    if (window.lj_igv && window.lj_igv_browser_ready) {{
+                        window.lj_igv.search('{escaped_region}');
+                    }}
+                }}, 500);
+            }} catch (error) {{
+                console.error('[IGV] Navigation error:', error);
+            }}
+        }})();
+        """
+    )
+
+
+def _fusion_pairs_file_sig(sample_dir: Path) -> tuple:
+    target_file = Path(sample_dir) / "fusion_candidates_master_processed.pkl"
+    genome_file = Path(sample_dir) / "fusion_candidates_all_processed.pkl"
+    return (
+        target_file.stat().st_mtime if target_file.exists() else None,
+        genome_file.stat().st_mtime if genome_file.exists() else None,
+    )
+
+
+def _mount_fusion_pairs_table(rows: List[Dict[str, Any]]) -> None:
+    """Render a paged fusion-pairs table from already-built rows."""
+    from robin.gui.theme import (
+        clamp_qtable_server_pagination,
+        styled_server_paged_table,
+        wire_qtable_server_pagination_handlers,
+    )
+
+    with ui.element("div").classes("classification-insight-shell w-full min-w-0"):
+        ui.label("Fusion pairs").classes("classification-insight-heading text-headline-small")
+        if not rows:
+            ui.label("No validated fusion pairs found in this run.").classes(
+                "classification-insight-meta"
+            )
+            return
+        ui.label("Click a row to open the fusion region in IGV.").classes(
+            "classification-insight-meta w-full mb-2"
+        )
+        columns = [
+            {"name": "fusion_pair", "label": "Fusion Pair", "field": "fusion_pair", "sortable": False},
+            {"name": "chr1", "label": "Chr 1", "field": "chr1", "sortable": False},
+            {"name": "pos1", "label": "Breakpoint 1", "field": "pos1", "sortable": False},
+            {"name": "chr2", "label": "Chr 2", "field": "chr2", "sortable": False},
+            {"name": "pos2", "label": "Breakpoint 2", "field": "pos2", "sortable": False},
+            {"name": "reads", "label": "Supporting Reads", "field": "reads", "sortable": False},
+            {"name": "action", "label": "View in IGV", "field": "action", "sortable": False},
+        ]
+        fusion_preview_mode = len(rows) > 50_000
+        fusion_rows_source = rows[:5_000] if fusion_preview_mode else list(rows)
+        fusion_total = len(fusion_rows_source)
+        fusion_init_pagination = clamp_qtable_server_pagination(
+            {
+                "sortBy": None,
+                "descending": False,
+                "page": 1,
+                "rowsPerPage": 100,
+                "rowsNumber": fusion_total,
+            },
+            rows_number=fusion_total,
+            rows_per_page_default=100,
+        )
+        _, fusion_table = styled_server_paged_table(
+            columns=columns,
+            rows=[],
+            pagination=fusion_init_pagination,
+            row_key="__row_idx",
+            class_size="table-xs",
+        )
+        if fusion_preview_mode:
+            ui.label(
+                f"Preview mode: showing first {len(fusion_rows_source):,} rows of {len(rows):,}."
+            ).classes("classification-insight-level classification-insight-level--low w-full")
+
+        def _fill_fusion_from_pagination(pag: Dict[str, Any]) -> None:
+            total = len(fusion_rows_source)
+            pag = clamp_qtable_server_pagination(
+                pag, rows_number=total, rows_per_page_default=100
+            )
+            rpp = int(pag["rowsPerPage"])
+            page = int(pag["page"])
+            start = (page - 1) * rpp
+            fusion_table.rows = fusion_rows_source[start : start + rpp]
+            fusion_table.pagination = pag
+            fusion_table.update()
+
+        wire_qtable_server_pagination_handlers(fusion_table, _fill_fusion_from_pagination)
+        _fill_fusion_from_pagination(fusion_init_pagination)
+
+        fusion_table.add_slot(
+            "body-cell-action",
+            """
+<q-td key="action" :props="props">
+  <q-btn icon="visibility" size="sm" dense flat color="primary"
+    @click="$parent.$emit('fusion-view-igv', props.row.__row_idx)"
+    title="View in IGV" />
+</q-td>
+""",
+        )
+
+        def _region_for_idx(row_idx: Any) -> str:
+            try:
+                idx = int(row_idx)
+            except (TypeError, ValueError):
+                return ""
+            if 0 <= idx < len(fusion_rows_source):
+                return str(fusion_rows_source[idx].get("region", "") or "")
+            return ""
+
+        def on_fusion_view_igv(e: Any) -> None:
+            region = _region_for_idx(getattr(e, "args", None))
+            if region:
+                _navigate_igv_to_region(region)
+
+        fusion_table.on("fusion-view-igv", on_fusion_view_igv)
+
+        def on_fusion_row_click(e: Any) -> None:
+            args = getattr(e, "args", None)
+            row = None
+            if isinstance(args, dict):
+                row = args
+            elif isinstance(args, (list, tuple)):
+                if args and isinstance(args[0], dict):
+                    row = args[0]
+                elif len(args) > 1 and isinstance(args[1], dict):
+                    row = args[1]
+            if isinstance(row, dict):
+                region = str(row.get("region", "") or "")
+                if not region:
+                    region = _region_for_idx(row.get("__row_idx"))
+                if region:
+                    _navigate_igv_to_region(region)
+
+        try:
+            fusion_table.on("rowClick", on_fusion_row_click)
+        except Exception:
+            pass
+
+        total_reads = sum(int(r.get("reads", 0) or 0) for r in rows)
+        ui.label(
+            f"Total fusions: {len(rows)} | Total supporting reads: {total_reads}"
+        ).classes("classification-insight-foot")
+
+        try:
+            def _cleanup() -> None:
+                fusion_rows_source.clear()
+                fusion_table.rows = []
+            ui.context.client.on_disconnect(_cleanup)
+        except Exception:
+            pass
+
+
+def add_sample_details_fusion_pairs(
+    launcher: Any,
+    sample_dir: Path,
+    *,
+    show_fusion_target: bool = True,
+    show_fusion_genome: bool = False,
+) -> None:
+    """Mount the More Details fusion-pairs table without blocking first paint."""
+    from robin.gui.client_notify import schedule_after_page_sent
+
+    sample_dir = Path(sample_dir)
+    sample_key = str(sample_dir)
+    fusion_state = getattr(launcher, "_fusion_state", None)
+    if not isinstance(fusion_state, dict):
+        fusion_state = {}
+        launcher._fusion_state = fusion_state
+    cache_entry = fusion_state.setdefault(sample_key, {})
+    file_sig = _fusion_pairs_file_sig(sample_dir)
+    cached_rows = cache_entry.get("details_pairs_rows")
+    cache_hit = (
+        isinstance(cached_rows, list) and cache_entry.get("details_pairs_sig") == file_sig
+    )
+
+    host = ui.column().classes("w-full min-w-0")
+
+    def _render(rows: List[Dict[str, Any]]) -> None:
+        host.clear()
+        with host:
+            _mount_fusion_pairs_table(rows)
+
+    if cache_hit:
+        _render(list(cached_rows))
+        return
+
+    with host:
+        with ui.element("div").classes("classification-insight-shell w-full min-w-0"):
+            ui.label("Fusion pairs").classes(
+                "classification-insight-heading text-headline-small"
+            )
+            ui.label("Loading fusion pairs…").classes("classification-insight-meta")
+
+    def _load_sync() -> List[Dict[str, Any]]:
+        return build_fusion_pairs_table_rows(
+            sample_dir,
+            show_fusion_target=show_fusion_target,
+            show_fusion_genome=show_fusion_genome,
+        )
+
+    async def _load_async() -> None:
+        try:
+            rows = await asyncio.to_thread(_load_sync)
+        except Exception as exc:
+            logging.warning("Fusion pairs background load failed: %s", exc)
+            rows = []
+        cache_entry["details_pairs_sig"] = _fusion_pairs_file_sig(sample_dir)
+        cache_entry["details_pairs_rows"] = [dict(r) for r in rows]
+        _render(rows)
+
+    def _start_load() -> None:
+        if background_tasks is not None:
+            background_tasks.create(_load_async())
+            return
+        _render(_load_sync())
+
+    schedule_after_page_sent(_start_load)
+
+
 def _make_fusion_table(container: Any, df: pd.DataFrame) -> Any:
     """Create or update a NiceGUI table for fusion candidates and return it."""
     if df is None or df.empty:

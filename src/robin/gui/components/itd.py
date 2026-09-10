@@ -352,5 +352,7 @@ def add_itd_section(
                     ).classes("text-body2 text-grey-7")
 
         show_empty.on("update:model-value", lambda _e: refresh())
-        refresh()
+        from robin.gui.client_notify import schedule_after_page_sent
+
+        schedule_after_page_sent(refresh)
         client_timer(30.0, refresh)

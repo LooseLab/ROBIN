@@ -143,3 +143,20 @@ def test_clamp_caps_quasar_all(tmp_path: Path) -> None:
     )
     assert pag["rowsPerPage"] == 250
     assert pag["page"] == 1
+
+
+def test_unfiltered_page_uses_sidecar_total(tmp_path: Path) -> None:
+    vcf = tmp_path / "snpsift_output.vcf"
+    _write_ann_vcf(vcf)
+    write_clair_variant_display_files(tmp_path)
+    store = VariantDisplayStore.open_snp(tmp_path)
+    assert store is not None
+    filters = VariantTableFilters()
+    assert filters.is_active is False
+    page, total = store.page(filters, offset=0, limit=2)
+    assert total == 3
+    assert len(page) == 2
+    empty, total_only = store.page(filters, offset=0, limit=0)
+    assert empty == []
+    assert total_only == 3
+    assert VariantTableFilters(pass_only=True).is_active is True

@@ -14,10 +14,11 @@ import pandas as pd
 import logging
 
 try:
-    from nicegui import ui, app
+    from nicegui import ui, app, background_tasks
 except ImportError:  # pragma: no cover
     ui = None
     app = None
+    background_tasks = None
 
 from robin.gui.theme import (
     styled_table,
@@ -27,6 +28,7 @@ from robin.gui.theme import (
     stop_timer,
     ui_element_exists,
 )
+from robin.gui.client_notify import run_javascript_when_connected
 
 from robin.reference_contigs import is_visible_contig
 
@@ -741,6 +743,353 @@ def _apply_lga_gene_bar_chrome(ec: Any) -> None:
         pass
 
 
+def load_target_gene_table_rows(
+    coverage_file: Path,
+) -> Tuple[List[Dict[str, Any]], Dict[str, str]]:
+    """Load target-gene coverage rows for the More Details table.
+
+    Returns ``(table_rows, gene_name_to_igv_region)``. Uses column-wise pandas
+    conversion instead of ``iterrows``.
+    """
+    coverage_file = Path(coverage_file)
+    df = pd.read_csv(
+        coverage_file,
+        usecols=lambda c: c
+        in {
+            "chrom",
+            "startpos",
+            "endpos",
+            "name",
+            "coverage",
+            "length",
+            "bases",
+        },
+        dtype={
+            "chrom": "string",
+            "name": "string",
+            "startpos": "float64",
+            "endpos": "float64",
+            "coverage": "float64",
+            "length": "float64",
+            "bases": "float64",
+        },
+    )
+    required_cols = ["chrom", "startpos", "endpos", "name"]
+    if not all(col in df.columns for col in required_cols):
+        return [], {}
+    if "coverage" not in df.columns:
+        if "length" in df.columns and "bases" in df.columns:
+            df["coverage"] = df["bases"] / df["length"]
+        elif "startpos" in df.columns and "endpos" in df.columns:
+            length = df["endpos"] - df["startpos"] + 1
+            df["coverage"] = (df["bases"] / length) if "bases" in df.columns else 0
+        else:
+            df["coverage"] = 0
+    df = df.dropna(subset=["chrom", "name", "startpos", "endpos"])
+    chroms = df["chrom"].astype(str)
+    names = df["name"].astype(str)
+    starts = df["startpos"].astype(int)
+    ends = df["endpos"].astype(int)
+    coverages = df["coverage"].fillna(0).astype(float)
+    padding = 10000
+    table_data: List[Dict[str, Any]] = []
+    gene_regions_by_name: Dict[str, str] = {}
+    for gene_name, chrom, startpos_raw, endpos_raw, coverage in zip(
+        names, chroms, starts, ends, coverages
+    ):
+        startpos_nav = max(1, int(startpos_raw) - padding)
+        endpos_nav = int(endpos_raw) + padding
+        gene_regions_by_name[gene_name] = f"{chrom}:{startpos_nav}-{endpos_nav}"
+        table_data.append(
+            {
+                "chrom": chrom,
+                "startpos": f"{int(startpos_raw):,}",
+                "endpos": f"{int(endpos_raw):,}",
+                "name": gene_name,
+                "coverage": float(coverage),
+                "__row_idx": len(table_data),
+                "action": "",
+            }
+        )
+    return table_data, gene_regions_by_name
+
+
+def _navigate_igv_to_region(region: str) -> None:
+    if ui is None or not region:
+        return
+    escaped_region = str(region).replace("\\", "\\\\").replace("'", "\\'").replace('"', '\\"')
+    run_javascript_when_connected(
+        f"""
+        (function() {{
+            try {{
+                if (window.lj_igv && window.lj_igv_browser_ready) {{
+                    window.lj_igv.search('{escaped_region}');
+                    return;
+                }}
+                setTimeout(function() {{
+                    if (window.lj_igv && window.lj_igv_browser_ready) {{
+                        window.lj_igv.search('{escaped_region}');
+                    }}
+                }}, 500);
+            }} catch (error) {{
+                console.error('[IGV] Navigation error:', error);
+            }}
+        }})();
+        """
+    )
+
+
+def add_sample_details_target_genes(launcher: Any, sample_dir: Path) -> None:
+    """Mount the More Details target-gene table without blocking first paint."""
+    from robin.gui.client_notify import schedule_after_page_sent
+    from robin.gui.theme import (
+        clamp_qtable_server_pagination,
+        styled_server_paged_table,
+        wire_qtable_server_pagination_handlers,
+    )
+
+    sample_dir = Path(sample_dir)
+    target_coverage_file = sample_dir / "target_coverage.csv"
+    bed_coverage_file = sample_dir / "bed_coverage_main.csv"
+    coverage_file = None
+    if target_coverage_file.exists():
+        coverage_file = target_coverage_file
+    elif bed_coverage_file.exists():
+        coverage_file = bed_coverage_file
+    if coverage_file is None:
+        return
+
+    sample_key = str(sample_dir)
+    coverage_state = getattr(launcher, "_coverage_state", None)
+    if not isinstance(coverage_state, dict):
+        coverage_state = {}
+        launcher._coverage_state = coverage_state
+    cache_entry = coverage_state.setdefault(sample_key, {})
+    file_sig = coverage_file.stat().st_mtime if coverage_file.exists() else None
+    cached_rows = cache_entry.get("details_gene_rows")
+    cached_regions = cache_entry.get("details_gene_regions")
+    cache_hit = (
+        isinstance(cached_rows, list)
+        and isinstance(cached_regions, dict)
+        and cache_entry.get("details_gene_sig") == file_sig
+    )
+
+    host = ui.column().classes("w-full min-w-0")
+
+    def _mount(table_data: List[Dict[str, Any]], gene_regions_by_name: Dict[str, str]) -> None:
+        host.clear()
+        if not table_data:
+            with host:
+                with ui.element("div").classes("classification-insight-shell w-full min-w-0"):
+                    ui.label("Target genes").classes(
+                        "classification-insight-heading text-headline-small"
+                    )
+                    ui.label("No target gene coverage rows were found.").classes(
+                        "classification-insight-meta"
+                    )
+            return
+        with host:
+            with ui.element("div").classes("classification-insight-shell w-full min-w-0"):
+                ui.label("Target genes").classes(
+                    "classification-insight-heading text-headline-small"
+                )
+                ui.label("Click a gene row to open the region in IGV.").classes(
+                    "classification-insight-meta w-full mb-2"
+                )
+                columns = [
+                    {"name": "name", "label": "Gene Name", "field": "name", "sortable": False},
+                    {"name": "chrom", "label": "Chromosome", "field": "chrom", "sortable": False},
+                    {"name": "startpos", "label": "Start", "field": "startpos", "sortable": False},
+                    {"name": "endpos", "label": "End", "field": "endpos", "sortable": False},
+                    {"name": "coverage", "label": "Coverage (x)", "field": "coverage", "sortable": False},
+                    {"name": "action", "label": "View in IGV", "field": "action", "sortable": False},
+                ]
+                gene_preview_mode = len(table_data) > 50_000
+                gene_rows_source = table_data[:5_000] if gene_preview_mode else list(table_data)
+                gene_page_state: Dict[str, Any] = {
+                    "filtered_positions": list(range(len(gene_rows_source))),
+                }
+                gene_total_matches = len(gene_page_state["filtered_positions"])
+                gene_init_pagination = clamp_qtable_server_pagination(
+                    {
+                        "sortBy": None,
+                        "descending": False,
+                        "page": 1,
+                        "rowsPerPage": 100,
+                        "rowsNumber": gene_total_matches,
+                    },
+                    rows_number=gene_total_matches,
+                    rows_per_page_default=100,
+                )
+                _, gene_table = styled_server_paged_table(
+                    columns=columns,
+                    rows=[],
+                    pagination=gene_init_pagination,
+                    row_key="__row_idx",
+                    class_size="table-xs",
+                )
+                if gene_preview_mode:
+                    ui.label(
+                        f"Preview mode: showing first {len(gene_rows_source):,} rows of {len(table_data):,}."
+                    ).classes(
+                        "classification-insight-level classification-insight-level--low w-full"
+                    )
+
+                def _fill_gene_from_pagination(pag: Dict[str, Any]) -> None:
+                    total = len(gene_page_state["filtered_positions"])
+                    pag = clamp_qtable_server_pagination(
+                        pag, rows_number=total, rows_per_page_default=100
+                    )
+                    rpp = int(pag["rowsPerPage"])
+                    page = int(pag["page"])
+                    start = (page - 1) * rpp
+                    positions = gene_page_state["filtered_positions"][start : start + rpp]
+                    gene_table.rows = [gene_rows_source[i] for i in positions]
+                    gene_table.pagination = pag
+                    gene_table.update()
+
+                wire_qtable_server_pagination_handlers(gene_table, _fill_gene_from_pagination)
+
+                def _apply_gene_search(term: str) -> None:
+                    txt = str(term or "").strip().lower()
+                    if not txt:
+                        gene_page_state["filtered_positions"] = list(
+                            range(len(gene_rows_source))
+                        )
+                    else:
+                        gene_page_state["filtered_positions"] = [
+                            i
+                            for i, row in enumerate(gene_rows_source)
+                            if txt in str(row.get("name", "")).lower()
+                            or txt in str(row.get("chrom", "")).lower()
+                        ]
+                    pag = clamp_qtable_server_pagination(
+                        dict(gene_table.pagination),
+                        rows_number=len(gene_page_state["filtered_positions"]),
+                        rows_per_page_default=100,
+                    )
+                    pag["page"] = 1
+                    _fill_gene_from_pagination(pag)
+
+                _fill_gene_from_pagination(gene_init_pagination)
+                try:
+                    with gene_table.add_slot("top-right"):
+                        gene_search_input = ui.input(placeholder="Search genes...").props(
+                            "type=search dense clearable"
+                        )
+                        gene_search_input.on(
+                            "update:model-value",
+                            lambda e: _apply_gene_search(getattr(e, "value", "")),
+                        )
+                        with gene_search_input.add_slot("append"):
+                            ui.icon("search")
+                except Exception:
+                    pass
+                try:
+                    gene_table.add_slot(
+                        "body-cell-coverage",
+                        """
+<q-td key="coverage" :props="props">
+  <q-badge :color="props.value >= 30 ? 'green' : props.value >= 20 ? 'blue' : props.value >= 10 ? 'orange' : 'red'">
+    {{ Number(props.value).toFixed(2) }}
+  </q-badge>
+</q-td>
+""",
+                    )
+                except Exception:
+                    pass
+                gene_table.add_slot(
+                    "body-cell-action",
+                    """
+<q-td key="action" :props="props">
+  <q-btn icon="visibility" size="sm" dense flat color="primary"
+    @click="$parent.$emit('gene-view-igv', props.row.__row_idx)"
+    title="View in IGV" />
+</q-td>
+""",
+                )
+
+                def _region_for_name(gene_name: str) -> str:
+                    return str(gene_regions_by_name.get(gene_name, "") or "")
+
+                def on_gene_view_igv(e: Any) -> None:
+                    try:
+                        row_idx = int(getattr(e, "args", None))
+                    except (TypeError, ValueError):
+                        return
+                    if 0 <= row_idx < len(gene_rows_source):
+                        gene_name = str(gene_rows_source[row_idx].get("name", ""))
+                        region = _region_for_name(gene_name)
+                        if region:
+                            _navigate_igv_to_region(region)
+
+                gene_table.on("gene-view-igv", on_gene_view_igv)
+
+                def on_gene_row_click(e: Any) -> None:
+                    args = getattr(e, "args", None)
+                    row = None
+                    if isinstance(args, dict):
+                        row = args
+                    elif isinstance(args, (list, tuple)):
+                        if args and isinstance(args[0], dict):
+                            row = args[0]
+                        elif len(args) > 1 and isinstance(args[1], dict):
+                            row = args[1]
+                    if not isinstance(row, dict):
+                        return
+                    gene_name = str(row.get("name", ""))
+                    region = _region_for_name(gene_name)
+                    if region:
+                        _navigate_igv_to_region(region)
+
+                try:
+                    gene_table.on("rowClick", on_gene_row_click)
+                except Exception:
+                    pass
+                ui.label(f"Total target genes: {len(table_data)}").classes(
+                    "classification-insight-foot"
+                )
+
+    if cache_hit:
+        _mount(list(cached_rows), dict(cached_regions))
+        return
+
+    with host:
+        with ui.element("div").classes("classification-insight-shell w-full min-w-0"):
+            ui.label("Target genes").classes(
+                "classification-insight-heading text-headline-small"
+            )
+            ui.label("Loading target genes…").classes("classification-insight-meta")
+
+    def _load_sync() -> Tuple[List[Dict[str, Any]], Dict[str, str]]:
+        return load_target_gene_table_rows(coverage_file)
+
+    async def _load_async() -> None:
+        try:
+            table_data, regions = await asyncio.to_thread(_load_sync)
+        except Exception as exc:
+            logging.warning("Could not load target gene table: %s", exc)
+            table_data, regions = [], {}
+        cache_entry["details_gene_sig"] = (
+            coverage_file.stat().st_mtime if coverage_file.exists() else None
+        )
+        cache_entry["details_gene_rows"] = [dict(r) for r in table_data]
+        cache_entry["details_gene_regions"] = dict(regions)
+        _mount(table_data, regions)
+
+    def _start_load() -> None:
+        if background_tasks is not None:
+            background_tasks.create(_load_async())
+            return
+        table_data, regions = _load_sync()
+        cache_entry["details_gene_sig"] = file_sig
+        cache_entry["details_gene_rows"] = [dict(r) for r in table_data]
+        cache_entry["details_gene_regions"] = dict(regions)
+        _mount(table_data, regions)
+
+    schedule_after_page_sent(_start_load)
+
+
 def add_igv_viewer(launcher: Any, sample_dir: Path) -> None:
     """Add the IGV viewer section to a page.
 
@@ -829,7 +1178,7 @@ def add_igv_viewer(launcher: Any, sample_dir: Path) -> None:
                             showRuler: true,
                             showNavigation: true,
                             showCenterGuide: true,
-                            defaultLocus: 'chr1:1-500000'
+                            locus: 'all'
                         };
 
                         igv.createBrowser(el, options)
@@ -867,17 +1216,8 @@ def add_igv_viewer(launcher: Any, sample_dir: Path) -> None:
                 })();
             """
             try:
-                init_result = ui.run_javascript(js_init, timeout=5.0)
-                if init_result == "missing-element":
-                    igv_status.set_text("IGV container element not found.")
-                elif init_result == "error":
-                    igv_status.set_text("IGV initialization failed (see console).")
-                elif init_result == "started":
-                    igv_status.set_text("IGV browser initialization started...")
-                elif init_result == "initializing":
-                    igv_status.set_text("IGV browser is still initializing...")
-                elif init_result == "already-ready":
-                    igv_status.set_text("IGV browser already ready.")
+                run_javascript_when_connected(js_init)
+                igv_status.set_text("IGV browser initialization started...")
             except Exception as e:
                 print(f"Error initializing IGV browser: {e}")
                 igv_status.set_text(f"Error initializing IGV: {e}")
@@ -957,34 +1297,9 @@ def add_igv_viewer(launcher: Any, sample_dir: Path) -> None:
                     _load_bam_track_simple(bam_path)
                     return
 
-                js_check_ready = """
-                    return window.lj_igv && window.lj_igv_browser_ready === true &&
-                           typeof window.lj_igv.loadTrack === 'function';
-                """
-                max_attempts = 10
-                try:
-                    result = ui.run_javascript(js_check_ready, timeout=2.0)
-                except Exception:
-                    result = False
-                if result is not True and attempt < max_attempts:
-                    if attempt == 0:
-                        igv_status.set_text("Waiting for IGV browser to be ready...")
-                    ui.timer(
-                        0.5,
-                        lambda next_attempt=attempt + 1: _check_existing_igv_bam(
-                            next_attempt
-                        ),
-                        once=True,
-                    )
-                else:
-                    if result is True:
-                        igv_status.set_text(
-                            "IGV browser ready. No BAM files found yet."
-                        )
-                    else:
-                        igv_status.set_text(
-                            "IGV browser not ready yet. No BAM files found yet."
-                        )
+                igv_status.set_text(
+                    "No BAM files found yet. IGV will load alignments when available."
+                )
 
             except Exception as e:
                 igv_status.set_text(f"Error checking for BAM files: {e}")
@@ -1040,7 +1355,7 @@ def add_igv_viewer(launcher: Any, sample_dir: Path) -> None:
                                 format: 'bam',
                                 type: 'alignment',
                                 order: Number.MAX_VALUE,
-                                visibilityWindow: 500000,
+                                visibilityWindow: 30000,
                                 height: 600,
                                 autoScale: true,
                                 colorBy: 'tag',
@@ -1053,18 +1368,9 @@ def add_igv_viewer(launcher: Any, sample_dir: Path) -> None:
                                 .then(function(trackView) {{
                                     console.log('[IGV] Track loaded successfully:', trackView);
 
-                                    // Navigate to a region to make data visible (IGV needs to be zoomed in)
-                                    // Navigate to chr1:1-500000 to match visibility window
-                                    try {{
-                                        window.lj_igv.search('chr1:1-500000');
-                                        console.log('[IGV] Navigated to chr1:1-500000');
-                                    }} catch (navError) {{
-                                        console.log('[IGV] Could not navigate, user can zoom manually');
-                                    }}
-
                                     const statusEl = document.querySelector('[data-igv-status]');
                                     if (statusEl) {{
-                                        statusEl.textContent = 'BAM loaded: {bam_path.name} - Zoom in to see alignments';
+                                        statusEl.textContent = 'BAM loaded: {bam_path.name} - Click a table row to jump to a locus';
                                     }}
                                 }})
                                 .catch(function(error) {{
@@ -1085,7 +1391,7 @@ def add_igv_viewer(launcher: Any, sample_dir: Path) -> None:
                         }}
                     }})();
                 """
-                ui.run_javascript(js_load, timeout=60.0)
+                run_javascript_when_connected(js_load)
 
             except Exception as e:
                 igv_status.set_text(f"Error loading BAM: {e}")
@@ -1117,15 +1423,9 @@ def add_igv_viewer(launcher: Any, sample_dir: Path) -> None:
                 """
 
                 try:
-                    result = ui.run_javascript(js_check, timeout=10.0)
-                    # Update the status indicator
-                    if result:
-                        igv_lib_status.set_text("IGV library: ✓ Loaded and ready")
-                        igv_lib_status.classes("text-xs text-green-600")
-                    else:
-                        igv_lib_status.set_text("IGV library: ✗ Not ready")
-                        igv_lib_status.classes("text-xs text-red-600")
-                    return result
+                    run_javascript_when_connected(js_check)
+                    igv_lib_status.set_text("IGV library: checking in browser…")
+                    return True
                 except Exception as e:
                     igv_lib_status.set_text("IGV library: ✗ Error checking")
                     igv_lib_status.classes("text-xs text-red-600")

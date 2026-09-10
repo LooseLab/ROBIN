@@ -9,7 +9,7 @@ an ASGI ``ExceptionGroup`` in Socket.IO ``handle_request``.
 from __future__ import annotations
 
 import logging
-from typing import Any, Iterable, Optional
+from typing import Any, Callable, Iterable, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -81,3 +81,50 @@ def notify_connected_clients(
                 exc_info=True,
             )
     return sent
+
+
+def run_javascript_when_connected(code: str) -> None:
+    """Queue JavaScript until the browser socket is up.
+
+    ``ui.run_javascript(..., timeout=...)`` during page construction waits for a
+    client that has not received the page yet, so it commonly sits until timeout
+    and delays first paint. Call this instead of a blocking ``run_javascript``.
+    """
+    if not code:
+        return
+
+    def _run() -> None:
+        try:
+            from nicegui import ui
+
+            ui.run_javascript(code)
+        except Exception:
+            logger.debug("Skipping JavaScript for disconnected NiceGUI client", exc_info=True)
+
+    try:
+        from nicegui import ui
+
+        client = ui.context.client
+        if getattr(client, "has_socket_connection", False):
+            _run()
+            return
+        client.on_connect(_run)
+    except Exception:
+        try:
+            from nicegui import ui
+
+            ui.timer(0.05, _run, once=True)
+        except Exception:
+            logger.debug("Could not schedule JavaScript until client connect", exc_info=True)
+
+
+def schedule_after_page_sent(callback: Callable[[], Any], delay_s: float = 0.05) -> None:
+    """Run ``callback`` after NiceGUI has sent the current page to the browser."""
+    if callback is None:
+        return
+    try:
+        from nicegui import ui
+
+        ui.timer(float(delay_s), callback, once=True)
+    except Exception:
+        callback()
