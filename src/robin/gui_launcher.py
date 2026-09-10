@@ -8959,23 +8959,18 @@ title="View in IGV"
                             # Keep deterministic + compact while still "listing" all hits.
                             return "; ".join(formatted)
 
+                        from robin.analysis.snp_processing import VariantDisplayStore
                         from robin.analysis.variant_classification import (
                             is_clinvar_significant_from_info,
                         )
 
                         clair_dir = sample_dir / "clair3"
-                        snp_display_path = clair_dir / "snpsift_output_display.json"
-                        if snp_display_path.exists():
-                            with open(snp_display_path, "r", encoding="utf-8") as f:
-                                snp_display = json.load(f)
-                            summary_dict = snp_display.get("summary", {}) or {}
-                            rows_all = snp_display.get("rows_all", []) or []
-                            rows_pathogenic = snp_display.get("rows_pathogenic", []) or []
-                            rows_significant = (
-                                snp_display.get("rows_clinvar_significant") or rows_pathogenic
-                            )
+                        snp_store = VariantDisplayStore.open_snp(clair_dir)
+                        if snp_store is not None:
+                            summary_dict = snp_store.summary or {}
+                            rows_significant = snp_store.significant_rows()
                             variant_data["snp_total_variants"] = summary_dict.get(
-                                "total_variants", len(rows_all)
+                                "total_variants", snp_store.total_variants
                             )
                             variant_data["snp_pathogenic_variants"] = summary_dict.get(
                                 "clinvar_significant_variants",
@@ -8988,19 +8983,14 @@ title="View in IGV"
                             )
 
                         # INDEL summary (from ClinVar-annotated display if available)
-                        indel_display_path = clair_dir / "snpsift_indel_output_display.json"
-                        if indel_display_path.exists():
-                            with open(indel_display_path, "r", encoding="utf-8") as f:
-                                indel_display = json.load(f)
-                            indel_summary = indel_display.get("summary", {}) or {}
-                            indel_rows_all = indel_display.get("rows_all", []) or []
-                            indel_rows_pathogenic = indel_display.get("rows_pathogenic", []) or []
-                            indel_rows_significant = (
-                                indel_display.get("rows_clinvar_significant")
-                                or indel_rows_pathogenic
-                            )
+                        indel_store = VariantDisplayStore.open_indel(
+                            clair_dir, vcf_fallback=False
+                        )
+                        if indel_store is not None:
+                            indel_summary = indel_store.summary or {}
+                            indel_rows_significant = indel_store.significant_rows()
                             variant_data["indel_total_variants"] = indel_summary.get(
-                                "total_variants", len(indel_rows_all)
+                                "total_variants", indel_store.total_variants
                             )
                             variant_data["indel_pathogenic_variants"] = indel_summary.get(
                                 "clinvar_significant_variants",

@@ -33,7 +33,7 @@ import numpy as np
 import pandas as pd
 import pysam
 from robin.logging_config import get_job_logger
-from robin.analysis.snp_processing import build_snp_display_data
+from robin.analysis.snp_processing import write_clair_variant_display_files
 from robin.utils.clairs_to_docker import (
     ClairsToImageError,
     assert_clairs_to_resources_readable,
@@ -3242,42 +3242,27 @@ def run_snp_analysis(
             logger.info("Annotation-only mode enabled; skipping existing output shortcut.")
         elif not force_regenerate and all(os.path.exists(f) for f in snp_output_files):
             logger.info(f"SNP analysis already present in {clair_dir}")
-            logger.info("Rebuilding SNP display JSON from existing snpsift output.")
+            logger.info("Rebuilding SNP/INDEL display bundles from existing snpsift output.")
             try:
-                snp_display_vcf = Path(clair_dir) / "snpsift_output.vcf"
-                snp_display_path = Path(clair_dir) / "snpsift_output_display.json"
-                if snp_display_vcf.exists():
-                    snp_display = build_snp_display_data(snp_display_vcf)
-                    if snp_display is not None:
-                        try:
-                            from robin.utils.clinvar_manager import (
-                                format_clinvar_version_label,
-                                load_sample_clinvar_provenance,
-                            )
-
-                            provenance = load_sample_clinvar_provenance(sample_dir)
-                            summary = snp_display.setdefault("summary", {})
-                            summary["clinvar_release"] = provenance.get("file_date") or ""
-                            summary["clinvar_label"] = format_clinvar_version_label(
-                                provenance
-                            )
-                        except Exception:
-                            pass
-                        with snp_display_path.open("w", encoding="utf-8") as f_out:
-                            json.dump(snp_display, f_out)
-                        logger.info(
-                            f"SNP display data refreshed at {snp_display_path}"
-                        )
-                    else:
-                        logger.warning(
-                            "Could not regenerate SNP display data from existing VCF."
-                        )
-                else:
-                    logger.warning(
-                        "snpsift_output.vcf not found while refreshing display JSON."
+                summary_extra: Dict[str, Any] = {}
+                try:
+                    from robin.utils.clinvar_manager import (
+                        format_clinvar_version_label,
+                        load_sample_clinvar_provenance,
                     )
+
+                    provenance = load_sample_clinvar_provenance(sample_dir)
+                    summary_extra["clinvar_release"] = provenance.get("file_date") or ""
+                    summary_extra["clinvar_label"] = format_clinvar_version_label(
+                        provenance
+                    )
+                except Exception:
+                    summary_extra = {}
+                write_clair_variant_display_files(
+                    clair_dir, summary_extra=summary_extra or None
+                )
             except Exception as display_exc:
-                logger.warning(f"Failed to refresh SNP display JSON: {display_exc}")
+                logger.warning(f"Failed to refresh variant display bundles: {display_exc}")
             return clair_dir
 
         logger.info("STEP 3: Checking for required input files")
@@ -4409,30 +4394,25 @@ def run_snp_analysis(
                 f"{clair_dir}/snpsift_indel_output.vcf.csv",
             )
 
-            # Build pre-formatted SNP display data for the GUI
+            # Build SNP/INDEL display Parquet + sidecar for paged GUI tables
             try:
-                snp_display_path = Path(clair_dir) / "snpsift_output_display.json"
-                snp_display = build_snp_display_data(Path(clair_dir) / "snpsift_output.vcf")
-                if snp_display is not None:
-                    try:
-                        from robin.utils.clinvar_manager import (
-                            format_clinvar_version_label,
-                            load_sample_clinvar_provenance,
-                        )
+                summary_extra: Dict[str, Any] = {}
+                try:
+                    from robin.utils.clinvar_manager import (
+                        format_clinvar_version_label,
+                        load_sample_clinvar_provenance,
+                    )
 
-                        provenance = load_sample_clinvar_provenance(sample_dir)
-                        summary = snp_display.setdefault("summary", {})
-                        summary["clinvar_release"] = provenance.get("file_date") or ""
-                        summary["clinvar_label"] = format_clinvar_version_label(provenance)
-                    except Exception:
-                        pass
-                    with snp_display_path.open("w", encoding="utf-8") as f_out:
-                        json.dump(snp_display, f_out)
-                    logger.info(f"SNP display data written to {snp_display_path}")
-                else:
-                    logger.warning("Could not generate SNP display data from VCF.")
+                    provenance = load_sample_clinvar_provenance(sample_dir)
+                    summary_extra["clinvar_release"] = provenance.get("file_date") or ""
+                    summary_extra["clinvar_label"] = format_clinvar_version_label(provenance)
+                except Exception:
+                    summary_extra = {}
+                write_clair_variant_display_files(
+                    clair_dir, summary_extra=summary_extra or None
+                )
             except Exception as display_exc:
-                logger.warning(f"Failed to build SNP display data: {display_exc}")
+                logger.warning(f"Failed to build variant display bundles: {display_exc}")
 
             # Note: VCF files are now properly uncompressed when they have .vcf extensions
             # Compressed .vcf.gz files are only used as input to processing tools

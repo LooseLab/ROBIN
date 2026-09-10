@@ -481,11 +481,14 @@ def clamp_qtable_server_pagination(
     *,
     rows_number: int,
     rows_per_page_default: int = 100,
+    rows_per_page_max: Optional[int] = None,
 ) -> Dict[str, Any]:
     """Normalize ``page`` / ``rowsPerPage`` / ``rowsNumber`` for server-side QTable paging.
 
     Treats ``rowsPerPage <= 0`` (Quasar \"All\") as ``max(1, rows_number)`` so we never
-    materialize zero pages or rely on client-side \"all rows\" behavior.
+    materialize zero pages or rely on client-side \"all rows\" behavior. When
+    ``rows_per_page_max`` is set, \"All\" and oversized pages are capped so the
+    client cannot request the full filtered set.
     """
     try:
         rpp = int(pagination.get("rowsPerPage"))
@@ -493,6 +496,8 @@ def clamp_qtable_server_pagination(
         rpp = rows_per_page_default
     if rpp <= 0:
         rpp = max(1, int(rows_number))
+    if rows_per_page_max is not None:
+        rpp = max(1, min(rpp, int(rows_per_page_max)))
 
     total = max(0, int(rows_number))
     max_page = max(1, (total + rpp - 1) // rpp) if total else 1
