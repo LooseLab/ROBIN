@@ -318,6 +318,103 @@ def _bam_has_any_alignment(bam_path: str) -> bool:
     return False
 
 
+_TARGET_FOLD_TMP_NAME = ".target_fold.tmp.bam"
+
+
+def _unlink_quietly(path: str, logger: Optional[logging.Logger] = None) -> None:
+    """Remove a file if it exists; log and continue on OSError."""
+    try:
+        if os.path.exists(path):
+            os.remove(path)
+    except OSError as e:
+        if logger is not None:
+            logger.warning("Could not remove %s: %s", path, e)
+
+
+def _remove_bam_and_index(bam_path: str, logger: Optional[logging.Logger] = None) -> None:
+    """Remove a BAM and its sibling .bai if present."""
+    _unlink_quietly(bam_path, logger)
+    _unlink_quietly(f"{bam_path}.bai", logger)
+
+
+def sample_needs_target_bam_finalize(sample_dir: str) -> bool:
+    """
+    True when leftover ``batch_*.bam`` files or pending staging still need a
+    finalize pass (flush remaining staged files and fold any unfolder batches).
+    """
+    if glob.glob(os.path.join(sample_dir, "batch_*.bam")):
+        return True
+    staging_dir = os.path.join(sample_dir, "_staging")
+    if not os.path.isdir(staging_dir):
+        return False
+    if glob.glob(os.path.join(staging_dir, "coverage_*.parquet")):
+        return True
+    if glob.glob(os.path.join(staging_dir, "source_bam_*.txt")):
+        return True
+    return False
+
+
+def fold_bam_into_target(
+    target_bam_path: str,
+    incoming_bam_path: str,
+    *,
+    logger: Optional[logging.Logger] = None,
+) -> str:
+    """
+    Fold ``incoming_bam_path`` into the running ``target.bam`` using at most two inputs.
+
+    The first non-empty batch is copied. Later batches are 2-way ``pysam.merge`` so
+    the running target stays mergeable/indexable without an N-way finalize merge.
+
+    Returns:
+        ``\"copied\"``, ``\"merged\"``, or ``\"skipped_empty\"``.
+    """
+    logger = logger or logging.getLogger("robin.target")
+    if not os.path.exists(incoming_bam_path):
+        raise FileNotFoundError(f"Incoming BAM not found: {incoming_bam_path}")
+
+    if not _bam_has_any_alignment(incoming_bam_path):
+        logger.info(
+            "Skipping fold of empty incoming BAM %s",
+            os.path.basename(incoming_bam_path),
+        )
+        return "skipped_empty"
+
+    if not os.path.exists(target_bam_path):
+        shutil.copy2(incoming_bam_path, target_bam_path)
+        incoming_bai = f"{incoming_bam_path}.bai"
+        if os.path.exists(incoming_bai):
+            shutil.copy2(incoming_bai, f"{target_bam_path}.bai")
+        else:
+            pysam.index(target_bam_path)
+        logger.info(
+            "Initialized target.bam from %s", os.path.basename(incoming_bam_path)
+        )
+        return "copied"
+
+    sample_dir = os.path.dirname(os.path.abspath(target_bam_path))
+    temp_merged = os.path.join(sample_dir, _TARGET_FOLD_TMP_NAME)
+    _remove_bam_and_index(temp_merged, logger)
+
+    pysam.merge("-f", "-o", temp_merged, target_bam_path, incoming_bam_path)
+    pysam.index(temp_merged)
+
+    os.replace(temp_merged, target_bam_path)
+    temp_bai = f"{temp_merged}.bai"
+    target_bai = f"{target_bam_path}.bai"
+    if os.path.exists(temp_bai):
+        os.replace(temp_bai, target_bai)
+    else:
+        _unlink_quietly(target_bai, logger)
+        pysam.index(target_bam_path)
+
+    logger.info(
+        "Folded %s into running target.bam via 2-way merge",
+        os.path.basename(incoming_bam_path),
+    )
+    return "merged"
+
+
 def _load_bed_regions(bedfile: str) -> List[Tuple[str, int, int]]:
     """Load BED regions into a list of (chrom, start, end) tuples."""
     regions: List[Tuple[str, int, int]] = []
@@ -2092,6 +2189,28 @@ class TargetAnalysis:
                                     os.rmdir(filtered_bams_dir)
                             except OSError:
                                 pass
+                            # Fold this batch into the running target.bam (peak merge: 2 files).
+                            # On success the batch file is removed so finalize has nothing to N-way merge.
+                            target_bam_path = os.path.join(sample_output_dir, "target.bam")
+                            target_lock = self._get_lock_file(sample_id, "target_bam")
+                            try:
+                                with FileLock(target_lock, timeout=600.0):
+                                    fold_bam_into_target(
+                                        target_bam_path,
+                                        batch_merged_bam,
+                                        logger=logger,
+                                    )
+                                _remove_bam_and_index(batch_merged_bam, logger)
+                                logger.info(
+                                    "Folded batch BAM into running target.bam and removed %s",
+                                    os.path.basename(batch_merged_bam),
+                                )
+                            except Exception as fold_exc:
+                                logger.error(
+                                    "Failed to fold %s into target.bam; leaving batch file for finalize: %s",
+                                    os.path.basename(batch_merged_bam),
+                                    fold_exc,
+                                )
                 except Exception as e:
                     logger.error(f"Error creating target.bam: {e}")
                     import traceback
@@ -2745,28 +2864,33 @@ def finalize_accumulation_for_sample(
 ) -> Dict[str, Any]:
     """
     Force final accumulation of any remaining staged files for a sample
-    and merge all batch BAMs into final target.bam.
-    
+    and fold leftover batch BAMs into the running target.bam.
+
+    Batches are folded into target.bam during accumulation (2-way merge), so this
+    path normally only flushes leftover staging. Any ``batch_*.bam`` files that
+    remain (failed fold, interrupted run, or pre-fold samples) are folded one
+    at a time rather than in a single N-way merge.
+
     This should be called when:
     - All files for a sample have been processed
     - The workflow is completing
     - There are staged files that haven't been accumulated yet
-    
+
     Args:
         sample_id: Sample identifier
         work_dir: Working directory containing sample data
         target_panel: Target panel type
-    
+
     Returns:
         Dictionary with accumulation results
     """
     logger = logging.getLogger("robin.target")
-    
+
     try:
         logger.info(f"Finalizing accumulation for sample {sample_id}")
-        
+
         sample_output_dir = os.path.join(work_dir, sample_id)
-        
+
         # Initialize target analysis
         target_analysis = TargetAnalysis(
             work_dir=work_dir,
@@ -2777,181 +2901,84 @@ def finalize_accumulation_for_sample(
         if reference:
             target_analysis.reference = reference
             logger.info(f"Finalize path using reference genome: {reference}")
-        
+
         # Check if there are pending files
         pending_count = target_analysis._get_pending_count(sample_id)
-        
+
         if pending_count > 0:
             logger.info(f"Found {pending_count} pending files for {sample_id} - forcing accumulation")
-            # Force accumulation of remaining files
+            # Force accumulation of remaining files (each batch folds into target.bam)
             result = target_analysis.accumulate_staged_files(sample_id, force=True)
             logger.info(f"Final accumulation complete for {sample_id}: {result}")
         else:
             logger.info(f"No pending files for {sample_id} - skipping accumulation")
             result = {"status": "no_pending_files", "sample_id": sample_id}
-        
-        # Now merge all batch BAMs into target.bam
-        logger.info(f"Merging all batch BAMs into final target.bam for {sample_id}")
-        
+
         target_bam_path = os.path.join(sample_output_dir, "target.bam")
-        
-        # Check if target.bam already exists but batch files weren't cleaned up from a previous run
-        if os.path.exists(target_bam_path) and os.path.exists(f"{target_bam_path}.bai"):
-            existing_batch_bams = sorted(glob.glob(os.path.join(sample_output_dir, "batch_*.bam")))
-            if existing_batch_bams:
-                logger.info(f"Found {len(existing_batch_bams)} leftover batch BAM files - cleaning up since target.bam already exists")
-                cleaned_count = 0
-                for batch_bam in existing_batch_bams:
-                    try:
-                        if os.path.exists(batch_bam):
-                            os.remove(batch_bam)
-                            cleaned_count += 1
-                        if os.path.exists(f"{batch_bam}.bai"):
-                            os.remove(f"{batch_bam}.bai")
-                    except OSError as e:
-                        logger.warning(f"Could not remove leftover batch BAM {os.path.basename(batch_bam)}: {e}")
-                logger.info(f"Cleaned up {cleaned_count} leftover batch files")
-        
-        # Find all batch BAM files
         batch_bams = sorted(glob.glob(os.path.join(sample_output_dir, "batch_*.bam")))
-        
+
         if batch_bams:
-            logger.info(f"Found {len(batch_bams)} batch BAM files to merge")
-            
-            # Create temp merged output
-            temp_merged_bam = os.path.join(sample_output_dir, ".final_merged.bam.tmp")
-            
-            # Clean stale temp outputs from a prior interrupted finalize, then force overwrite.
-            if os.path.exists(temp_merged_bam):
-                try:
-                    os.remove(temp_merged_bam)
-                except OSError as e:
-                    logger.warning(f"Could not remove stale temp merged BAM {temp_merged_bam}: {e}")
-            if os.path.exists(f"{temp_merged_bam}.bai"):
-                try:
-                    os.remove(f"{temp_merged_bam}.bai")
-                except OSError as e:
-                    logger.warning(f"Could not remove stale temp merged BAI {temp_merged_bam}.bai: {e}")
-
-            # Merge all batch BAMs (force overwrite in case file appears between checks)
-            pysam.merge("-f", "-o", temp_merged_bam, *batch_bams)
-            logger.info("Merged all batch BAMs into temporary file")
-            
-            # Index the merged BAM
-            pysam.index(temp_merged_bam)
-            logger.info("Indexed merged target.bam")
-
-            existing_target_read_count = 0
-            existing_target_has_reads = False
-            if os.path.exists(target_bam_path) and os.path.exists(f"{target_bam_path}.bai"):
-                try:
-                    with pysam.AlignmentFile(target_bam_path, "rb") as bam_file:
-                        existing_target_read_count = bam_file.count(until_eof=True)
-                        existing_target_has_reads = existing_target_read_count > 0
-                except Exception as e:
-                    logger.warning(f"Could not read existing target.bam before replacement: {e}")
-
-            merged_read_count = 0
-            try:
-                with pysam.AlignmentFile(temp_merged_bam, "rb") as bam_file:
-                    merged_read_count = bam_file.count(until_eof=True)
-            except Exception as e:
-                logger.warning(f"Could not read merged temp BAM before replacement: {e}")
-
-            replaced_target_bam = False
-
-            # Safety guard: preserve known-good existing BAM if newly merged BAM is empty.
-            if merged_read_count == 0 and existing_target_has_reads:
-                logger.warning(
-                    "Merged BAM for sample %s has 0 reads; preserving existing target.bam with %s reads.",
-                    sample_id,
-                    existing_target_read_count,
-                )
-                try:
-                    if os.path.exists(temp_merged_bam):
-                        os.remove(temp_merged_bam)
-                    if os.path.exists(f"{temp_merged_bam}.bai"):
-                        os.remove(f"{temp_merged_bam}.bai")
-                except OSError as e:
-                    logger.warning(f"Could not clean temp merged BAM after preserve decision: {e}")
-
-                target_bam_exists = os.path.exists(target_bam_path) and os.path.exists(f"{target_bam_path}.bai")
-                result["final_merge"] = "preserved_existing"
-                result["warning"] = (
-                    "Merged BAM was empty; preserved existing target.bam and continued."
-                )
-            else:
-                # Atomically replace target.bam
-                if os.path.exists(target_bam_path):
-                    os.remove(target_bam_path)
-                    if os.path.exists(f"{target_bam_path}.bai"):
-                        os.remove(f"{target_bam_path}.bai")
-
-                shutil.move(temp_merged_bam, target_bam_path)
-                if os.path.exists(f"{temp_merged_bam}.bai"):
-                    shutil.move(f"{temp_merged_bam}.bai", f"{target_bam_path}.bai")
-                replaced_target_bam = True
-
-                # Verify target.bam was created successfully
-                target_bam_exists = os.path.exists(target_bam_path) and os.path.exists(f"{target_bam_path}.bai")
-
-                if target_bam_exists:
-                    try:
-                        with pysam.AlignmentFile(target_bam_path, "rb") as bam_file:
-                            read_count = bam_file.count(until_eof=True)
-                            if read_count > 0:
-                                logger.info(
-                                    f"Successfully created target.bam with {read_count} reads from {len(batch_bams)} batch files"
-                                )
-                            else:
-                                logger.warning("target.bam created but contains no reads")
-                    except Exception as e:
-                        logger.warning(f"Could not verify target.bam: {e}")
-                else:
-                    logger.error("Failed to create target.bam file")
-                result["final_merge"] = "success" if target_bam_exists else "failed"
-            
-            # Clean up batch BAM files and their associated BAI files
-            # Only clean up if target.bam was successfully created
-            if target_bam_exists and replaced_target_bam:
-                logger.info(f"Cleaning up {len(batch_bams)} batch BAM files and their index files after final merge")
-                cleaned_count = 0
-                failed_count = 0
-                
+            logger.info(
+                "Found %s leftover batch BAM file(s) to fold into target.bam (2-way, sequential)",
+                len(batch_bams),
+            )
+            folded_count = 0
+            failed_count = 0
+            target_lock = target_analysis._get_lock_file(sample_id, "target_bam")
+            with FileLock(target_lock, timeout=600.0):
                 for batch_bam in batch_bams:
                     try:
-                        # Remove the batch BAM file
-                        if os.path.exists(batch_bam):
-                            os.remove(batch_bam)
-                            cleaned_count += 1
-                            logger.debug(f"Removed batch BAM: {os.path.basename(batch_bam)}")
-                        
-                        # Remove the associated BAI file
-                        batch_bai = f"{batch_bam}.bai"
-                        if os.path.exists(batch_bai):
-                            os.remove(batch_bai)
-                            logger.debug(f"Removed batch BAI: {os.path.basename(batch_bai)}")
-                    except OSError as e:
+                        fold_bam_into_target(
+                            target_bam_path, batch_bam, logger=logger
+                        )
+                        _remove_bam_and_index(batch_bam, logger)
+                        folded_count += 1
+                    except Exception as e:
                         failed_count += 1
-                        logger.warning(f"Could not remove batch BAM {os.path.basename(batch_bam)}: {e}")
-                
-                logger.info(f"Batch cleanup complete: {cleaned_count} batch files removed, {failed_count} failures")
-                
-                if failed_count > 0:
-                    logger.warning(f"Failed to remove {failed_count} batch file(s) - they may need manual cleanup")
+                        logger.error(
+                            "Failed to fold leftover batch BAM %s: %s",
+                            os.path.basename(batch_bam),
+                            e,
+                        )
+
+            leftover = sorted(glob.glob(os.path.join(sample_output_dir, "batch_*.bam")))
+            target_bam_exists = os.path.exists(target_bam_path) and os.path.exists(
+                f"{target_bam_path}.bai"
+            )
+            if leftover:
+                logger.warning(
+                    "Leaving %s leftover batch BAM(s) for retry after fold failures",
+                    len(leftover),
+                )
+                result["final_merge"] = "partial" if folded_count else "failed"
             elif target_bam_exists:
-                logger.info("Preserved existing target.bam; keeping batch files for investigation/retry.")
+                result["final_merge"] = "success"
+                logger.info(
+                    "Folded %s leftover batch BAM(s) into target.bam (%s failures)",
+                    folded_count,
+                    failed_count,
+                )
             else:
-                logger.warning("Skipping batch cleanup - target.bam was not successfully created")
-            
-            logger.info(f"Final merge complete for {sample_id}")
-            result["batch_files_merged"] = len(batch_bams)
+                result["final_merge"] = "failed"
+                logger.error("No target.bam after folding leftover batch files")
+            result["batch_files_merged"] = folded_count
         else:
-            logger.info(f"No batch BAM files found for {sample_id}")
-            result["final_merge"] = "no_batch_files"
-        
+            target_bam_exists = os.path.exists(target_bam_path) and os.path.exists(
+                f"{target_bam_path}.bai"
+            )
+            if target_bam_exists:
+                logger.info(
+                    "No leftover batch BAM files for %s; running target.bam already in place",
+                    sample_id,
+                )
+                result["final_merge"] = "already_folded"
+            else:
+                logger.info(f"No batch BAM files found for {sample_id}")
+                result["final_merge"] = "no_batch_files"
+            result["batch_files_merged"] = 0
+
         return result
-        
+
     except Exception as e:
         logger.error(f"Error during final accumulation for {sample_id}: {e}")
         import traceback
@@ -2962,7 +2989,8 @@ def finalize_accumulation_for_sample(
 def target_bam_finalize_handler(job, work_dir: Optional[str] = None) -> None:
     """
     Workflow handler to finalize target BAMs for a sample.
-    Runs accumulation and merges batch BAMs into target.bam.
+    Flushes remaining staging (which folds into the running target.bam) and
+    sequentially folds any leftover batch BAMs.
 
     Required metadata:
     - sample_id: Sample identifier (optional; defaults to context sample ID)

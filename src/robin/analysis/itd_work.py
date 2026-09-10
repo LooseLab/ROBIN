@@ -1261,11 +1261,15 @@ def accumulate_itd_candidates(
                     if path.is_file()
                 )
                 if not bam_paths:
-                    bam_paths = sorted(
-                        str(path)
-                        for path in Path(sample_dir).glob("*.bam")
-                        if path.is_file() and not path.name.endswith(".bai")
-                    )
+                    target_bam = Path(sample_dir) / "target.bam"
+                    if target_bam.is_file():
+                        bam_paths = [str(target_bam)]
+                    else:
+                        bam_paths = sorted(
+                            str(path)
+                            for path in Path(sample_dir).glob("*.bam")
+                            if path.is_file() and not path.name.endswith(".bai")
+                        )
                 if bam_paths:
                     qc_paths = write_itd_read_qc(
                         sample_dir, events, bam_paths=bam_paths
@@ -1530,6 +1534,9 @@ def write_itd_read_qc(
             for path in sample_dir.glob("batch_*.bam")
             if path.is_file()
         )
+        if not bam_paths:
+            target_bam = sample_dir / "target.bam"
+            bam_paths = [str(target_bam)] if target_bam.is_file() else []
     read_qc, event_qc = collect_itd_read_qc(events, list(bam_paths or []))
     read_path = sample_dir / "itd_read_qc.csv"
     event_path = sample_dir / "itd_event_qc.csv"
