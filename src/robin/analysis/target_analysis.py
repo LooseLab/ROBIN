@@ -33,6 +33,7 @@ import numpy as np
 import pandas as pd
 import pysam
 from robin.logging_config import get_job_logger
+from robin.runtime_limits import resolve_bam_io_threads
 from robin.analysis.snp_processing import write_clair_variant_display_files
 from robin.utils.clairs_to_docker import (
     ClairsToImageError,
@@ -354,11 +355,38 @@ def sample_needs_target_bam_finalize(sample_dir: str) -> bool:
     return False
 
 
+def _htslib_threads_arg(threads: int) -> str:
+    return f"-@{max(1, int(threads))}"
+
+
+def merge_bams(
+    output_bam: str,
+    *input_bams: str,
+    threads: int = 1,
+    force: bool = False,
+) -> None:
+    """Merge BAMs with htslib compression threads (``samtools merge -@``)."""
+    args: List[str] = []
+    if force:
+        args.append("-f")
+    args.extend([_htslib_threads_arg(threads), "-o", output_bam, *input_bams])
+    pysam.merge(*args)
+
+
+def index_bam(bam_path: str, index_path: Optional[str] = None, *, threads: int = 1) -> None:
+    """Index a BAM with htslib threads (``samtools index -@``)."""
+    args = [_htslib_threads_arg(threads), bam_path]
+    if index_path:
+        args.append(index_path)
+    pysam.index(*args)
+
+
 def fold_bam_into_target(
     target_bam_path: str,
     incoming_bam_path: str,
     *,
     logger: Optional[logging.Logger] = None,
+    threads: Optional[int] = None,
 ) -> str:
     """
     Fold ``incoming_bam_path`` into the running ``target.bam`` using at most two inputs.
@@ -370,6 +398,7 @@ def fold_bam_into_target(
         ``\"copied\"``, ``\"merged\"``, or ``\"skipped_empty\"``.
     """
     logger = logger or logging.getLogger("robin.target")
+    threads = resolve_bam_io_threads(threads)
     if not os.path.exists(incoming_bam_path):
         raise FileNotFoundError(f"Incoming BAM not found: {incoming_bam_path}")
 
@@ -386,7 +415,7 @@ def fold_bam_into_target(
         if os.path.exists(incoming_bai):
             shutil.copy2(incoming_bai, f"{target_bam_path}.bai")
         else:
-            pysam.index(target_bam_path)
+            index_bam(target_bam_path, threads=threads)
         logger.info(
             "Initialized target.bam from %s", os.path.basename(incoming_bam_path)
         )
@@ -396,8 +425,14 @@ def fold_bam_into_target(
     temp_merged = os.path.join(sample_dir, _TARGET_FOLD_TMP_NAME)
     _remove_bam_and_index(temp_merged, logger)
 
-    pysam.merge("-f", "-o", temp_merged, target_bam_path, incoming_bam_path)
-    pysam.index(temp_merged)
+    merge_bams(
+        temp_merged,
+        target_bam_path,
+        incoming_bam_path,
+        threads=threads,
+        force=True,
+    )
+    index_bam(temp_merged, threads=threads)
 
     os.replace(temp_merged, target_bam_path)
     temp_bai = f"{temp_merged}.bai"
@@ -406,11 +441,12 @@ def fold_bam_into_target(
         os.replace(temp_bai, target_bai)
     else:
         _unlink_quietly(target_bai, logger)
-        pysam.index(target_bam_path)
+        index_bam(target_bam_path, threads=threads)
 
     logger.info(
-        "Folded %s into running target.bam via 2-way merge",
+        "Folded %s into running target.bam via 2-way merge (%s threads)",
         os.path.basename(incoming_bam_path),
+        threads,
     )
     return "merged"
 
@@ -874,13 +910,13 @@ class TargetMetadata:
 class TargetAnalysis:
     """Target analysis worker"""
 
-    def __init__(self, work_dir=None, config_path=None, threads=4, target_panel=None, 
+    def __init__(self, work_dir=None, config_path=None, threads=None, target_panel=None, 
                  batch_size=10, use_staging=True):
         logger = logging.getLogger("robin.target")
 
         self.work_dir = work_dir or os.getcwd()
         self.config_path = config_path
-        self.threads = threads
+        self.threads = resolve_bam_io_threads(threads)
         self.target_panel = target_panel
         self.batch_size = batch_size  # Trigger accumulation after N files
         self.use_staging = use_staging  # Enable/disable staging optimization
@@ -914,7 +950,12 @@ class TargetAnalysis:
                 "No reference genome configured - SNP calling will not be available"
             )
 
-        logger.info(f"Target Analysis initialized (staging={'enabled' if use_staging else 'disabled'}, batch_size={batch_size})")
+        logger.info(
+            "Target Analysis initialized (staging=%s, batch_size=%s, bam_io_threads=%s)",
+            "enabled" if use_staging else "disabled",
+            batch_size,
+            self.threads,
+        )
 
     def _get_master_bed_path(self, sample_id: str) -> Optional[str]:
         """
@@ -2172,10 +2213,14 @@ class TargetAnalysis:
                             batch_timestamp = int(time.time() * 1000)
                             batch_merged_bam = os.path.join(sample_output_dir, f"batch_{batch_timestamp}.bam")
                             if len(new_filtered_bams) > 1:
-                                pysam.merge("-o", batch_merged_bam, *new_filtered_bams)
+                                merge_bams(
+                                    batch_merged_bam,
+                                    *new_filtered_bams,
+                                    threads=self.threads,
+                                )
                             else:
                                 shutil.copy2(new_filtered_bams[0], batch_merged_bam)
-                            pysam.index(batch_merged_bam)
+                            index_bam(batch_merged_bam, threads=self.threads)
                             for filtered_bam in new_filtered_bams:
                                 try:
                                     if os.path.exists(filtered_bam):
@@ -2199,6 +2244,7 @@ class TargetAnalysis:
                                         target_bam_path,
                                         batch_merged_bam,
                                         logger=logger,
+                                        threads=self.threads,
                                     )
                                 _remove_bam_and_index(batch_merged_bam, logger)
                                 logger.info(
@@ -2929,7 +2975,10 @@ def finalize_accumulation_for_sample(
                 for batch_bam in batch_bams:
                     try:
                         fold_bam_into_target(
-                            target_bam_path, batch_bam, logger=logger
+                            target_bam_path,
+                            batch_bam,
+                            logger=logger,
+                            threads=target_analysis.threads,
                         )
                         _remove_bam_and_index(batch_bam, logger)
                         folded_count += 1
@@ -3065,7 +3114,7 @@ def target_bam_finalize_handler(job, work_dir: Optional[str] = None) -> None:
 
 
 def ensure_sorted_igv_bam(
-    sample_dir: str, threads: int = 4, force_regenerate: bool = False
+    sample_dir: str, threads: Optional[int] = None, force_regenerate: bool = False
 ) -> str:
     """
     Ensure an IGV-ready coordinate-sorted and indexed BAM exists for a sample.
@@ -3125,9 +3174,10 @@ def ensure_sorted_igv_bam(
             )
             return ""
 
-        logger.info(f"Sorting BAM for IGV: {in_bam} -> {out_bam}")
-        pysam.sort(f"-@{threads}", "-o", out_bam, in_bam)
-        pysam.index(out_bam, out_bai)
+        threads = resolve_bam_io_threads(threads)
+        logger.info(f"Sorting BAM for IGV: {in_bam} -> {out_bam} ({threads} threads)")
+        pysam.sort(_htslib_threads_arg(threads), "-o", out_bam, in_bam)
+        index_bam(out_bam, out_bai, threads=threads)
         logger.info(f"IGV BAM ready: {out_bam}")
         return out_bam
     except Exception as e:
@@ -3184,7 +3234,10 @@ def igv_bam_handler(job, work_dir: Optional[str] = None) -> None:
                 "Force regenerate requested - will recreate IGV BAM even if it exists"
             )
 
-        out = ensure_sorted_igv_bam(sample_dir, force_regenerate=force_regenerate)
+        threads = resolve_bam_io_threads(job.context.metadata.get("threads"))
+        out = ensure_sorted_igv_bam(
+            sample_dir, threads=threads, force_regenerate=force_regenerate
+        )
         if not out:
             raise RuntimeError("Failed to create IGV-ready BAM")
 
@@ -3201,7 +3254,7 @@ def igv_bam_handler(job, work_dir: Optional[str] = None) -> None:
 
 def run_snp_analysis(
     sample_dir: str,
-    threads: int = 4,
+    threads: Optional[int] = None,
     force_regenerate: bool = False,
     reference: Optional[str] = None,
     annotation_only: bool = False,
@@ -3233,6 +3286,7 @@ def run_snp_analysis(
 
     # CRITICAL: Immediate logging to see if we even get here
     logger.info("ENTERING run_snp_analysis function")
+    threads = resolve_bam_io_threads(threads)
     logger.info(
         "Parameters: sample_dir=%s, threads=%s, force_regenerate=%s, "
         "reference=%s, annotation_only=%s, annotation_verbose=%s, target_panel=%s",
@@ -3435,7 +3489,7 @@ def run_snp_analysis(
 
                 # Sort the BAM file
                 logger.info(f"Sorting BAM with {threads} threads...")
-                pysam.sort(f"-@{threads}", "-o", sorted_bam, target_bam)
+                pysam.sort(_htslib_threads_arg(threads), "-o", sorted_bam, target_bam)
 
                 # Verify the sorted file was created
                 if not os.path.exists(sorted_bam):
@@ -4532,7 +4586,7 @@ def snp_analysis_handler(job, work_dir: Optional[str] = None) -> None:
 
         annotation_only = job.context.metadata.get("annotation_only", False)
         annotation_verbose = job.context.metadata.get("annotation_verbose", False)
-        threads = job.context.metadata.get("threads", 4)
+        threads = resolve_bam_io_threads(job.context.metadata.get("threads"))
         force_regenerate = job.context.metadata.get("force_regenerate", False)
         reference = job.context.metadata.get("reference")
         target_panel = job.context.metadata.get("target_panel")

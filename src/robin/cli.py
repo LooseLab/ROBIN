@@ -3269,7 +3269,7 @@ def _display_workflow_config(
     "--preset",
     type=click.Choice(["p2i", "standard", "high"]),
     default="standard",
-    help="Execution preset for Ray Core: 'p2i' (2 CPU cap, grouped pools, concurrency 1), 'standard' (default; 6 CPU cap, grouped pools), 'high' (per-job-type actors).",
+    help="Execution preset for Ray Core: 'p2i' (2 CPU cap, grouped pools, concurrency 1), 'standard' (default; grouped pools), 'high' (per-job-type actors and more BAM merge/sort threads).",
 )
 @click.option(
     "--ray-dashboard/--no-ray-dashboard",
@@ -3377,6 +3377,14 @@ def workflow(
         preset = merged["preset"]
         ray_dashboard = merged["ray_dashboard"]
         target_panel = merged["target_panel"]
+
+        from robin.runtime_limits import publish_workflow_preset
+
+        bam_io_threads = publish_workflow_preset(preset)
+        _echo_styled(
+            f"BAM I/O threads: {bam_io_threads} (preset={preset or 'standard'}; override with ROBIN_BAM_IO_THREADS)",
+            level="info",
+        )
 
         if reference is not None and not reference.exists():
             raise click.BadParameter(f"Reference genome does not exist: {reference}")

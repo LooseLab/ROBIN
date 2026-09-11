@@ -498,12 +498,43 @@ QUEUE_TO_TYPES: Dict[str, Set[str]] = {
     "bed_conversion": {"bed_conversion"},
     "mgmt": {"mgmt"},
     "cnv": {"cnv"},
-    "target": {"target"},
+    "target": {"target", "target_bam_finalize"},
     "fusion": {"fusion"},
     "itd": {"itd"},
     "classification": {"sturgeon", "nanodx", "pannanodx"},
-    "slow": {"random_forest", "marlin", "lamprey", "tucan", "igv_bam", "snp_analysis", "target_bam_finalize"},
+    "slow": {"random_forest", "marlin", "lamprey", "tucan", "igv_bam", "snp_analysis"},
 }
+
+
+def _standard_pool_groups() -> Dict[str, List[str]]:
+    """Job types served by each named Pool actor under the standard/p2i presets."""
+    return {
+        "prep": ["preprocessing"],
+        "bed_conversion": ["bed_conversion"],
+        "cnv": ["cnv"],
+        "target": [
+            "target",
+            "target_bam_finalize",
+        ],
+        "analysis": [
+            "mgmt",
+            "fusion",
+            "itd",
+        ],
+        "classif": [
+            "sturgeon",
+            "nanodx",
+            "pannanodx",
+        ],
+        "rf": ["random_forest"],
+        "marlin": ["marlin"],
+        "lamprey": ["lamprey"],
+        "tucan": ["tucan"],
+        "slow": [
+            "igv_bam",
+            "snp_analysis",
+        ],
+    }
 
 TRIGGERS: Dict[str, List[str]] = {
     # preprocessing -> analyses
@@ -844,6 +875,7 @@ _ROBIN_NAMED_ACTORS: Tuple[str, ...] = (
     "pool_prep",
     "pool_bed_conversion",
     "pool_cnv",
+    "pool_target",
     "pool_analysis",
     "pool_classif",
     "pool_rf",
@@ -947,6 +979,7 @@ NEEDS_WORK_DIR: Set[str] = {
     "mgmt",
     "cnv",
     "target",
+    "target_bam_finalize",
     "fusion",
     "itd",
     "sturgeon",
@@ -988,9 +1021,26 @@ def _wrap_real_handler(
         if MemoryManager is not None and not DISABLE_MEMORY_MANAGER:
             try:
                 # Configure memory management based on job type
-                gc_every = 10 if job_type in {"mgmt", "cnv", "target", "fusion", "itd"} else 25
+                gc_every = 10 if job_type in {
+                    "mgmt",
+                    "cnv",
+                    "target",
+                    "target_bam_finalize",
+                    "fusion",
+                    "itd",
+                } else 25
                 rss_trigger = (
-                    1024 if job_type in {"mgmt", "cnv", "target", "fusion", "itd"} else 1024
+                    1024
+                    if job_type
+                    in {
+                        "mgmt",
+                        "cnv",
+                        "target",
+                        "target_bam_finalize",
+                        "fusion",
+                        "itd",
+                    }
+                    else 1024
                 )
                 memory_manager = MemoryManager(
                     gc_every=gc_every,
@@ -1282,16 +1332,18 @@ class TypeProcessor:
         if MemoryManager is not None and not DISABLE_MEMORY_MANAGER:
             try:
                 # Configure memory management based on job type
-                gc_every = 25 if job_type in {"mgmt", "cnv", "target", "fusion", "itd"} else 50
-                rss_trigger = (
-                    1024 if job_type in {"mgmt", "cnv", "target", "fusion", "itd"} else 2048
-                )
-                restart_every = (
-                    5000 if job_type in {"mgmt", "cnv", "target", "fusion", "itd"} else 10000
-                )
-                restart_rss_trigger = (
-                    2048 if job_type in {"mgmt", "cnv", "target", "fusion", "itd"} else 4096
-                )
+                _analysis_types = {
+                    "mgmt",
+                    "cnv",
+                    "target",
+                    "target_bam_finalize",
+                    "fusion",
+                    "itd",
+                }
+                gc_every = 25 if job_type in _analysis_types else 50
+                rss_trigger = 1024 if job_type in _analysis_types else 2048
+                restart_every = 5000 if job_type in _analysis_types else 10000
+                restart_rss_trigger = 2048 if job_type in _analysis_types else 4096
                 self.memory_manager = MemoryManager(
                     gc_every=gc_every,
                     rss_trigger_mb=rss_trigger,
@@ -1992,8 +2044,8 @@ class Coordinator:
             except Exception:
                 total_cpus = 0.0
             desired_cap = (
-                2.0 if preset == "p2i" else 6.0
-            )  # Increased from 4.0 to 6.0 for additional pools
+                2.0 if preset == "p2i" else 8.0
+            )  # Headroom for CNV + target + shared analysis pools
             reserve = max(0.0, total_cpus - desired_cap)
             try:
                 if reserve >= 1.0:
@@ -2015,41 +2067,7 @@ class Coordinator:
                 pass
 
             # Grouped Pool actors - optimized resource allocation
-            groups = {
-                "prep": ["preprocessing"],  # Separate preprocessing for independence
-                "bed_conversion": [
-                    "bed_conversion"
-                ],  # Separate bed_conversion for independence
-                "cnv": ["cnv"],  # CNV gets its own CPU (most CPU-intensive)
-                "analysis": [
-                    "mgmt",
-                    "target",
-                    "fusion",
-                    "itd",
-                ],  # Lightweight analysis types share a CPU
-                "classif": [
-                    "sturgeon",
-                    "nanodx",
-                    "pannanodx",
-                ],  # Fast classification jobs
-                "rf": [
-                    "random_forest"
-                ],  # Random forest needs its own actor (slow/blocking)
-                "marlin": [
-                    "marlin"
-                ],  # MARLIN (TensorFlow) needs its own actor
-                "lamprey": [
-                    "lamprey"
-                ],  # Lamprey ONNX model is large; dedicated actor
-                "tucan": [
-                    "tucan"
-                ],  # Tucan PyTorch ensemble; dedicated actor
-                "slow": [
-                    "igv_bam",
-                    "snp_analysis",
-                    "target_bam_finalize",
-                ],  # Slow pool for igv_bam and snp_analysis jobs
-            }
+            groups = _standard_pool_groups()
 
             # Determine concurrency per pool based on preset
             def pool_parallel(name: str) -> int:
@@ -2059,6 +2077,9 @@ class Coordinator:
                 # standard preset - optimized resource allocation
                 if name == "cnv":
                     # CNV gets dedicated concurrency (most CPU-intensive)
+                    return max(1, int(self.analysis_workers))
+                if name == "target":
+                    # Target analysis + BAM finalize/fold share this pool
                     return max(1, int(self.analysis_workers))
                 if name == "analysis":
                     # Lightweight analysis types share concurrency
@@ -2128,7 +2149,14 @@ class Coordinator:
             for jt, rf in registrations:
                 opts = RESOURCE_HINTS.get(jt, {})
                 max_conc = 1
-                if jt in {"mgmt", "cnv", "target", "fusion", "itd"}:
+                if jt in {
+                    "mgmt",
+                    "cnv",
+                    "target",
+                    "target_bam_finalize",
+                    "fusion",
+                    "itd",
+                }:
                     max_conc = max(1, int(self.analysis_workers))
                 elif jt == "preprocessing":
                     max_conc = self.preprocessing_workers
@@ -2151,7 +2179,14 @@ class Coordinator:
                 opts = RESOURCE_HINTS.get(jt, {})
                 # Set actor concurrency via .options on the actor itself
                 max_conc = 1
-                if jt in {"mgmt", "cnv", "target", "fusion", "itd"}:
+                if jt in {
+                    "mgmt",
+                    "cnv",
+                    "target",
+                    "target_bam_finalize",
+                    "fusion",
+                    "itd",
+                }:
                     max_conc = max(1, int(self.analysis_workers))
                 elif jt == "preprocessing":
                     max_conc = self.preprocessing_workers
@@ -2878,7 +2913,7 @@ class Coordinator:
                 job_id=next(_job_id_counter),
                 job_type="target_bam_finalize",
                 origin="manual",
-                workflow=["slow:target_bam_finalize"],
+                workflow=["target:target_bam_finalize"],
                 step=0,
                 context=context,
             )
@@ -4260,6 +4295,8 @@ class Coordinator:
         def _cat_of(jt: str) -> str:
             if jt == "preprocessing":
                 return "preprocessing"
+            if jt == "target_bam_finalize":
+                return "target"
             if jt in {"mgmt", "cnv", "target", "fusion", "itd"}:
                 return jt
             if jt in CLASSIFICATION_TYPES:
@@ -4609,11 +4646,11 @@ class Pool:
         if MemoryManager is not None and not DISABLE_MEMORY_MANAGER:
             try:
                 # Configure memory management based on queue type
-                gc_every = 30 if queue_name in {"analysis", "classif"} else 50
-                rss_trigger = 1536 if queue_name in {"analysis", "classif"} else 2048
-                restart_every = 7500 if queue_name in {"analysis", "classif"} else 10000
+                gc_every = 30 if queue_name in {"analysis", "classif", "target"} else 50
+                rss_trigger = 1536 if queue_name in {"analysis", "classif", "target"} else 2048
+                restart_every = 7500 if queue_name in {"analysis", "classif", "target"} else 10000
                 restart_rss_trigger = (
-                    3072 if queue_name in {"analysis", "classif"} else 4096
+                    3072 if queue_name in {"analysis", "classif", "target"} else 4096
                 )
                 self.memory_manager = MemoryManager(
                     gc_every=gc_every,
@@ -5980,6 +6017,12 @@ async def run(
 
     os.environ["RAY_DISABLE_IMPORT_WARNING"] = "1"
     os.environ["RAY_DISABLE_DEPRECATION_WARNING"] = "1"
+    try:
+        from robin.runtime_limits import publish_workflow_preset
+
+        publish_workflow_preset(preset)
+    except Exception:
+        pass
     if workflow_toml:
         try:
             from robin.readfish.analysis_hook import write_workflow_toml_pointer
@@ -6174,6 +6217,8 @@ async def run(
                             def _cat_of_local(jt: str) -> str:
                                 if jt == "preprocessing":
                                     return "preprocessing"
+                                if jt == "target_bam_finalize":
+                                    return "target"
                                 if jt in {"mgmt", "cnv", "target", "fusion", "itd"}:
                                     return jt
                                 if jt in CLASSIFICATION_TYPES:

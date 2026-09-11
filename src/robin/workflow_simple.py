@@ -681,7 +681,7 @@ class WorkflowManager:
                 "quick": "target",  # For testing purposes - map to target queue
                 # IGV BAM build goes to slow queue to avoid contention with analyses
                 "igv_bam": "slow",
-                "target_bam_finalize": "slow",
+                "target_bam_finalize": "target",
                 # Classification queue
                 "sturgeon": "classification",
                 "nanodx": "classification",
@@ -710,7 +710,7 @@ class WorkflowManager:
                 "long": "analysis",  # For testing purposes
                 "quick": "analysis",  # For testing purposes
                 "igv_bam": "slow",
-                "target_bam_finalize": "slow",
+                "target_bam_finalize": "analysis",
                 # Classification queue
                 "sturgeon": "classification",
                 "nanodx": "classification",
@@ -2181,9 +2181,11 @@ class WorkflowRunner:
         self.manager.register_handler("slow", "igv_bam", igv_bam_handler)
         # Register SNP analysis handler on slow queue
         self.manager.register_handler("slow", "snp_analysis", snp_analysis_handler)
-        # Register target BAM finalization handler on slow queue
+        finalize_queue = (
+            "target" if self.manager.use_separate_analysis_queues else "analysis"
+        )
         self.manager.register_handler(
-            "slow", "target_bam_finalize", target_bam_finalize_handler
+            finalize_queue, "target_bam_finalize", target_bam_finalize_handler
         )
 
     def register_handler(
@@ -2403,8 +2405,8 @@ class WorkflowRunner:
                 job_id=next(_job_id_counter),
                 job_type="target_bam_finalize",
                 context=context,
-                origin="slow",
-                workflow=["slow:target_bam_finalize"],
+                origin="target",
+                workflow=["target:target_bam_finalize"],
             )
 
             self.manager.enqueue_jobs([job])
