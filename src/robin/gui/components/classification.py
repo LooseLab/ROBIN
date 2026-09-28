@@ -312,9 +312,9 @@ except ImportError:
     launcher_visibility_context = lambda launcher: (None, None, "user")  # type: ignore[assignment]
     CLASSIFICATION_STEPS = {
         "sturgeon": "Sturgeon",
-        "nanodx": "NanoDX",
+        "nanodx": "CrossNN",
         "random_forest": "Random Forest",
-        "pannanodx": "PanNanoDX",
+        "pannanodx": "PanCrossNN",
         "marlin": "MARLIN",
         "lamprey": "Lamprey (research)",
         "tucan": "Tucan",
@@ -322,7 +322,7 @@ except ImportError:
 
 
 def add_classification_section(sample_dir: Path, launcher: Any = None) -> None:
-    """Build the Classification section (Sturgeon, NanoDX, PanNanoDX, RF, MARLIN, Lamprey, Tucan)."""
+    """Build the Classification section (Sturgeon, CrossNN, PanCrossNN, RF, MARLIN, Lamprey, Tucan)."""
     # Get workflow steps from launcher if available
     workflow_steps, display_config, viewer_role = launcher_visibility_context(launcher)
     enabled_classification_steps = get_visible_classification_steps(
@@ -334,8 +334,8 @@ def add_classification_section(sample_dir: Path, launcher: Any = None) -> None:
     # Map workflow step names to tool display names
     tool_to_step_map = {
         "Sturgeon": "sturgeon",
-        "NanoDX": "nanodx",
-        "PanNanoDX": "pannanodx",
+        "CrossNN": "nanodx",
+        "PanCrossNN": "pannanodx",
         "Random Forest": "random_forest",
         "MARLIN": "marlin",
         "Lamprey (research)": "lamprey",
@@ -350,8 +350,8 @@ def add_classification_section(sample_dir: Path, launcher: Any = None) -> None:
         )
         tool_to_file = {
             "Sturgeon": {"file": "sturgeon_scores.csv", "mode": "fraction"},
-            "NanoDX": {"file": "NanoDX_scores.csv", "mode": "fraction"},
-            "PanNanoDX": {"file": "PanNanoDX_scores.csv", "mode": "fraction"},
+            "CrossNN": {"file": "NanoDX_scores.csv", "mode": "fraction"},
+            "PanCrossNN": {"file": "PanNanoDX_scores.csv", "mode": "fraction"},
             "Random Forest": {"file": "random_forest_scores.csv", "mode": "percent"},
             "MARLIN": {"file": "marlin_scores.csv", "mode": "fraction"},
             "Lamprey (research)": {"file": "lamprey_scores.csv", "mode": "fraction"},
@@ -372,8 +372,8 @@ def add_classification_section(sample_dir: Path, launcher: Any = None) -> None:
                 summary_labels = None
                 tool_icon = {
                     "Sturgeon": "psychology",
-                    "NanoDX": "biotech",
-                    "PanNanoDX": "science",
+                    "CrossNN": "biotech",
+                    "PanCrossNN": "science",
                     "Random Forest": "forest",
                     "MARLIN": "bloodtype",
                     "Lamprey (research)": "biotech",
@@ -402,7 +402,7 @@ def add_classification_section(sample_dir: Path, launcher: Any = None) -> None:
                             "conf": st_conf,
                             "probes": st_probes,
                         }
-                elif tool_name in ("NanoDX", "PanNanoDX"):
+                elif tool_name in ("CrossNN", "PanCrossNN"):
                     with ui.element("div").classes(
                         "classification-insight-card w-full min-w-0 mb-2"
                     ):

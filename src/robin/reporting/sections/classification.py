@@ -2,7 +2,7 @@
 Classification Section for ROBIN Reports.
 
 This module handles the methylation-based classification section of the report,
-including results from Sturgeon, Random Forest, NanoDX, and PannanoDX classifiers.
+including results from Sturgeon, Random Forest, CrossNN, and PanCrossNN classifiers.
 """
 
 import os
@@ -361,8 +361,8 @@ class ClassificationSection(ReportSection):
         # Dictionary of classifiers and their corresponding files
         classifiers = {
             "Sturgeon": "sturgeon_scores.csv",
-            "NanoDX": "nanodx_scores.csv",
-            "PanNanoDX": "pannanodx_scores.csv",
+            "CrossNN": "nanodx_scores.csv",
+            "PanCrossNN": "pannanodx_scores.csv",
             "Random Forest": "random_forest_scores.csv",
             "MARLIN": "marlin_scores.csv",
             "Lamprey (research)": "lamprey_scores.csv",
@@ -415,8 +415,8 @@ class ClassificationSection(ReportSection):
                     # Determine confidence level based on classifier using centralized config
                     classifier_key = {
                         "Sturgeon": "sturgeon",
-                        "NanoDX": "nanodx",
-                        "PanNanoDX": "pannanodx",
+                        "CrossNN": "nanodx",
+                        "PanCrossNN": "pannanodx",
                         "Random Forest": "random_forest",
                         "MARLIN": "marlin",
                         "Lamprey (research)": "lamprey",
@@ -473,9 +473,17 @@ class ClassificationSection(ReportSection):
         from robin.classification_config import CLASSIFIER_CONFIDENCE_THRESHOLDS
         
         explanation_lines = ["Note: Classification confidence levels are defined as follows:"]
+        classifier_display_names = {
+            "nanodx": "CrossNN",
+            "pannanodx": "PanCrossNN",
+            "random_forest": "Random Forest",
+        }
         for classifier, thresholds in CLASSIFIER_CONFIDENCE_THRESHOLDS.items():
+            display_name = classifier_display_names.get(
+                classifier, classifier.replace("_", " ").title()
+            )
             explanation_lines.append(
-                f"- {classifier.title()}: High (>={thresholds['high']:.0f}%), "
+                f"- {display_name}: High (>={thresholds['high']:.0f}%), "
                 f"Medium (>={thresholds['medium']:.0f}%), Low (<{thresholds['medium']:.0f}%)"
             )
         explanation_lines.append(

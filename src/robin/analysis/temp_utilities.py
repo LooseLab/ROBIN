@@ -10,13 +10,17 @@ from typing import List, Optional
 import gc
 import os
 import logging
-import pickle
 from datetime import datetime
-import pandas as pd
+import numpy as np
 import polars as pl
 from contextlib import contextmanager
 import tempfile
 import json
+
+from robin.analysis.utilities.modkit_merge import (
+    aggregate_modkit_by_site,
+)
+from robin.analysis.utilities.panel_filter import get_panel_interval_index
 
 # Suppress pkg_resources deprecation warnings from sorted_nearest
 warnings.filterwarnings(
@@ -28,11 +32,9 @@ warnings.filterwarnings(
 )
 
 try:
-    import pyranges as pr
     from robin.analysis.utilities.mnp_flex import APIClient as MnpFlexClient #ToDo: Maintain to future integration.
 except ImportError as e:
     logging.warning(f"Some dependencies not available: {e}")
-
 
 
 # Simple cross-process file lock using POSIX flock when available (no-op on unsupported platforms)
@@ -63,6 +65,47 @@ def _exclusive_file_lock(lock_path: str):
             except Exception:
                 pass
         lock_file.close()
+
+
+def _filter_panel_sites(
+    frame: pl.DataFrame,
+    panel_index,
+) -> pl.DataFrame:
+    """Keep rows whose genomic positions are covered by the panel.
+
+    This is the merge-stage equivalent of the early matkit filter.  It uses
+    the cached interval arrays directly rather than converting the frame to
+    Pandas and constructing a PyRanges object for every BAM output file.
+    A boolean mask also means overlapping panel intervals cannot duplicate a
+    site, matching ``panel_intersection_keys(...).drop_duplicates()``.
+    """
+    if frame.is_empty():
+        return frame
+
+    chrom_values = frame.get_column("chrom").to_numpy()
+    positions = frame.get_column("chromStart").to_numpy()
+    keep = np.zeros(frame.height, dtype=bool)
+
+    for chrom in np.unique(chrom_values):
+        row_indices = np.flatnonzero(chrom_values == chrom)
+        intervals = panel_index.intervals_by_chrom.get(str(chrom))
+        if intervals is None or len(row_indices) == 0:
+            continue
+
+        starts, _ends, prefix_max_ends = intervals
+        row_positions = positions[row_indices]
+        interval_indices = np.searchsorted(
+            starts, row_positions, side="right"
+        ) - 1
+        valid = interval_indices >= 0
+        if np.any(valid):
+            valid_rows = row_indices[valid]
+            valid_intervals = interval_indices[valid]
+            keep[valid_rows] = (
+                prefix_max_ends[valid_intervals] > row_positions[valid]
+            )
+
+    return frame.filter(pl.Series("panel_keep", keep))
 
 
 def merge_modkit_files(
@@ -143,52 +186,13 @@ def merge_modkit_files(
             f"Total cumulative BAM files contributing to parquet: {cumulative_bam_file_count} (added {num_bam_files_seen} new files)"
         )
 
-        
-        # Cache or build PyRanges filter with improved caching
-        # Use distinct cache for .txt (1-based converted) vs .gz (0-based) to avoid stale data
-        cache_suffix = "_1based" if filter_bed_file.endswith(".txt") else ""
-        cache_path = os.path.join(
-            sample_output_dir,
-            f"{os.path.basename(filter_bed_file)}{cache_suffix}.pgr_cache",
+        # Load the cached half-open interval index once.  The index is shared
+        # in-process across merge calls and persisted on disk for later jobs.
+        # It replaces the previous Pandas/PyRanges cache and intersection path.
+        panel_index = get_panel_interval_index(
+            filter_bed_file,
+            cache_dir=sample_output_dir,
         )
-        if os.path.exists(cache_path):
-            with open(cache_path, "rb") as f:
-                filter_ranges = pickle.load(f)
-        else:
-            comp = "gzip" if filter_bed_file.endswith(".gz") else None
-            if filter_bed_file.endswith(".txt"):
-                # parquet_filter.txt format: header "chr start end IlmnID" (spaces/tabs)
-                # Illumina-derived files use 1-based coordinates; BED/PyRanges expect 0-based.
-                bed_df = pd.read_csv(
-                    filter_bed_file,
-                    sep=r"\s+",
-                    header=0,
-                    dtype=str,
-                )
-                # Map to expected column names (handle chr/start/end)
-                rename = {}
-                for c in bed_df.columns:
-                    if c.lower() == "chr":
-                        rename[c] = "Chromosome"
-                    elif c.lower() == "start":
-                        rename[c] = "Start"
-                    elif c.lower() == "end":
-                        rename[c] = "End"
-                bed_df = bed_df.rename(columns=rename)
-                bed_df["Start"] = bed_df["Start"].astype(int) - 1  # 1-based -> 0-based
-                bed_df["End"] = bed_df["End"].astype(int)  # 1-based end inclusive -> 0-based exclusive
-            else:
-                bed_df = pd.read_csv(
-                    filter_bed_file,
-                    sep="\t",
-                    header=None,
-                    names=["Chromosome", "Start", "End", "cg_label"],
-                    compression=comp,
-                    dtype={"Chromosome": str},
-                )
-            filter_ranges = pr.PyRanges(bed_df[["Chromosome", "Start", "End"]])
-            with open(cache_path, "wb") as f:
-                pickle.dump(filter_ranges, f)
 
         # BEDMethyl 18-column names for modkit output (tab-separated)
         full_cols = [
@@ -253,24 +257,12 @@ def merge_modkit_files(
                 if pl_df.is_empty():
                     continue
 
-                # Build PyRanges for intersection (only need chrom/start/end)
-                pr_df = pl_df.rename({"chrom": "Chromosome", "chromStart": "Start"}).with_columns(
-                    (pl.col("Start") + 1).alias("End")
-                )
-                gr = pr.PyRanges(pr_df.to_pandas()[["Chromosome", "Start", "End"]])
-                inter = gr.intersect(filter_ranges).df
-
-                # Join in Polars: keep only rows whose (chrom, chromStart) are in the intersection.
-                # Cast join keys to match pl_df (str + UInt32); from_pandas can infer Categorical for chrom.
-                inter_pl = pl.from_pandas(
-                    inter[["Chromosome", "Start"]].rename(
-                        columns={"Chromosome": "chrom", "Start": "chromStart"}
-                    )
-                ).with_columns(
-                    pl.col("chrom").cast(pl.Utf8),
-                    pl.col("chromStart").cast(pl.UInt32),
-                )
-                filt = pl_df.join(inter_pl, on=["chrom", "chromStart"], how="inner")
+                # Keep panel sites without converting through Pandas/PyRanges.
+                # The interval mask is unique per input row, so overlapping
+                # panel intervals cannot duplicate counts.
+                filt = _filter_panel_sites(pl_df, panel_index)
+                if filt.is_empty():
+                    continue
                 new_frames.append(filt)
             except Exception as e:
                 logging.error(f"Error processing file {bed}: {str(e)}")
@@ -282,6 +274,10 @@ def merge_modkit_files(
 
         # Combine new data (all Polars)
         new_df = pl.concat(new_frames) if len(new_frames) > 1 else new_frames[0]
+        # A batch can contain multiple BAMs, and panel overlaps or legacy inputs can
+        # also yield repeated rows. Collapse before the first write as well as on
+        # subsequent updates.
+        new_df = aggregate_modkit_by_site(new_df)
 
         # Critical section: read/merge/write parquet guarded by an exclusive lock
         lock_path = f"{output_file}.lock"
@@ -383,19 +379,9 @@ def merge_modkit_files(
                 # Combine existing and new data
                 combined = pl.concat([existing_df, pl_new_df])
 
-                # Define aggregation expressions for essential columns only
-                exprs = [
-                    pl.first("mod_code"),
-                    pl.first("strand"),
-                    pl.mean("percent_modified").alias("percent_modified"),
-                    *[
-                        pl.sum(c).alias(c)
-                        for c in ["valid_cov", "n_mod", "n_canonical"]
-                    ],
-                ]
-
-                # Perform groupby and aggregation
-                grouped = combined.group_by(["chrom", "chromStart"]).agg(exprs)
+                # Aggregate by complete site identity and derive percent_modified
+                # from the summed counts, rather than averaging per-BAM percentages.
+                grouped = aggregate_modkit_by_site(combined)
 
                 # Atomic write: write to temp then replace
                 fd2, tmp_out = tempfile.mkstemp(
@@ -452,10 +438,5 @@ def merge_modkit_files(
         logging.error(f"Error in merge_modkit_files: {str(e)}")
         raise
     finally:
-        # Cleanup temporary files if needed
-        if os.path.exists(cache_path) and not os.path.exists(filter_bed_file):
-            try:
-                os.remove(cache_path)
-            except Exception as e:
-                logging.error(f"Error removing cache file: {str(e)}")
+        # Release temporary frame references promptly for large batches.
         gc.collect()

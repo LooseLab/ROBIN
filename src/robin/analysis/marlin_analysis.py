@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import gzip
 import logging
+import math
 import os
 import time
 from dataclasses import dataclass, field
@@ -139,25 +140,41 @@ def bedmethyl_to_probe_values(
             "Methylation dataframe missing percent_modified/fraction/score column"
         )
 
-    sums: Dict[str, float] = {}
-    counts: Dict[str, int] = {}
-    for chrom, start, raw in zip(
-        df[chrom_col].tolist(), df[start_col].tolist(), df[value_col].tolist()
-    ):
+    weighted_sums: Dict[str, float] = {}
+    weights: Dict[str, float] = {}
+    for row in df.itertuples(index=False):
         try:
-            start_i = int(start)
-            beta = float(raw)
+            chrom = getattr(row, chrom_col)
+            start_i = int(getattr(row, start_col))
+            raw = float(getattr(row, value_col))
         except (TypeError, ValueError):
             continue
-        if beta > 1.0:
-            beta = beta / 100.0
+        if value_col == "percent_modified":
+            beta = raw / 100.0
+        elif value_col == "fraction":
+            beta = raw
+        else:
+            beta = raw / 100.0 if raw > 1.0 else raw
+        weight = 1.0
+        if "valid_cov" in df.columns:
+            try:
+                weight = float(getattr(row, "valid_cov"))
+            except (TypeError, ValueError):
+                continue
+        if {"valid_cov", "n_mod"}.issubset(df.columns) and weight > 0:
+            try:
+                beta = float(getattr(row, "n_mod")) / weight
+            except (TypeError, ValueError):
+                continue
+        if not math.isfinite(beta) or not math.isfinite(weight) or weight <= 0:
+            continue
         probe_id = position_map.get((_normalize_chrom(chrom), start_i))
         if probe_id is None:
             continue
-        sums[probe_id] = sums.get(probe_id, 0.0) + beta
-        counts[probe_id] = counts.get(probe_id, 0) + 1
+        weighted_sums[probe_id] = weighted_sums.get(probe_id, 0.0) + beta * weight
+        weights[probe_id] = weights.get(probe_id, 0.0) + weight
 
-    return {probe: sums[probe] / counts[probe] for probe in sums}
+    return {probe: weighted_sums[probe] / weights[probe] for probe in weighted_sums}
 
 
 def write_marlin_probe_bed(

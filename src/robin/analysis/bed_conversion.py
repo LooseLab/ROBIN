@@ -27,6 +27,11 @@ except ImportError:
     run_matkit = None
     resources = None
 
+try:
+    from robin.analysis.utilities.panel_filter import get_panel_interval_index
+except ImportError:
+    get_panel_interval_index = None
+
 # Import local utilities for merge_modkit_files
 try:
     from robin.analysis.temp_utilities import merge_modkit_files
@@ -42,16 +47,69 @@ _LOGGER = logging.getLogger("robin.analysis.bed_conversion")
 _CPGS_MASTER_FILE_CACHE: Optional[str] = None
 
 _CPG_MODE_ENV = "ROBIN_MATKIT_CPG_MODE"
+_QS_FILTER_ENV = "ROBIN_MATKIT_QS_FILTER"
+_COMBINE_STRANDS_ENV = "ROBIN_MATKIT_COMBINE_STRANDS"
 
 
 def matkit_cpg_mode_enabled() -> bool:
-    """True when production should use reference CpG pileup (modkit --cpg --combine-strands)."""
-    return os.environ.get(_CPG_MODE_ENV, "").strip().lower() in {
-        "1",
-        "true",
-        "yes",
-        "on",
-    }
+    """Whether classifier parquet should use reference CpGs with combined strands.
+
+    This is enabled by default because classifier features require one
+    count-aggregated row per biological CpG. It can be explicitly disabled for
+    legacy workflows that do not have a reference FASTA.
+    """
+    raw = os.environ.get(_CPG_MODE_ENV)
+    if raw is None or not raw.strip():
+        return True
+    value = raw.strip().lower()
+    if value in {"1", "true", "yes", "on"}:
+        return True
+    if value in {"0", "false", "no", "off"}:
+        return False
+    raise ValueError(
+        f"Invalid {_CPG_MODE_ENV}={raw!r}; expected true/false, yes/no, on/off, or 1/0"
+    )
+
+
+def matkit_qs_filter_enabled() -> bool:
+    """Whether bed conversion excludes primary reads with ``qs < 12``.
+
+    The default preserves existing Robin behaviour. Set
+    ``ROBIN_MATKIT_QS_FILTER=0`` when matching a reference modkit pileup that
+    was generated without Robin's additional QS filter.
+    """
+    raw = os.environ.get(_QS_FILTER_ENV)
+    if raw is None or not raw.strip():
+        return True
+    value = raw.strip().lower()
+    if value in {"1", "true", "yes", "on"}:
+        return True
+    if value in {"0", "false", "no", "off"}:
+        return False
+    raise ValueError(
+        f"Invalid {_QS_FILTER_ENV}={raw!r}; expected true/false, yes/no, on/off, or 1/0"
+    )
+
+
+def matkit_combine_strands_enabled() -> bool:
+    """Whether CpG-only matkit extraction combines ``+`` and ``-`` strands.
+
+    CpG restriction and strand combination are independent operations. The
+    default preserves the historical Robin behaviour; set
+    ``ROBIN_MATKIT_COMBINE_STRANDS=0`` to retain separate strand records while
+    still restricting extraction to reference CpGs.
+    """
+    raw = os.environ.get(_COMBINE_STRANDS_ENV)
+    if raw is None or not raw.strip():
+        return True
+    value = raw.strip().lower()
+    if value in {"1", "true", "yes", "on"}:
+        return True
+    if value in {"0", "false", "no", "off"}:
+        return False
+    raise ValueError(
+        f"Invalid {_COMBINE_STRANDS_ENV}={raw!r}; expected true/false, yes/no, on/off, or 1/0"
+    )
 
 
 def resolve_reference_fasta(
@@ -125,11 +183,17 @@ class BedConversionAnalysis:
         *,
         reference_fasta: Optional[str] = None,
         cpg_mode: bool = False,
+        combine_strands: Optional[bool] = None,
     ):
         self.work_dir = work_dir or os.getcwd()
         self.threads = threads
         self.cpg_mode = cpg_mode
         self.reference_fasta = reference_fasta
+        self.combine_strands = (
+            matkit_combine_strands_enabled()
+            if combine_strands is None
+            else combine_strands
+        )
 
         if self.cpg_mode and not self.reference_fasta:
             raise ValueError(
@@ -148,7 +212,8 @@ class BedConversionAnalysis:
         self.logger.info("BAM to parquet conversion analysis initialized")
         if self.cpg_mode:
             self.logger.info(
-                f"matkit CpG pileup enabled (combine-strands, ref={self.reference_fasta})"
+                "matkit CpG pileup enabled "
+                f"(combine-strands={self.combine_strands}, ref={self.reference_fasta})"
             )
         self.logger.debug(f"Work directory: {self.work_dir}")
         self.logger.debug(f"CPGs master file: {self.cpgs_master_file}")
@@ -263,13 +328,22 @@ class BedConversionAnalysis:
                 except OSError as e:
                     logger.warning(f"Failed to delete temporary file {file_path}: {e}")
 
-        matkit_kwargs: Dict[str, Any] = {}
+        matkit_kwargs: Dict[str, Any] = {
+            "apply_qs_filter": matkit_qs_filter_enabled(),
+        }
+        if get_panel_interval_index is not None:
+            matkit_kwargs["panel_index"] = get_panel_interval_index(
+                self.cpgs_master_file,
+                cache_dir=work_dir,
+            )
         if self.cpg_mode:
-            matkit_kwargs = {
+            matkit_kwargs.update(
+                {
                 "ref_fasta": self.reference_fasta,
                 "cpg_only": True,
-                "combine_strands": True,
+                "combine_strands": self.combine_strands,
             }
+        )
 
         def process_single_bam(bam: str) -> str:
             logger.debug(f"Processing BAM file: {bam}")
@@ -419,6 +493,7 @@ def process_multiple_files(
     *,
     reference_fasta: Optional[str] = None,
     cpg_mode: bool = False,
+    combine_strands: Optional[bool] = None,
 ):
     """
     Process multiple BAM files for bed conversion analysis.
@@ -476,10 +551,11 @@ def process_multiple_files(
         # Initialize bed conversion analysis
         bed_analyzer = BedConversionAnalysis(
             work_dir=work_dir,
-            threads=threads,
-            reference_fasta=reference_fasta,
-            cpg_mode=cpg_mode,
-        )
+        threads=threads,
+        reference_fasta=reference_fasta,
+        cpg_mode=cpg_mode,
+        combine_strands=combine_strands,
+    )
         
         logger.info("Initialized bed conversion analyzer")
         analysis_result["processing_steps"].append("analyzer_initialized")
@@ -633,9 +709,11 @@ def bed_conversion_handler(job, work_dir=None, reference=None):
             ref_fasta, cpg_mode = _bed_conversion_matkit_options(
                 job, batch_work_dir, reference, sample_id
             )
+            combine_strands = matkit_combine_strands_enabled()
             if cpg_mode:
                 logger.info(
-                    f"Using matkit CpG pileup for bed conversion (ref={ref_fasta})"
+                    "Using matkit CpG pileup for bed conversion "
+                    f"(combine-strands={combine_strands}, ref={ref_fasta})"
                 )
 
             # Process all BAM files in the batch using the new aggregated function
@@ -649,6 +727,7 @@ def bed_conversion_handler(job, work_dir=None, reference=None):
                 expected_fail_only=bool(suppress_expected),
                 reference_fasta=ref_fasta,
                 cpg_mode=cpg_mode,
+                combine_strands=combine_strands,
             )
             
             # Store batch results in job context (maintain compatibility with existing structure)
@@ -726,9 +805,11 @@ def bed_conversion_handler(job, work_dir=None, reference=None):
             ref_fasta, cpg_mode = _bed_conversion_matkit_options(
                 job, work_dir, reference, sample_id
             )
+            combine_strands = matkit_combine_strands_enabled()
             if cpg_mode:
                 logger.info(
-                    f"Using matkit CpG pileup for bed conversion (ref={ref_fasta})"
+                    "Using matkit CpG pileup for bed conversion "
+                    f"(combine-strands={combine_strands}, ref={ref_fasta})"
                 )
 
             # Create BAM to parquet conversion analysis instance
@@ -736,6 +817,7 @@ def bed_conversion_handler(job, work_dir=None, reference=None):
                 work_dir=work_dir,
                 reference_fasta=ref_fasta,
                 cpg_mode=cpg_mode,
+                combine_strands=combine_strands,
             )
 
             # Process the BAM file

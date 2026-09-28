@@ -1656,18 +1656,18 @@ def create_home_page():
                         ui.label("Model: --").classes("text-xs sm:text-sm text-blue-600")
                         ui.label("Features: --").classes("text-xs sm:text-sm text-blue-600")
 
-                    # NanoDX Classification
+                    # CrossNN Classification
                     with ui.card().classes("flex-1 min-w-0 elevation-4 rounded-xl bg-gradient-to-br from-green-50 to-green-100 border-l-4 border-green-500 classification-card"):
-                        ui.label("NanoDX Classification").classes("font-bold text-green-800 mb-2 text-sm sm:text-base")
+                        ui.label("CrossNN Classification").classes("font-bold text-green-800 mb-2 text-sm sm:text-base")
                         ui.label("Class: --").classes("font-bold text-medium text-green-600 text-xs sm:text-sm")
                         ui.label("Confidence: --%").classes("text-xs sm:text-sm text-green-600")
                         ui.label("Probes: --").classes("text-xs sm:text-sm text-green-600")
                         ui.label("Model: --").classes("text-xs sm:text-sm text-green-600")
                         ui.label("Features: --").classes("text-xs sm:text-sm text-green-600")
 
-                    # PanNanoDX Classification
+                    # PanCrossNN Classification
                     with ui.card().classes("flex-1 min-w-0 elevation-4 rounded-xl bg-gradient-to-br from-purple-50 to-purple-100 border-l-4 border-purple-500 classification-card"):
-                        ui.label("PanNanoDX Classification").classes("font-bold text-purple-800 mb-2 text-sm sm:text-base")
+                        ui.label("PanCrossNN Classification").classes("font-bold text-purple-800 mb-2 text-sm sm:text-base")
                         ui.label("Class: --").classes("font-bold text-medium text-purple-600 text-xs sm:text-sm")
                         ui.label("Confidence: --%").classes("text-xs sm:text-sm text-purple-600")
                         ui.label("Probes: --").classes("text-xs sm:text-sm text-purple-600")

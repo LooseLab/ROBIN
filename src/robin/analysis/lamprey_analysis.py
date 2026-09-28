@@ -14,6 +14,7 @@ Pipeline (mirrors MARLIN / Sturgeon)::
 from __future__ import annotations
 
 import logging
+import math
 import os
 import time
 from dataclasses import dataclass, field
@@ -179,27 +180,43 @@ def bedmethyl_to_probe_calls(
     if value_col is None:
         raise ValueError("Methylation dataframe missing percent_modified/fraction/score")
 
-    sums: Dict[str, float] = {}
-    counts: Dict[str, int] = {}
-    for chrom, start, raw in zip(
-        df[chrom_col].tolist(), df[start_col].tolist(), df[value_col].tolist()
-    ):
+    weighted_sums: Dict[str, float] = {}
+    weights: Dict[str, float] = {}
+    for row in df.itertuples(index=False):
         try:
-            start_i = int(start)
-            value = float(raw)
+            chrom = getattr(row, chrom_col)
+            start_i = int(getattr(row, start_col))
+            value = float(getattr(row, value_col))
         except (TypeError, ValueError):
             continue
-        # Normalize to percent 0–100
-        percent = value * 100.0 if value <= 1.0 else value
+        if value_col == "percent_modified":
+            percent = value
+        elif value_col == "fraction":
+            percent = value * 100.0
+        else:
+            percent = value * 100.0 if value <= 1.0 else value
+        weight = 1.0
+        if "valid_cov" in df.columns:
+            try:
+                weight = float(getattr(row, "valid_cov"))
+            except (TypeError, ValueError):
+                continue
+        if {"valid_cov", "n_mod"}.issubset(df.columns) and weight > 0:
+            try:
+                percent = float(getattr(row, "n_mod")) / weight * 100.0
+            except (TypeError, ValueError):
+                continue
+        if not math.isfinite(percent) or not math.isfinite(weight) or weight <= 0:
+            continue
         probe_id = position_map.get((_normalize_chrom(chrom), start_i))
         if probe_id is None:
             continue
-        sums[probe_id] = sums.get(probe_id, 0.0) + percent
-        counts[probe_id] = counts.get(probe_id, 0) + 1
+        weighted_sums[probe_id] = weighted_sums.get(probe_id, 0.0) + percent * weight
+        weights[probe_id] = weights.get(probe_id, 0.0) + weight
 
     calls: Dict[str, int] = {}
-    for probe_id, total in sums.items():
-        avg = total / counts[probe_id]
+    for probe_id, total in weighted_sums.items():
+        avg = total / weights[probe_id]
         if avg == 50.0:
             continue
         calls[probe_id] = 1 if avg > 50.0 else -1

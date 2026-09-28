@@ -38,10 +38,10 @@ DISPLAY_SECTIONS: Dict[str, DisplaySection] = {
         "sturgeon", "Sturgeon", "classification", workflow_step="sturgeon"
     ),
     "nanodx": DisplaySection(
-        "nanodx", "NanoDX", "classification", workflow_step="nanodx"
+        "nanodx", "CrossNN", "classification", workflow_step="nanodx"
     ),
     "pannanodx": DisplaySection(
-        "pannanodx", "PanNanoDX", "classification", workflow_step="pannanodx"
+        "pannanodx", "PanCrossNN", "classification", workflow_step="pannanodx"
     ),
     "random_forest": DisplaySection(
         "random_forest",

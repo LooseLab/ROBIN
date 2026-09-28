@@ -43,9 +43,9 @@ WORKFLOW_STEP_TO_SECTION = {
 # Map workflow steps to their display names in classification section
 CLASSIFICATION_STEPS = {
     "sturgeon": "Sturgeon",
-    "nanodx": "NanoDX",
+    "nanodx": "CrossNN",
     "random_forest": "Random Forest",
-    "pannanodx": "PanNanoDX",
+    "pannanodx": "PanCrossNN",
     "marlin": "MARLIN",
     "lamprey": "Lamprey (research)",
     "tucan": "Tucan",

@@ -298,11 +298,11 @@ def _classification_section(sample_dir: Path, launcher: Any = None):
                     "sturgeon",
                 )
 
-            # NanoDX
+            # CrossNN
             if "nanodx" in enabled_classification_steps:
                 nanodx_data = classification_data.get("nanodx", {})
                 _create_classification_dashboard_card_with_data(
-                    "NanoDX",
+                    "CrossNN",
                     nanodx_data.get("classification", "Not available"),
                     nanodx_data.get("confidence", 0.0),
                     nanodx_data.get("confidence_level", "Not available"),
@@ -312,11 +312,11 @@ def _classification_section(sample_dir: Path, launcher: Any = None):
                     "nanodx",
                 )
 
-            # PanNanoDX
+            # PanCrossNN
             if "pannanodx" in enabled_classification_steps:
                 pannanodx_data = classification_data.get("pannanodx", {})
                 _create_classification_dashboard_card_with_data(
-                    "PanNanoDX",
+                    "PanCrossNN",
                     pannanodx_data.get("classification", "Not available"),
                     pannanodx_data.get("confidence", 0.0),
                     pannanodx_data.get("confidence_level", "Not available"),

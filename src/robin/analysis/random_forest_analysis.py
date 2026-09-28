@@ -327,7 +327,7 @@ class RandomForestAnalysis:
                         "start_pos": "start",
                         "end_pos": "end",
                         "Nvalid": "cov",
-                        "score": "methylation_percent",  # The reconstructed data has 'score' not 'fraction'
+                        "fraction": "methylation_percent",
                     }
                 )
 

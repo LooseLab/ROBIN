@@ -338,6 +338,7 @@ def build_bundle_summary_from_docker_dir(
     docker_dir: Path,
     *,
     docker_image: Optional[str] = None,
+    docker_options: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     prefix = _discover_file_prefix(docker_dir)
     qc_path = docker_dir / f"{prefix}{_QC_SUMMARY_SUFFIX}"
@@ -383,6 +384,7 @@ def build_bundle_summary_from_docker_dir(
         "source": "docker",
         "docker_image": docker_image,
         "docker_file_prefix": prefix,
+        "docker_options": docker_options or {},
     }
 
 
@@ -409,6 +411,7 @@ def adapt_docker_outputs(
     output_dir: Path,
     *,
     docker_image: Optional[str] = None,
+    docker_options: Optional[Dict[str, Any]] = None,
 ) -> Path:
     """Write bundle_summary.json and standard plot names into output_dir."""
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -426,7 +429,9 @@ def adapt_docker_outputs(
         docker_dir = raw_dir
 
     summary = build_bundle_summary_from_docker_dir(
-        docker_dir, docker_image=docker_image
+        docker_dir,
+        docker_image=docker_image,
+        docker_options=docker_options,
     )
     prefix = summary.get("docker_file_prefix", "")
     summary_path = output_dir / "bundle_summary.json"
@@ -437,6 +442,14 @@ def adapt_docker_outputs(
         src = docker_dir / f"{prefix}{src_suffix}"
         if src.exists():
             shutil.copy2(src, output_dir / dest_name)
+
+    for extra_name in (
+        f"{prefix}_qc_report.json",
+        f"{prefix}_imputation_summary.csv",
+    ):
+        src = docker_dir / extra_name
+        if src.exists():
+            shutil.copy2(src, output_dir / extra_name)
 
     return summary_path
 
@@ -473,7 +486,12 @@ def run_docker_mnpflex(
         container_input,
         "--sample",
         sample_id,
+        "--out_dir",
+        "/output/",
     ]
+    for flag, value in config.docker_cli_options():
+        cmd.extend([flag, value])
+    cmd.extend(config.docker_cmd_args)
     logger.info("[MNPFlex] Running Docker: %s", " ".join(cmd))
     try:
         result = subprocess.run(
@@ -499,4 +517,5 @@ def run_docker_mnpflex(
         docker_output_dir,
         output_dir,
         docker_image=config.docker_image,
+        docker_options=config.docker_options_payload(),
     )

@@ -549,6 +549,8 @@ def sturgeon_bam_background_work(parquet_path, output_path, probes_file, current
                 merged_modkit_df,
                 temp_pileup.name,
                 probes_file,
+                margin=25,
+                probe_start_offset=0,
             )
             diagnosis = predict_sample_from_dataframe(result_df)
             mydf_to_save = diagnosis

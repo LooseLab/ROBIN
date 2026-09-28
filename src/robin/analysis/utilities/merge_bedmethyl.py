@@ -73,12 +73,13 @@ def load_minimal_modkit_data(parquet_path):
     """
     Load only essential bedmethyl columns for optimized storage and processing.
 
-    This function loads only the minimal columns required by the classifiers:
+    This function loads the columns required by the classifiers:
     - chrom: Chromosome name (required by all classifiers)
     - chromStart: Start position (required by all classifiers)
     - percent_modified: Primary methylation data (required by all classifiers)
     - mod_code: Modification code (required by Sturgeon for filtering)
     - strand: Strand information (required for proper aggregation)
+    - valid_cov, n_mod, n_canonical: Counts required for weighted aggregation
 
     The function handles both old (18-column) and new (8-column optimized) formats.
 
@@ -113,18 +114,19 @@ def load_minimal_modkit_data(parquet_path):
 
     if is_optimized_format:
         logger.info("Detected optimized format - using essential columns directly")
-        # Optimized format already has the essential columns we need
-        essential_columns = [
+        # Preserve count columns so downstream probe aggregation can be weighted.
+        core_columns = [
             "chrom",
             "chromStart",
             "percent_modified",
             "mod_code",
             "strand",
         ]
+        count_columns = ["valid_cov", "n_mod", "n_canonical"]
 
         # Verify all essential columns are present
         missing_columns = [
-            col for col in essential_columns if col not in merged_modkit_df.columns
+            col for col in core_columns if col not in merged_modkit_df.columns
         ]
         if missing_columns:
             logger.error(
@@ -132,8 +134,10 @@ def load_minimal_modkit_data(parquet_path):
             )
             raise KeyError(f"Missing required columns: {missing_columns}")
 
-        # Select only the essential columns
-        df = merged_modkit_df[essential_columns].copy()
+        available_counts = [
+            col for col in count_columns if col in merged_modkit_df.columns
+        ]
+        df = merged_modkit_df[core_columns + available_counts].copy()
 
     else:
         logger.info("Detected legacy format - extracting essential columns")
@@ -150,10 +154,14 @@ def load_minimal_modkit_data(parquet_path):
             ],
             "mod_code": ["mod_code", "mod", "modification_code"],
             "strand": ["strand", "strand_info"],
+            "valid_cov": ["valid_cov", "Nvalid", "coverage", "cov"],
+            "n_mod": ["n_mod", "Nmod"],
+            "n_canonical": ["n_canonical", "Ncanon"],
         }
 
         # Map available columns to our expected names
         mapped_columns = {}
+        required_names = {"chrom", "chromStart", "percent_modified", "mod_code", "strand"}
         for expected_name, possible_names in column_mappings.items():
             found = False
             for possible_name in possible_names:
@@ -161,26 +169,26 @@ def load_minimal_modkit_data(parquet_path):
                     mapped_columns[expected_name] = possible_name
                     found = True
                     break
-            if not found:
+            if not found and expected_name in required_names:
                 logger.error(
                     f"Could not find column for {expected_name}. Available columns: {list(merged_modkit_df.columns)}"
                 )
                 raise KeyError(f"Missing required column: {expected_name}")
 
         # Create a new DataFrame with the expected column names
-        df = merged_modkit_df[
-            [
-                mapped_columns[col]
-                for col in [
-                    "chrom",
-                    "chromStart",
-                    "percent_modified",
-                    "mod_code",
-                    "strand",
-                ]
-            ]
-        ].copy()
-        df.columns = ["chrom", "chromStart", "percent_modified", "mod_code", "strand"]
+        output_names = [
+            "chrom",
+            "chromStart",
+            "percent_modified",
+            "mod_code",
+            "strand",
+        ] + [
+            name
+            for name in ("valid_cov", "n_mod", "n_canonical")
+            if name in mapped_columns
+        ]
+        df = merged_modkit_df[[mapped_columns[col] for col in output_names]].copy()
+        df.columns = output_names
 
     logger.info(
         f"Loaded minimal bedmethyl data with {len(df)} rows and {len(df.columns)} columns"
@@ -196,8 +204,16 @@ def modkit_pileup_file_to_bed(
     neg_threshold: Optional[float] = 0.3,
     pos_threshold: Optional[float] = 0.7,
     fivemc_code: str = "m",
+    probe_start_offset: int = 0,
+    use_count_votes: bool = False,
 ) -> pd.DataFrame:
-    """Processes a modkit pileup file or DataFrame and maps methylation data to probes."""
+    """Map modkit calls to Sturgeon probes.
+
+    Sturgeon's original modkit conversion classifies each input row from
+    ``percent_modified`` and uses the median of the resulting votes. Count
+    columns are retained for other BEDMethyl workflows, but are not used for
+    this probe-level conversion unless ``use_count_votes`` is explicitly set.
+    """
 
     # Initialize variables to None for cleanup
     modkit_df = None
@@ -220,24 +236,30 @@ def modkit_pileup_file_to_bed(
                 "input_data must be either a file path (str) or a DataFrame"
             )
 
+        expected_columns = [
+            "chrom",
+            "chromStart",
+            "percent_modified",
+            "mod_code",
+            "strand",
+        ]
+
         # For minimal data, we expect only the essential columns
         # Support various optimized formats: 5, 8, 9, or 10 columns
         if isinstance(input_data, pd.DataFrame) and len(modkit_df.columns) <= 10:
             # Minimal/optimized data format (5-10 columns)
             # Columns should already be named correctly
-            expected_columns = [
-                "chrom",
-                "chromStart",
-                "percent_modified",
-                "mod_code",
-                "strand",
+            optional_count_columns = [
+                col
+                for col in ("valid_cov", "n_mod", "n_canonical")
+                if col in modkit_df.columns
             ]
             # Check if all expected columns exist in the DataFrame
             has_expected_cols = all(col in modkit_df.columns for col in expected_columns)
             
             if has_expected_cols:
                 # Data has the essential columns, just filter and select them
-                modkit_df = modkit_df[expected_columns].copy()
+                modkit_df = modkit_df[expected_columns + optional_count_columns].copy()
                 modkit_df = modkit_df[modkit_df["mod_code"] == fivemc_code]
             elif len(modkit_df.columns) == 5:
                 # Exactly 5 unnamed columns - assign names
@@ -245,7 +267,7 @@ def modkit_pileup_file_to_bed(
                 modkit_df = modkit_df[modkit_df["mod_code"] == fivemc_code]
             else:
                 # Optimized format with more columns - try to extract the essential ones
-                modkit_df = modkit_df[expected_columns].copy()
+                modkit_df = modkit_df[expected_columns + optional_count_columns].copy()
                 modkit_df = modkit_df[modkit_df["mod_code"] == fivemc_code]
         else:
             # Full data format - use original logic
@@ -283,24 +305,9 @@ def modkit_pileup_file_to_bed(
             # Filter by modification code
             modkit_df = modkit_df[modkit_df["mod_code"] == fivemc_code]
 
-            # Drop unnecessary columns
-            modkit_df.drop(
-                columns=[
-                    "mod_code",
-                    "thickStart",
-                    "thickEnd",
-                    "color",
-                    "valid_cov",
-                    "n_mod",
-                    "n_canonical",
-                    "n_othermod",
-                    "n_delete",
-                    "n_fail",
-                    "n_diff",
-                    "n_nocall",
-                ],
-                inplace=True,
-            )
+            modkit_df = modkit_df[
+                expected_columns + ["valid_cov", "n_mod", "n_canonical"]
+            ].copy()
 
         # Rename and normalize score column
         modkit_df = modkit_df.rename(
@@ -327,6 +334,9 @@ def modkit_pileup_file_to_bed(
         
         # Keep only the columns we need
         probes_df = probes_df[['chr', 'start', 'end', 'probe_name']].copy()
+        if probe_start_offset:
+            probes_df["start"] = probes_df["start"].astype(int) + probe_start_offset
+            probes_df["end"] = probes_df["end"].astype(int) + probe_start_offset
 
         # Ensure chromosome names match
         probes_df["chr"] = probes_df["chr"].astype(str).str.removeprefix("chr")
@@ -361,7 +371,50 @@ def modkit_pileup_file_to_bed(
                 margin=margin,
                 neg_threshold=neg_threshold,
                 pos_threshold=pos_threshold,
+                use_count_votes=use_count_votes,
             )
+
+            # Some parquet producers contain a small number of sites at the
+            # original probe coordinate even when the primary coordinate
+            # convention requires probe_start_offset. Try the unshifted
+            # coordinate only for probes with no primary call; do not use a
+            # non-zero margin, which could match an adjacent CpG.
+            if probe_start_offset:
+                fallback_probes = probes_methyl_df.loc[probe_mask].copy()
+                fallback_probes["start"] = (
+                    fallback_probes["start"].astype(int) - probe_start_offset
+                )
+                fallback_probes["end"] = (
+                    fallback_probes["end"].astype(int) - probe_start_offset
+                )
+                fallback_calls = map_methyl_calls_to_probes_chr(
+                    probes_df=fallback_probes,
+                    methyl_calls_per_read=modkit_df.loc[methyl_mask].copy(),
+                    margin=margin,
+                    neg_threshold=neg_threshold,
+                    pos_threshold=pos_threshold,
+                    use_count_votes=use_count_votes,
+                )
+                primary_empty = calls_per_probe_chr["total_calls"] == 0
+                fallback_available = fallback_calls["total_calls"] > 0
+                use_fallback = primary_empty & fallback_available
+                for column in (
+                    "methylation_calls",
+                    "unmethylation_calls",
+                    "total_calls",
+                ):
+                    calls_per_probe_chr.loc[use_fallback, column] = (
+                        fallback_calls.loc[use_fallback, column]
+                    )
+
+                # Keep the primary shifted coordinates in the working frame;
+                # the original probe coordinates are restored below for output.
+                calls_per_probe_chr["start"] = probes_methyl_df.loc[
+                    probe_mask, "start"
+                ].to_numpy()
+                calls_per_probe_chr["end"] = probes_methyl_df.loc[
+                    probe_mask, "end"
+                ].to_numpy()
 
             # Rename 'probe_name' to 'probe_id' for consistency
             if 'probe_name' in calls_per_probe_chr.columns:
@@ -401,10 +454,21 @@ def modkit_pileup_file_to_bed(
         # Filter out rows with zero total_calls
         calls_per_probe = calls_per_probe[calls_per_probe["total_calls"] > 0]
 
-        # Select final output columns
+        # probe_start_offset aligns 1-based probe starts with 0-based pileup
+        # positions for the lookup. Sturgeon writes the original probe coordinates.
+        if probe_start_offset:
+            calls_per_probe["chromStart"] = (
+                calls_per_probe["chromStart"] - probe_start_offset
+            )
+            calls_per_probe["chromEnd"] = (
+                calls_per_probe["chromEnd"] - probe_start_offset
+            )
+
+        # Select final output columns and write in genomic chromosome order.
         calls_per_probe = calls_per_probe[
             ["chrom", "chromStart", "chromEnd", "methylation_call", "probe_id"]
         ]
+        calls_per_probe = _sort_bedmethyl(calls_per_probe)
 
         # Save final processed file
         calls_per_probe.to_csv(output_file, header=True, index=False, sep="\t")
@@ -500,13 +564,23 @@ def collapse_minimal_bedmethyl(concat_df: pd.DataFrame) -> pd.DataFrame:
             "strand",
         ]
 
-        # Aggregate percent_modified by taking the mean (weighted average)
-        agg_funcs: Dict[str, str] = {
-            "percent_modified": "mean",
-        }
-
         grouped = concat_df.groupby(groupby_columns, as_index=False, observed=True)
-        result_df = grouped.agg(agg_funcs).reset_index()
+        if {"valid_cov", "n_mod"}.issubset(concat_df.columns):
+            agg_funcs: Dict[str, str] = {
+                "valid_cov": "sum",
+                "n_mod": "sum",
+            }
+            if "n_canonical" in concat_df.columns:
+                agg_funcs["n_canonical"] = "sum"
+            result_df = grouped.agg(agg_funcs).reset_index()
+            result_df["percent_modified"] = np.where(
+                result_df["valid_cov"] > 0,
+                result_df["n_mod"] / result_df["valid_cov"] * 100.0,
+                0.0,
+            )
+        else:
+            # Legacy inputs may not contain counts; retain the historical fallback.
+            result_df = grouped.agg({"percent_modified": "mean"}).reset_index()
 
         # Rename for consistency with existing code
         result_df = result_df.rename(
@@ -632,12 +706,63 @@ def merge_bedmethyl(dfA: pd.DataFrame, dfB: pd.DataFrame) -> pd.DataFrame:
         raise
 
 
+def _as_text(value: object) -> str:
+    """Decode a parquet string cell (``str`` or binary) to text."""
+    if isinstance(value, (bytes, bytearray)):
+        return value.decode("utf-8", errors="replace")
+    if value is None:
+        return ""
+    try:
+        if pd.isna(value):
+            return ""
+    except (TypeError, ValueError):
+        pass
+    return str(value)
+
+
+def _chromosome_sort_key(chrom: object) -> tuple:
+    """Order contigs as chr1–chr22, chrX, chrY, chrM, then any other name."""
+    label = _as_text(chrom)
+    body = label[3:] if label.startswith("chr") else label
+    if body.isdigit():
+        return (0, int(body), "")
+    if body == "X":
+        return (1, 0, "")
+    if body == "Y":
+        return (2, 0, "")
+    if body in {"M", "MT"}:
+        return (3, 0, "")
+    return (4, 0, label)
+
+
+def _sort_bedmethyl(bed_df: pd.DataFrame) -> pd.DataFrame:
+    """Sort BEDMethyl rows by genomic chromosome, start, then end."""
+    ordered = bed_df.copy()
+    for column in ("chrom", "mod_code", "strand"):
+        if column in ordered.columns:
+            ordered[column] = ordered[column].map(_as_text)
+    categories = sorted(pd.unique(ordered["chrom"]), key=_chromosome_sort_key)
+    ordered["chrom"] = pd.Categorical(
+        ordered["chrom"], categories=categories, ordered=True
+    )
+    sort_columns = [
+        column
+        for column in ("chrom", "chromStart", "chromEnd", "strand")
+        if column in ordered.columns
+    ]
+    ordered = ordered.sort_values(sort_columns, kind="mergesort")
+    ordered["chrom"] = ordered["chrom"].astype(str)
+    return ordered.reset_index(drop=True)
+
+
 def parquet_to_bed(parquet_file: str, output_bed: str) -> None:
     """
     Convert a parquet file to BED format.
 
     This function handles both old (18-column) and new (8-column optimized) formats.
     For optimized format, it reconstructs the missing columns before conversion.
+    Rows are written in genomic chromosome order (chr1–chr22, chrX, chrY, chrM,
+    then any other contig), then by start and end.
 
     Expected columns in the parquet file:
     - chrom: chromosome name
@@ -731,11 +856,8 @@ def parquet_to_bed(parquet_file: str, output_bed: str) -> None:
         for col in numeric_columns:
             bed_df[col] = pd.to_numeric(bed_df[col], errors="coerce").astype(int)
 
-        # Ensure strand is properly formatted
-        bed_df["strand"] = bed_df["strand"].astype(str).map({".": "+", "-": "-"})
-
-        # Sort by chromosome and start position
-        bed_df = bed_df.sort_values(["chrom", "chromStart"])
+        # Genomic chromosome order (chr1–22, X, Y, M), then start and end.
+        bed_df = _sort_bedmethyl(bed_df)
 
         # Write to BED file
         bed_df.to_csv(output_bed, sep="\t", header=False, index=False)
@@ -783,15 +905,21 @@ def reconstruct_full_bedmethyl_data(minimal_df: pd.DataFrame) -> pd.DataFrame:
         full_df["thickEnd"] = full_df["chromEnd"]
         full_df["color"] = "0,0,0"  # Default black color
 
-        # Calculate coverage and modification counts based on methylation percentage
-        # Assume a reasonable coverage value and calculate modifications
-        full_df["valid_cov"] = 10  # Default coverage of 10 reads
-        full_df["n_mod"] = (
-            (full_df["percent_modified"] * full_df["valid_cov"] / 100)
-            .round()
-            .astype(int)
-        )
-        full_df["n_canonical"] = full_df["valid_cov"] - full_df["n_mod"]
+        # Coverage and modified-read counts cannot be recovered exactly from a
+        # rounded percentage. Refuse incomplete minimal input instead of
+        # fabricating counts that alter Random Forest weighting.
+        missing_counts = [
+            column
+            for column in ("valid_cov", "n_mod")
+            if column not in full_df.columns
+        ]
+        if missing_counts:
+            raise ValueError(
+                "Minimal bedmethyl data is missing real count columns required "
+                f"for Random Forest classification: {missing_counts}"
+            )
+        if "n_canonical" not in full_df.columns:
+            full_df["n_canonical"] = full_df["valid_cov"] - full_df["n_mod"]
 
         # Set other modification counts to 0 (not used by RandomForest)
         full_df["n_othermod"] = 0
@@ -877,17 +1005,37 @@ def map_methyl_calls_to_probes_chr(
     margin: int,
     neg_threshold: float,
     pos_threshold: float,
+    use_count_votes: bool = True,
 ) -> pd.DataFrame:
     """Maps calls per read to probe locations in a chromosome using NumPy for performance."""
+
+    methyl_calls_per_read = methyl_calls_per_read.sort_values(
+        "reference_pos", kind="stable"
+    )
 
     # Convert Pandas DataFrames to NumPy arrays for performance
     probes_start = probes_df["start"].to_numpy()
     methyl_pos = methyl_calls_per_read["reference_pos"].to_numpy()
     scores = methyl_calls_per_read["score"].to_numpy()
+    coverage = (
+        methyl_calls_per_read["valid_cov"].to_numpy()
+        if "valid_cov" in methyl_calls_per_read.columns
+        else None
+    )
+    modified = (
+        methyl_calls_per_read["n_mod"].to_numpy()
+        if "n_mod" in methyl_calls_per_read.columns
+        else None
+    )
+    canonical = (
+        methyl_calls_per_read["n_canonical"].to_numpy()
+        if "n_canonical" in methyl_calls_per_read.columns
+        else None
+    )
 
-    # Define search ranges
+    # Define inclusive search ranges. With margin=0 only the exact start matches.
     starts = probes_start - margin
-    ends = starts + 2 * margin + 1
+    ends = probes_start + margin
 
     # Vectorized binary search
     s = np.searchsorted(methyl_pos, starts, side="left")
@@ -903,13 +1051,30 @@ def map_methyl_calls_to_probes_chr(
 
     # Vectorized processing
     for idx, (ss, nn) in enumerate(zip(s, n)):
-        current_scores = scores[ss:nn]
-        bin_scores = np.zeros_like(current_scores)
-        bin_scores[current_scores > pos_threshold] = 1
-        bin_scores[current_scores < neg_threshold] = -1
+        if use_count_votes and modified is not None and canonical is not None:
+            # The parquet counts are already per-read classifications. Match
+            # Sturgeon's mapper by using the majority of modified versus
+            # canonical calls and ignoring failed/neutral calls.
+            mod_votes = int(np.sum(modified[ss:nn]))
+            canonical_votes = int(np.sum(canonical[ss:nn]))
 
-        if len(bin_scores[bin_scores != 0]) > 0:
-            final_score = int(np.median(bin_scores[bin_scores != 0]))
+            if mod_votes > canonical_votes:
+                methylation_calls[valid_idx[idx]] += 1
+            elif canonical_votes > mod_votes:
+                unmethylation_calls[valid_idx[idx]] += 1
+        else:
+            # Legacy input without count columns: classify individual scores
+            # and use the median, as the original Sturgeon mapper does.
+            current_scores = scores[ss:nn]
+            bin_scores = np.zeros(current_scores.shape)
+            bin_scores[current_scores > pos_threshold] = 1
+            bin_scores[current_scores < neg_threshold] = -1
+            bin_scores = bin_scores[bin_scores != 0]
+
+            if len(bin_scores) == 0:
+                continue
+
+            final_score = int(np.median(bin_scores))
             if final_score == 1:
                 methylation_calls[valid_idx[idx]] += 1
             elif final_score == -1:

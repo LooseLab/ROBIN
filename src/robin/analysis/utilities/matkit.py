@@ -92,6 +92,38 @@ def _primary_meets_min_qs(read) -> bool:
         return True
 
 
+def _canonical_base_uses_implicit_mm_mode(read, canonical_base: str = "C") -> bool:
+    """Return whether all MM groups for ``canonical_base`` infer omitted calls canonical.
+
+    MM groups ending in ``?`` use explicit mode, where omitted residues are unknown.
+    Groups ending in ``.`` (or with no mode marker) use implicit mode, where omitted
+    residues are inferred to be canonical.  For combined modifications, any explicit
+    group makes an omitted residue a no-call rather than a safe canonical inference.
+    """
+    mm_tag = None
+    for tag in ("MM", "Mm"):
+        if read.has_tag(tag):
+            try:
+                mm_tag = read.get_tag(tag)
+            except (KeyError, TypeError):
+                return False
+            break
+    if not mm_tag:
+        return False
+
+    found = False
+    for group in str(mm_tag).split(";"):
+        if not group:
+            continue
+        header = group.split(",", 1)[0]
+        if not header or header[0].upper() != canonical_base.upper():
+            continue
+        found = True
+        if header.endswith("?"):
+            return False
+    return found
+
+
 def _binary_parquet_cell_to_str(cell) -> Optional[str]:
     """Decode one cell from a binary parquet column to str (bytes or PyArrow binary scalars)."""
     if cell is None:
@@ -150,39 +182,39 @@ def _read_parquet_robust(path: str, columns: list[str]):
 def _ensure_fasta_index(ref_fasta: str) -> None:
     """
     Ensure the reference FASTA file has an index (.fai file).
-    
+
     This function checks if the FASTA file has a corresponding .fai index file.
     If the index is missing or older than the FASTA file, it creates/updates it
     using pysam.faidx.
-    
+
     Args:
         ref_fasta: Path to the reference FASTA file
-        
+
     Raises:
         FileNotFoundError: If the reference FASTA file doesn't exist
         RuntimeError: If the index creation fails
     """
     if not ref_fasta or not os.path.exists(ref_fasta):
         raise FileNotFoundError(f"Reference FASTA file not found: {ref_fasta}")
-    
+
     fai_file = f"{ref_fasta}.fai"
-    
+
     # Check if index exists and is up-to-date
     if os.path.exists(fai_file):
         # Check if index is newer than the FASTA file
         fai_mtime = os.path.getmtime(fai_file)
         fa_mtime = os.path.getmtime(ref_fasta)
-        
+
         if fai_mtime >= fa_mtime:
             # Index exists and is up-to-date, no action needed
             return
-    
+
     # Create or update the index using pysam
     print(f"Creating FASTA index for {ref_fasta}")
     try:
         # pysam.faidx creates the .fai index file
         pysam.faidx(ref_fasta)
-        
+
         # Verify the index was created
         if not os.path.exists(fai_file):
             error_msg = (
@@ -191,9 +223,9 @@ def _ensure_fasta_index(ref_fasta: str) -> None:
             )
             print(f"ERROR: {error_msg}")
             raise RuntimeError(error_msg)
-        
+
         print(f"Successfully created FASTA index: {fai_file}")
-        
+
     except Exception as e:
         error_msg = (
             f"Failed to create FASTA index for {ref_fasta}. "
@@ -926,6 +958,8 @@ def _cpg_by_anchor_from_read_coverage(
     ref_fasta_obj: pysam.FastaFile,
     chrom: str,
     ref_fasta_path: str,
+    panel_index=None,
+    combine_strands: bool = False,
 ) -> dict[int, tuple[int, str]]:
     """
     Collect CpG anchors overlapped by a read using a chromosome CpG index.
@@ -937,29 +971,53 @@ def _cpg_by_anchor_from_read_coverage(
     if not ref_map:
         return {}
 
-    ref_values_list = list(ref_map.values())
-    min_r = max_r = ref_values_list[0]
-    covered: set[int] = set()
+    ref_values = ref_map.values()
+    min_r = min(ref_values)
+    max_r = max(ref_map.values())
+    # One mapping supplies both membership and the original aligned-position
+    # order. The previous implementation materialised a list, a set, and a
+    # second dictionary for every read.
     position_order: dict[int, int] = {}
-    for idx, refpos in enumerate(ref_values_list):
-        if refpos < min_r:
-            min_r = refpos
-        if refpos > max_r:
-            max_r = refpos
-        covered.add(refpos)
+    for idx, refpos in enumerate(ref_values):
         if refpos not in position_order:
             position_order[refpos] = idx
 
-    anchors = _get_cpg_anchors_for_chrom(ref_fasta_path, ref_fasta_obj, chrom)
+    panel_candidates = None
+    if panel_index is not None:
+        panel_candidates = panel_index.cpg_candidates(chrom, min_r - 1, max_r + 1)
+
+    # With a panel index, use only panel-derived candidates. These are a
+    # superset and are validated against the read's already-fetched reference
+    # window below. Without one, retain the unrestricted cached chromosome
+    # anchor index for direct matkit callers.
+    panel_restricted = panel_candidates is not None
+    anchors = (
+        panel_candidates
+        if panel_restricted
+        else _get_cpg_anchors_for_chrom(ref_fasta_path, ref_fasta_obj, chrom)
+    )
+    seq = None
+    offset = 0
+    if panel_restricted:
+        seq_window = _read_ref_seq_window(ref_fasta_obj, chrom, ref_map)
+        if seq_window is None:
+            return {}
+        seq, offset = seq_window
     lo = bisect.bisect_left(anchors, min_r - 1)
     hi = bisect.bisect_right(anchors, max_r)
 
     cpg_by_anchor: dict[int, tuple[int, str]] = {}
     for anchor in anchors[lo:hi]:
+        if panel_restricted:
+            seq_i = anchor - offset
+            if not (0 <= seq_i and seq_i + 2 <= len(seq)):
+                continue
+            if seq[seq_i : seq_i + 2] != _REF_CG:
+                continue
         visits: list[tuple[int, str]] = []
-        if anchor in covered:
+        if anchor in position_order:
             visits.append((anchor, PLUS_STRAND))
-        if anchor + 1 in covered:
+        if anchor + 1 in position_order:
             visits.append((anchor + 1, MINUS_STRAND))
         if not visits:
             continue
@@ -969,6 +1027,10 @@ def _cpg_by_anchor_from_read_coverage(
         for refpos_c, strand in visits[1:]:
             if (refpos_c, strand) in read_sites and chosen not in read_sites:
                 chosen = (refpos_c, strand)
+        if panel_index is not None:
+            panel_pos = anchor if combine_strands else chosen[0]
+            if not panel_index.contains(chrom, panel_pos):
+                continue
         cpg_by_anchor[anchor] = chosen
     return cpg_by_anchor
 
@@ -986,6 +1048,7 @@ def run_matkit(
     ref_fasta: Optional[str] = None,
     cpg_only: bool = False,
     combine_strands: bool = False,
+    panel_index=None,
 ) -> None:
     """
     Executes modkit2-style processing on a bam file and extracts the methylation data.
@@ -997,6 +1060,8 @@ def run_matkit(
         ref_fasta: Reference FASTA (required for ``cpg_only``).
         cpg_only: Restrict pileup to reference CpG motifs (modkit ``--cpg``).
         combine_strands: Sum both strands onto the forward CpG anchor (modkit ``--combine-strands``).
+        panel_index: Optional interval index used to discard non-panel sites during
+                     BAM processing rather than after parquet creation.
     """
     if cpg_only and not ref_fasta:
         raise ValueError("cpg_only requires ref_fasta")
@@ -1016,11 +1081,12 @@ def run_matkit(
         threshold=0.73,
         combine_mods=True,
         chrom_filter=None,
-        ignore_supp=False,
+        ignore_supp=True,
         ref_fasta=ref_fasta,
         apply_qs_filter=apply_qs_filter,
         cpg_only=cpg_only,
         combine_strands=combine_strands,
+        panel_index=panel_index,
     )
 
     # Write parquet (same schema as merge path) or BEDMethyl text
@@ -1461,12 +1527,13 @@ def process_bam_counts_improved(
     threshold=0.7,
     combine_mods=False,
     chrom_filter=None,
-    ignore_supp=False,
+    ignore_supp=True,
     ref_fasta=None,
     debug_positions=None,
     apply_qs_filter: bool = True,
     cpg_only: bool = False,
     combine_strands: bool = False,
+    panel_index=None,
 ):
     """
     Process BAM file and return detailed counts for BEDMethyl format with improved memory efficiency.
@@ -1485,20 +1552,23 @@ def process_bam_counts_improved(
     - Ndiff: Number of different base calls
     - Nnocall: Number of no-calls
 
-    Only output sites with at least one MM/ML tag (i.e., modkit output sites).
-    This matches modkit's behavior of only outputting sites with modification data.
+    Only output sites represented by MM/ML-bearing reads. In CpG mode, implicit MM
+    groups may also contribute canonical calls at omitted CpGs covered by the read.
 
     Args:
         bam_path: Path to BAM file containing modification data
         threshold: Probability threshold (0-1) for modification calling
         combine_mods: Whether to combine different modification types
         chrom_filter: Optional chromosome filter to limit processing
-        ignore_supp: Whether to ignore supplementary alignments
+        ignore_supp: Whether to ignore supplementary alignments. Defaults to True,
+                     matching ``modkit pileup`` primary-alignment semantics.
         ref_fasta: Reference genome file for validation (optional)
         debug_positions: Set of (chrom, pos, strand) tuples to debug
         apply_qs_filter: When True, exclude reads whose primary qs tag is below MIN_PRIMARY_QS
         cpg_only: Restrict pileup to reference CpG motifs (requires ref_fasta)
         combine_strands: Sum both strands onto the forward CpG anchor (requires cpg_only)
+        panel_index: Optional object exposing ``contains(chrom, pos)`` for early
+                     restriction to classifier panel sites.
 
     Returns:
         tuple: (counts_dict, debug_data) where counts_dict contains classification counts with tuple keys
@@ -1523,10 +1593,8 @@ def process_bam_counts_improved(
     # Structure: counts[(chrom, pos, strand, mod_code)] = count_dict
     counts = {}
 
-    # Track all sites with at least one MM/ML tag (modkit output sites)
-    # This ensures we only output sites that modkit would output
+    # Track sites that modkit would emit, including implicit canonical CpG calls.
     mod_sites = set()
-
 
     # Load reference genome if provided for validation. Reuse cached handle when the same
     # path is used across calls (e.g. one ref for many BAMs) to avoid re-indexing/re-opening.
@@ -1587,7 +1655,10 @@ def process_bam_counts_improved(
         except AttributeError:
             mods = {}
 
-        if not mods:
+        implicit_canonical_cpg = cpg_only and _canonical_base_uses_implicit_mm_mode(
+            read, CANONICAL_CODE
+        )
+        if not mods and not implicit_canonical_cpg:
             continue
 
         chrom = ref_names[read.reference_id]
@@ -1628,7 +1699,13 @@ def process_bam_counts_improved(
             cpg_by_anchor: dict[int, tuple[int, str]] = {}
             if cpg_only and ref_fasta_obj is not None and ref_fasta_path is not None:
                 cpg_by_anchor = _cpg_by_anchor_from_read_coverage(
-                    ref_map, read_sites, ref_fasta_obj, chrom, ref_fasta_path
+                    ref_map,
+                    read_sites,
+                    ref_fasta_obj,
+                    chrom,
+                    ref_fasta_path,
+                    panel_index=panel_index,
+                    combine_strands=combine_strands,
                 )
 
             if cpg_only:
@@ -1639,10 +1716,12 @@ def process_bam_counts_improved(
             else:
                 mod_sites_add = mod_sites.add
                 for refpos, strand in seen_sites:
-                    mod_sites_add((chrom, refpos, strand, COMBINED_MOD_CODE))
+                    if panel_index is None or panel_index.contains(chrom, refpos):
+                        mod_sites_add((chrom, refpos, strand, COMBINED_MOD_CODE))
                 read_site_items = [
                     (refpos, strand, mod_probs)
                     for (refpos, strand), mod_probs in read_sites.items()
+                    if panel_index is None or panel_index.contains(chrom, refpos)
                 ]
 
             counts_local = counts
@@ -1653,6 +1732,12 @@ def process_bam_counts_improved(
                 else:
                     pos_out = refpos
                     strand_out = strand
+                if (
+                    panel_index is not None
+                    and not cpg_only
+                    and not panel_index.contains(chrom, pos_out)
+                ):
+                    continue
                 site_key = (chrom, pos_out, strand_out, COMBINED_MOD_CODE)
                 mod_sites.add(site_key)
 
@@ -1660,15 +1745,19 @@ def process_bam_counts_improved(
                 if c is None:
                     c = [0] * COUNT_LEN
                     counts_local[site_key] = c
-                c[COUNT_IDX_TOTAL] += 1
-
                 if mod_probs is None:
-                    c[COUNT_IDX_CANONICAL] += 1
-                    if c[COUNT_IDX_MAX_PROB_C] < 255:
-                        c[COUNT_IDX_MAX_PROB_C] = 255
-                    classification = "canonical"
-                    max_prob = 255
-                    canonical_prob_255 = 255
+                    if implicit_canonical_cpg:
+                        c[COUNT_IDX_TOTAL] += 1
+                        c[COUNT_IDX_CANONICAL] += 1
+                        if c[COUNT_IDX_MAX_PROB_C] < 255:
+                            c[COUNT_IDX_MAX_PROB_C] = 255
+                        classification = "canonical"
+                    else:
+                        # In explicit MM mode (``?``), an omitted residue is unknown.
+                        # It must not contribute to valid coverage or the methylation
+                        # denominator.
+                        c[COUNT_IDX_NOCALL] += 1
+                        classification = "nocall"
                 else:
                     sum_max_mod_probs_255 = 0
                     local_max_prob_m = 0
@@ -1698,12 +1787,15 @@ def process_bam_counts_improved(
 
                     if max_prob >= thresh:
                         if canonical_prob_255 == max_prob:
+                            c[COUNT_IDX_TOTAL] += 1
                             c[COUNT_IDX_CANONICAL] += 1
                             classification = "canonical"
                         else:
+                            c[COUNT_IDX_TOTAL] += 1
                             c[COUNT_IDX_MOD] += 1
                             classification = "modified"
                     elif max_prob == 0:
+                        c[COUNT_IDX_TOTAL] += 1
                         c[COUNT_IDX_CANONICAL] += 1
                         classification = "canonical"
                     else:
@@ -1756,6 +1848,10 @@ def process_bam_counts_improved(
                                     continue
 
                             site_key = (rp, strand, mod_code)
+                            if panel_index is not None and not panel_index.contains(
+                                chrom, rp
+                            ):
+                                continue
                             if site_key not in read_mod_calls:
                                 read_mod_calls[site_key] = []
                             read_mod_calls[site_key].append(prob)
@@ -1770,12 +1866,12 @@ def process_bam_counts_improved(
                     counts[site_key] = [0] * COUNT_LEN
 
                 c = counts[site_key]
-                c[COUNT_IDX_TOTAL] += 1
                 max_prob = max(probs)
                 has_other_mod_above_thresh = False
 
                 # Apply modkit classification logic
                 if max_prob >= thresh:
+                    c[COUNT_IDX_TOTAL] += 1
                     c[COUNT_IDX_MOD] += 1  # Modified call
                 elif max_prob == 0:
                     # Check if there are other modification types at this site with prob >= threshold
@@ -1791,8 +1887,10 @@ def process_bam_counts_improved(
                                 break
 
                     if has_other_mod_above_thresh:
+                        c[COUNT_IDX_TOTAL] += 1
                         c[COUNT_IDX_OTHER_MOD] += 1  # Other modification call
                     else:
+                        c[COUNT_IDX_TOTAL] += 1
                         c[COUNT_IDX_CANONICAL] += 1  # Canonical call
                 else:
                     # Check if there are other modification types at this site with prob >= threshold
@@ -1808,10 +1906,10 @@ def process_bam_counts_improved(
                                 break
 
                     if has_other_mod_above_thresh:
+                        c[COUNT_IDX_TOTAL] += 1
                         c[COUNT_IDX_OTHER_MOD] += 1  # Other modification call
                     else:
                         c[COUNT_IDX_FAIL] += 1  # Failed call (0 < prob < threshold)
-
 
     bam.close()
     # Only close the ref handle when we opened it in this call and it is not in the cache.
