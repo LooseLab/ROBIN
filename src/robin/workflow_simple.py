@@ -1952,10 +1952,16 @@ class FileWatcher(FileSystemEventHandler):
 _job_id_counter = itertools.count(1000)
 
 
-def default_file_classifier(filepath: str, workflow_plan: List[str], target_panel: str) -> List[Job]:
+def default_file_classifier(
+    filepath: str,
+    workflow_plan: List[str],
+    target_panel: str,
+    detect_barcodes: bool = True,
+) -> List[Job]:
     """Default classifier that creates jobs for a file based on a workflow plan."""
     job_id = next(_job_id_counter)
     ctx = WorkflowContext(filepath)
+    ctx.add_metadata("detect_barcodes", detect_barcodes)
     ctx.add_metadata("filename", os.path.basename(filepath))
     ctx.add_metadata("created", time.time())
     ctx.add_metadata("target_panel", target_panel)  # Add panel metadata
@@ -2144,6 +2150,7 @@ class WorkflowRunner:
         target_panel: str,
         verbose: bool = False,
         analysis_workers: int = 1,
+        detect_barcodes: bool = True,
         use_separate_analysis_queues: bool = True,
         preprocessing_workers: int = 1,
         bed_workers: int = 1,
@@ -2163,6 +2170,7 @@ class WorkflowRunner:
         self.reference = reference
         self.center = center
         self.target_panel = target_panel
+        self.detect_barcodes = detect_barcodes
 
         # Log reference genome status
 
@@ -2464,7 +2472,7 @@ class WorkflowRunner:
 
             def classifier_func(filepath: str):
                 jobs = default_file_classifier(
-                    filepath, workflow_plan, self.target_panel
+                    filepath, workflow_plan, self.target_panel, detect_barcodes=self.detect_barcodes
                 )
                 if reference_str:
                     for job in jobs:
