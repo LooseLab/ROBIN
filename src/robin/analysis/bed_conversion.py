@@ -74,13 +74,12 @@ def matkit_cpg_mode_enabled() -> bool:
 def matkit_qs_filter_enabled() -> bool:
     """Whether bed conversion excludes primary reads with ``qs < 12``.
 
-    The default preserves existing Robin behaviour. Set
-    ``ROBIN_MATKIT_QS_FILTER=0`` when matching a reference modkit pileup that
-    was generated without Robin's additional QS filter.
+    Off unless ``ROBIN_MATKIT_QS_FILTER`` is set (``1``, ``true``, ``yes``, or
+    ``on``).
     """
     raw = os.environ.get(_QS_FILTER_ENV)
     if raw is None or not raw.strip():
-        return True
+        return False
     value = raw.strip().lower()
     if value in {"1", "true", "yes", "on"}:
         return True
@@ -94,14 +93,13 @@ def matkit_qs_filter_enabled() -> bool:
 def matkit_combine_strands_enabled() -> bool:
     """Whether CpG-only matkit extraction combines ``+`` and ``-`` strands.
 
-    CpG restriction and strand combination are independent operations. The
-    default preserves the historical Robin behaviour; set
-    ``ROBIN_MATKIT_COMBINE_STRANDS=0`` to retain separate strand records while
-    still restricting extraction to reference CpGs.
+    Off unless ``ROBIN_MATKIT_COMBINE_STRANDS`` is set (``1``, ``true``,
+    ``yes``, or ``on``). CpG restriction and strand combination stay independent,
+    so reference-CpG extraction still keeps separate strand records by default.
     """
     raw = os.environ.get(_COMBINE_STRANDS_ENV)
     if raw is None or not raw.strip():
-        return True
+        return False
     value = raw.strip().lower()
     if value in {"1", "true", "yes", "on"}:
         return True
