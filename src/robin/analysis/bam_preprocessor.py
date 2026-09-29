@@ -215,7 +215,11 @@ def _get_modbase_model_warning(modbase_models: Optional[str]) -> Optional[str]:
     )
 
 
-def _extract_sample_id_from_bam(bam_path: str) -> str:
+def _extract_sample_id_from_bam(
+    bam_path: str,
+    *,
+    detect_barcodes: bool = True,
+) -> str:
     """
     Extract sample ID from BAM file read group tags (and, if needed, a quick
     barcode probe).
@@ -254,6 +258,9 @@ def _extract_sample_id_from_bam(bam_path: str) -> str:
                 else:
                     sample_id = unknown_fallback
 
+            if not detect_barcodes:
+                return sample_id
+
             # If the sample_id already ends with a barcode, we are done.
             if _BARCODE_PATTERN.search(sample_id):
                 return sample_id
@@ -291,7 +298,11 @@ def _extract_sample_id_from_bam(bam_path: str) -> str:
 # ============================================================================
 
 
-def process_bam_reads(bam_file: str) -> Optional[Dict[str, Any]]:
+def process_bam_reads(
+    bam_file: str,
+    *,
+    detect_barcodes: bool = True,
+) -> Optional[Dict[str, Any]]:
     """
     Processes the reads in the BAM file and aggregates information.
     This is the main processing step that analyzes all reads in the file.
@@ -387,7 +398,7 @@ def process_bam_reads(bam_file: str) -> Optional[Dict[str, Any]]:
             # Step 4: Process reads in streaming fashion
             for read in sam_file.fetch(until_eof=True):
                 # Extract RG tag and check for barcode - early termination optimization
-                if not barcode_found and read.has_tag(_RG_TAG):
+                if detect_barcodes and not barcode_found and read.has_tag(_RG_TAG):
                     rg_tag = read.get_tag(_RG_TAG)
                     # Use compiled regex pattern for barcode detection
                     barcode_match = _BARCODE_PATTERN.search(rg_tag)
@@ -627,7 +638,11 @@ def calculate_bam_summary(bam_data: Dict[str, Any]) -> Dict[str, Any]:
 # ============================================================================
 
 
-def extract_bam_metadata(bam_path: str) -> BamMetadata:
+def extract_bam_metadata(
+    bam_path: str,
+    *,
+    detect_barcodes: bool = True,
+) -> BamMetadata:
     """
     Extract comprehensive metadata from a BAM file.
     This is the main orchestration function that coordinates all processing steps.
@@ -661,10 +676,13 @@ def extract_bam_metadata(bam_path: str) -> BamMetadata:
     )
 
     # Step 2: Process BAM reads and extract comprehensive data
-    bam_info = process_bam_reads(bam_path)
+    bam_info = process_bam_reads(bam_path, detect_barcodes=detect_barcodes)
     if bam_info is None:
         # Fallback to basic extraction if processing fails
-        sample_id = _extract_sample_id_from_bam(bam_path)
+        sample_id = _extract_sample_id_from_bam(
+            bam_path,
+            detect_barcodes=detect_barcodes,
+        )
         state = _PASS_STR if _PASS_STR in bam_path else _FAIL_STR
 
         # Pre-allocate dictionary for better performance
@@ -822,7 +840,11 @@ def bam_preprocessing_handler(job, center: str = None):
 
         # Step 2: Extract metadata from BAM file
         logger.debug(f"Extracting metadata from: {bam_path}")
-        metadata = extract_bam_metadata(bam_path)
+        detect_barcodes = job.context.metadata.get("detect_barcodes", True)
+        metadata = extract_bam_metadata(
+            bam_path,
+            detect_barcodes=detect_barcodes,
+        )
         logger.debug(f"Extracted metadata: {metadata.extracted_data}")
 
         # Step 2.5: Check for alignment data and warn if missing
