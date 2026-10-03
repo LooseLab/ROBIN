@@ -903,6 +903,11 @@ def _should_use_polling(paths: List[str], watch_mode: str) -> bool:
     if watch_mode == "native":
         return False
 
+    # With no initial path there is no filesystem to inspect. Polling is the
+    # safe default because the first path added from the GUI may be on NFS/SMB.
+    if not any(Path(path).is_dir() for path in paths):
+        return True
+
     # auto: poll if any watched directory is on a network filesystem
     for path in paths:
         if not Path(path).is_dir():
@@ -5703,6 +5708,7 @@ def _scan_watch_folder_for_sample_dirs(
     patterns: Optional[List[str]],
     ignore_patterns: Optional[List[str]],
     recursive: bool,
+    detect_barcodes: bool = True,
     max_bams_to_probe: int = 5000,
     max_bams_per_dir: int = 8,
 ) -> Tuple[List[Path], List[str], Optional[str]]:
@@ -5824,7 +5830,10 @@ def _scan_watch_folder_for_sample_dirs(
                 break
 
             try:
-                sid = _extract_sample_id_from_bam(str(f))
+                sid = _extract_sample_id_from_bam(
+                    str(f),
+                    detect_barcodes=detect_barcodes,
+                )
             except Exception:
                 sid = "unknown"
 
@@ -5916,6 +5925,7 @@ def add_watch_path(new_path: str) -> Tuple[bool, str]:
         patterns=patterns,
         ignore_patterns=ignore_patterns,
         recursive=recursive,
+        detect_barcodes=detect_barcodes,
     )
     if scan_err:
         return False, (
@@ -5959,6 +5969,12 @@ def add_watch_path(new_path: str) -> Tuple[bool, str]:
     # with NiceGUI or other async frameworks already running an event loop)
     _submit_error: List[Optional[Exception]] = [None]
 
+    # Do not resubmit files from an exact path which was already being watched.
+    # They have already been admitted by the original watch/submission.
+    dirs_to_submit = newly_added
+    if _GLOBAL_OBSERVER is None or _GLOBAL_WATCHER is None:
+        dirs_to_submit = dirs_to_watch
+
     def _run_submit() -> None:
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
@@ -5966,7 +5982,7 @@ def add_watch_path(new_path: str) -> Tuple[bool, str]:
             loop.run_until_complete(
                 submit_existing_paths(
                     coord,
-                    [str(d) for d in dirs_to_watch],
+                    [str(d) for d in dirs_to_submit],
                     plan,
                     patterns=patterns,
                     ignore_patterns=ignore_patterns,
@@ -6468,7 +6484,7 @@ async def run(
         
     observer = None
     watcher = None
-    if watch and paths:
+    if watch:
         use_polling = _should_use_polling(paths, watch_mode)
 
         if use_polling:
