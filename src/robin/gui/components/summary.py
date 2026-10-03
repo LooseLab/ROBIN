@@ -36,6 +36,7 @@ from robin.gui.config import (
     launcher_visibility_context,
     CLASSIFICATION_STEPS,
 )
+from robin.gui.coverage_metrics import coverage_quality_name
 
 
 _SUMMARY_CACHE: "OrderedDict[str, Dict[str, Any]]" = OrderedDict()
@@ -1364,15 +1365,7 @@ def _extract_coverage_data(sample_dir: Path) -> Dict[str, Any]:
                         )
                         coverage_data["target_coverage"] = f"{target_cov_v:.2f}x"
 
-                        # Determine quality based on target coverage (same logic as coverage component)
-                        if target_cov_v >= 30:
-                            coverage_data["quality"] = "Excellent"
-                        elif target_cov_v >= 20:
-                            coverage_data["quality"] = "Good"
-                        elif target_cov_v >= 10:
-                            coverage_data["quality"] = "Moderate"
-                        else:
-                            coverage_data["quality"] = "Insufficient"
+                        coverage_data["quality"] = coverage_quality_name(target_cov_v)
             except Exception as e:
                 logging.debug(f"   MGMT: <access denied>: {e}")
                 pass

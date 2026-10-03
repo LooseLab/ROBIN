@@ -45,8 +45,13 @@ except Exception:
 
 
 @contextmanager
-def _exclusive_file_lock(lock_path: str):
-    """Provide an exclusive lock on a file path. Best-effort no-op when flock is unavailable."""
+def exclusive_file_lock(lock_path: str):
+    """Provide a blocking exclusive lock on a file path.
+
+    The lock is advisory and therefore coordinates callers which use the same
+    lock path. On POSIX, ``flock(LOCK_EX)`` waits until the current holder has
+    finished. It is a best-effort no-op on platforms without ``fcntl``.
+    """
     lock_dir = os.path.dirname(lock_path) or "."
     os.makedirs(lock_dir, exist_ok=True)
     lock_file = open(lock_path, "a+")
@@ -65,6 +70,10 @@ def _exclusive_file_lock(lock_path: str):
             except Exception:
                 pass
         lock_file.close()
+
+
+# Backward-compatible private name for callers outside this module.
+_exclusive_file_lock = exclusive_file_lock
 
 
 def _filter_panel_sites(
@@ -281,7 +290,7 @@ def merge_modkit_files(
 
         # Critical section: read/merge/write parquet guarded by an exclusive lock
         lock_path = f"{output_file}.lock"
-        with _exclusive_file_lock(lock_path):
+        with exclusive_file_lock(lock_path):
             # Use a shared StringCache during the merge to avoid costly categorical re-encodings
             with pl.StringCache():
                 # If no existing file, just save the new data

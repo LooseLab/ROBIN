@@ -7,6 +7,10 @@ and this project (almost) adheres to [Semantic Versioning](https://semver.org/sp
 
 ## [Unreleased]
 
+### Fixed
+- **MNP-Flex live parquet:** Bed conversion now copies the sample parquet under the writer lock before reading, so live updates cannot replace the file mid-conversion.
+- **Coverage quality labels:** Summary and coverage pages now use the same quality tiers (Excellent / Good / Moderate / Insufficient). Empty coverage dataframes are no longer treated as “no update”.
+
 ## [0.6.0] - 2026-10-03
 
 ### Added

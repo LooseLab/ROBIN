@@ -29,6 +29,7 @@ from robin.gui.theme import (
     ui_element_exists,
 )
 from robin.gui.client_notify import run_javascript_when_connected
+from robin.gui.coverage_metrics import coverage_quality_name
 
 from robin.reference_contigs import is_visible_contig
 
@@ -2800,8 +2801,18 @@ def _coverage_load_refresh_data(
         global_cov = None
         target_cov_v = None
         enrich_v = None
-        eff_cov_df = state_updates.get("cov_df") or prev_meta.get("cov_df_ref")
-        eff_bed_df = state_updates.get("bed_df") or prev_meta.get("bed_df_ref")
+        updated_cov_df = state_updates.get("cov_df")
+        updated_bed_df = state_updates.get("bed_df")
+        eff_cov_df = (
+            updated_cov_df
+            if updated_cov_df is not None
+            else prev_meta.get("cov_df_ref")
+        )
+        eff_bed_df = (
+            updated_bed_df
+            if updated_bed_df is not None
+            else prev_meta.get("bed_df_ref")
+        )
 
         if eff_cov_df is not None:
             cdf = eff_cov_df
@@ -2826,21 +2837,24 @@ def _coverage_load_refresh_data(
 
         quality: Dict[str, Any] | None = None
         if target_cov_v is not None:
-            if target_cov_v >= 30:
-                q_text, q_cls, q_bg = (
-                    "Sufficient",
+            q_text = coverage_quality_name(target_cov_v)
+            if q_text == "Excellent":
+                q_cls, q_bg = (
                     "text-emerald-700",
                     "bg-emerald-100",
                 )
-            elif target_cov_v >= 15:
-                q_text, q_cls, q_bg = (
-                    "Moderate",
+            elif q_text == "Good":
+                q_cls, q_bg = (
+                    "text-sky-700",
+                    "bg-sky-100",
+                )
+            elif q_text == "Moderate":
+                q_cls, q_bg = (
                     "text-amber-700",
                     "bg-amber-100",
                 )
             else:
-                q_text, q_cls, q_bg = (
-                    "Low",
+                q_cls, q_bg = (
                     "text-rose-700",
                     "bg-rose-100",
                 )
@@ -2857,7 +2871,14 @@ def _coverage_load_refresh_data(
             "enrich_v": enrich_v,
             "quality": quality,
         }
-    except Exception:
+    except Exception as e:
+        errors.append(
+            {
+                "message": f"Failed to calculate coverage summary metrics: {e}",
+                "level": "warning",
+                "notify": False,
+            }
+        )
         summary = None
 
     return {
