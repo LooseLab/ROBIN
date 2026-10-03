@@ -29,7 +29,11 @@ from robin.gui.theme import (
     ui_element_exists,
 )
 from robin.gui.client_notify import run_javascript_when_connected
-from robin.gui.coverage_metrics import coverage_quality_name
+from robin.gui.coverage_metrics import coverage_quality_name, format_read_count
+from robin.analysis.bam_preprocessor import (
+    format_read_length,
+    load_on_off_target_length_stats,
+)
 
 from robin.reference_contigs import is_visible_contig
 
@@ -443,6 +447,42 @@ def _cov_legend_label(text: str, max_len: int = 44) -> str:
     if len(t) <= max_len:
         return t
     return t[: max_len - 1] + "…"
+
+
+def _apply_coverage_read_length_chrome(ec: Any) -> None:
+    """On/off-target read-length histogram chrome + series colours."""
+    try:
+        p = _cov_chrome_palette()
+        tt = _cov_tooltip_option()
+        on_c, off_c = _cov_on_off_colors()
+        o = ec.options
+        o["textStyle"] = {"color": p["axis"]}
+        o.setdefault("title", {})
+        o["title"]["textStyle"] = {"fontSize": 15, "color": p["title"]}
+        o["title"]["subtextStyle"] = {"fontSize": 11, "color": p["axis"]}
+        o.setdefault("legend", {})
+        o["legend"]["textStyle"] = {"color": p["legend"]}
+        o["tooltip"] = {
+            "trigger": "axis",
+            "axisPointer": {"type": "shadow"},
+            **tt,
+        }
+        o.setdefault("xAxis", {})
+        o["xAxis"].setdefault("axisLabel", {})
+        o["xAxis"]["axisLabel"]["color"] = p["axis"]
+        o["xAxis"].setdefault("axisLine", {}).setdefault("lineStyle", {})
+        o["xAxis"]["axisLine"]["lineStyle"]["color"] = p["axis"]
+        o.setdefault("yAxis", {})
+        o["yAxis"]["nameTextStyle"] = {"color": p["axis"]}
+        o["yAxis"]["axisLabel"] = {"color": p["axis"]}
+        o["yAxis"]["splitLine"] = {
+            "lineStyle": {"color": p["split"], "type": "dashed"},
+        }
+        if o.get("series") and len(o["series"]) >= 2:
+            o["series"][0]["itemStyle"] = {"color": on_c}
+            o["series"][1]["itemStyle"] = {"color": off_c}
+    except Exception:
+        pass
 
 
 def _apply_coverage_target_cov_chrome(ec: Any) -> None:
@@ -2604,6 +2644,37 @@ def _load_coverage_time_series_points(npy_path: Path) -> Dict[str, Any]:
         return {"ok": False, "error": str(e)}
 
 
+def _read_length_chart_payload(stats: Dict[str, Any]) -> Dict[str, Any]:
+    """Build JSON-safe ECharts series for on/off-target length histograms."""
+    centers = [float(v) for v in stats.get("hist_bin_centers") or []]
+    on_hist = [int(v) for v in stats.get("on_target_length_hist") or []]
+    off_hist = [int(v) for v in stats.get("off_target_length_hist") or []]
+    n = min(len(centers), len(on_hist), len(off_hist))
+    if n == 0 or not stats.get("available"):
+        return {"ok": False, "labels": [], "on_pct": [], "off_pct": []}
+
+    first = 0
+    last = n - 1
+    for i in range(n):
+        if on_hist[i] or off_hist[i]:
+            first = i
+            break
+    for i in range(n - 1, -1, -1):
+        if on_hist[i] or off_hist[i]:
+            last = i
+            break
+    on_total = sum(on_hist) or 1
+    off_total = sum(off_hist) or 1
+    labels = []
+    on_pct = []
+    off_pct = []
+    for i in range(first, last + 1):
+        labels.append(format_read_length(centers[i]))
+        on_pct.append(round(100.0 * on_hist[i] / on_total, 2))
+        off_pct.append(round(100.0 * off_hist[i] / off_total, 2))
+    return {"ok": True, "labels": labels, "on_pct": on_pct, "off_pct": off_pct}
+
+
 def _coverage_load_refresh_data(
     sample_dir: Path, prev_meta: Dict[str, Any]
 ) -> Dict[str, Any]:
@@ -2623,6 +2694,7 @@ def _coverage_load_refresh_data(
     target_cov = sample_dir / "target_coverage.csv"
     cov_time = sample_dir / "coverage_time_chart.npy"
     target_cov_time_csv = sample_dir / "target_coverage_time.csv"
+    master_csv = sample_dir / "master.csv"
 
     cov_main_mtime = cov_main.stat().st_mtime if cov_main.exists() else 0
     bed_cov_mtime = bed_cov.stat().st_mtime if bed_cov.exists() else 0
@@ -2631,12 +2703,14 @@ def _coverage_load_refresh_data(
     target_cov_time_csv_mtime = (
         target_cov_time_csv.stat().st_mtime if target_cov_time_csv.exists() else 0
     )
+    master_csv_mtime = master_csv.stat().st_mtime if master_csv.exists() else 0
 
     prev_cov_main_mtime = prev_meta.get("cov_main_mtime", 0)
     prev_bed_cov_mtime = prev_meta.get("bed_cov_mtime", 0)
     prev_target_cov_mtime = prev_meta.get("target_cov_mtime", 0)
     prev_cov_time_mtime = prev_meta.get("cov_time_mtime", 0)
     prev_target_cov_time_csv_mtime = prev_meta.get("target_cov_time_csv_mtime", 0)
+    prev_master_csv_mtime = prev_meta.get("master_csv_mtime", 0)
 
     cov_main_changed = prev_cov_main_mtime != cov_main_mtime
     bed_cov_changed = prev_bed_cov_mtime != bed_cov_mtime
@@ -2645,6 +2719,7 @@ def _coverage_load_refresh_data(
     target_cov_time_csv_changed = (
         prev_target_cov_time_csv_mtime != target_cov_time_csv_mtime
     )
+    master_csv_changed = prev_master_csv_mtime != master_csv_mtime
 
     data_missing = (cov_main.exists() and not prev_meta.get("has_cov_df", False)) or (
         bed_cov.exists() and not prev_meta.get("has_bed_df", False)
@@ -2657,6 +2732,7 @@ def _coverage_load_refresh_data(
         or target_cov_changed
         or cov_time_changed
         or target_cov_time_csv_changed
+        or master_csv_changed
         or data_missing
     )
 
@@ -2666,6 +2742,7 @@ def _coverage_load_refresh_data(
         "target_cov": target_cov_mtime,
         "cov_time": cov_time_mtime,
         "target_cov_time_csv": target_cov_time_csv_mtime,
+        "master_csv": master_csv_mtime,
     }
 
     if not needs_update:
@@ -2870,6 +2947,7 @@ def _coverage_load_refresh_data(
             "target_cov_v": target_cov_v,
             "enrich_v": enrich_v,
             "quality": quality,
+            "read_lengths": load_on_off_target_length_stats(sample_dir),
         }
     except Exception as e:
         errors.append(
@@ -2879,7 +2957,9 @@ def _coverage_load_refresh_data(
                 "notify": False,
             }
         )
-        summary = None
+        summary = {
+            "read_lengths": load_on_off_target_length_stats(sample_dir),
+        }
 
     return {
         "needs_update": True,
@@ -2935,6 +3015,91 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                 cov_enrich_lbl = ui.label("Estimated enrichment: --x").classes(
                     "text-sm text-gray-600"
                 )
+        with ui.row().classes("w-full gap-4 flex-wrap mt-2"):
+            with ui.column().classes("gap-0 min-w-[12rem]"):
+                ui.label("On-target read length").classes("text-xs font-medium text-gray-500")
+                cov_on_len_lbl = ui.label("Mean — · Median —").classes(
+                    "text-sm text-gray-700"
+                )
+                cov_on_n_lbl = ui.label("0 primary reads").classes(
+                    "text-xs text-gray-500"
+                )
+            with ui.column().classes("gap-0 min-w-[12rem]"):
+                ui.label("Off-target read length").classes("text-xs font-medium text-gray-500")
+                cov_off_len_lbl = ui.label("Mean — · Median —").classes(
+                    "text-sm text-gray-700"
+                )
+                cov_off_n_lbl = ui.label("0 primary reads").classes(
+                    "text-xs text-gray-500"
+                )
+        with ui.card().classes("w-full"):
+            _cp_len = _cov_chrome_palette()
+            _on_c, _off_c = _cov_on_off_colors()
+            echart_read_len = ui.echart(
+                {
+                    "backgroundColor": "transparent",
+                    "textStyle": {"color": _cp_len["axis"]},
+                    "title": {
+                        "text": "On / off-target read length",
+                        "subtext": "Primary mapped reads classified by panel overlap",
+                        "left": "center",
+                        "top": 8,
+                        "textStyle": {"fontSize": 15, "color": _cp_len["title"]},
+                        "subtextStyle": {"fontSize": 11, "color": _cp_len["axis"]},
+                    },
+                    "legend": {
+                        "data": ["On target", "Off target"],
+                        "top": 46,
+                        "textStyle": {"color": _cp_len["legend"]},
+                    },
+                    "tooltip": {
+                        "trigger": "axis",
+                        "axisPointer": {"type": "shadow"},
+                        **_cov_tooltip_option(),
+                    },
+                    "grid": {
+                        "left": "8%",
+                        "right": "6%",
+                        "bottom": "16%",
+                        "top": "28%",
+                        "containLabel": True,
+                    },
+                    "xAxis": {
+                        "type": "category",
+                        "name": "Read length",
+                        "data": [],
+                        "axisLabel": {
+                            "rotate": 45,
+                            "fontSize": 10,
+                            "color": _cp_len["axis"],
+                        },
+                        "axisLine": {"lineStyle": {"color": _cp_len["axis"]}},
+                    },
+                    "yAxis": {
+                        "type": "value",
+                        "name": "% of reads",
+                        "nameTextStyle": {"color": _cp_len["axis"]},
+                        "axisLabel": {"color": _cp_len["axis"]},
+                        "splitLine": {
+                            "lineStyle": {"color": _cp_len["split"], "type": "dashed"},
+                        },
+                    },
+                    "series": [
+                        {
+                            "name": "On target",
+                            "type": "bar",
+                            "data": [],
+                            "itemStyle": {"color": _on_c},
+                        },
+                        {
+                            "name": "Off target",
+                            "type": "bar",
+                            "data": [],
+                            "itemStyle": {"color": _off_c},
+                        },
+                    ],
+                }
+            ).classes("w-full h-72")
         with ui.card().classes("w-full"):
             # Per Chromosome Target Coverage (grouped bar — design.md §9.5)
             _cp0 = _cov_chrome_palette()
@@ -7664,6 +7829,7 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                 "target_cov_mtime": prev.get("target_cov_mtime", 0),
                 "cov_time_mtime": prev.get("cov_time_mtime", 0),
                 "target_cov_time_csv_mtime": prev.get("target_cov_time_csv_mtime", 0),
+                "master_csv_mtime": prev.get("master_csv_mtime", 0),
                 "has_cov_df": "cov_df" in prev,
                 "has_bed_df": "bed_df" in prev,
                 "cov_df_ref": prev.get("cov_df"),
@@ -7757,6 +7923,52 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                         )
                     if enrich_v is not None:
                         cov_enrich_lbl.set_text(f"Estimated enrichment: {enrich_v:.2f}x")
+                    read_lengths = summary.get("read_lengths") or {}
+                    if read_lengths.get("available"):
+                        cov_on_len_lbl.set_text(
+                            "Mean "
+                            f"{format_read_length(read_lengths.get('mean_on_target_length'))}"
+                            " · Median "
+                            f"{format_read_length(read_lengths.get('median_on_target_length'))}"
+                        )
+                        cov_off_len_lbl.set_text(
+                            "Mean "
+                            f"{format_read_length(read_lengths.get('mean_off_target_length'))}"
+                            " · Median "
+                            f"{format_read_length(read_lengths.get('median_off_target_length'))}"
+                        )
+                        cov_on_n_lbl.set_text(
+                            f"{format_read_count(read_lengths.get('on_target_reads'))} primary reads"
+                        )
+                        cov_off_n_lbl.set_text(
+                            f"{format_read_count(read_lengths.get('off_target_reads'))} primary reads"
+                        )
+                        chart_payload = _read_length_chart_payload(read_lengths)
+                        if chart_payload.get("ok"):
+                            on_c, off_c = _cov_on_off_colors()
+                            echart_read_len.options["xAxis"]["data"] = chart_payload[
+                                "labels"
+                            ]
+                            echart_read_len.options["series"][0]["data"] = chart_payload[
+                                "on_pct"
+                            ]
+                            echart_read_len.options["series"][0]["itemStyle"] = {
+                                "color": on_c
+                            }
+                            echart_read_len.options["series"][1]["data"] = chart_payload[
+                                "off_pct"
+                            ]
+                            echart_read_len.options["series"][1]["itemStyle"] = {
+                                "color": off_c
+                            }
+                            echart_read_len.update()
+                    else:
+                        cov_on_len_lbl.set_text("Mean — · Median —")
+                        cov_off_len_lbl.set_text("Mean — · Median —")
+                        cov_on_n_lbl.set_text(
+                            "Available after preprocessing with a target panel"
+                        )
+                        cov_off_n_lbl.set_text("0 primary reads")
                 except Exception as e:
                     _log_notify(
                         f"Coverage summary update failed: {e}",
@@ -7770,6 +7982,7 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                 state["target_cov_mtime"] = mt.get("target_cov", 0)
                 state["cov_time_mtime"] = mt.get("cov_time", 0)
                 state["target_cov_time_csv_mtime"] = mt.get("target_cov_time_csv", 0)
+                state["master_csv_mtime"] = mt.get("master_csv", 0)
                 state["last_visit_time"] = state.get("last_visit_time", time.time())
 
             launcher._coverage_state[key] = state
@@ -7870,6 +8083,11 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
         if not force and _last_cov_theme_sig[0] == cur:
             return
         _last_cov_theme_sig[0] = cur
+        try:
+            _apply_coverage_read_length_chrome(echart_read_len)
+            echart_read_len.update()
+        except Exception:
+            pass
         try:
             _apply_coverage_target_cov_chrome(echart_target_cov)
             echart_target_cov.update()

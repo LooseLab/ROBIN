@@ -36,7 +36,8 @@ from robin.gui.config import (
     launcher_visibility_context,
     CLASSIFICATION_STEPS,
 )
-from robin.gui.coverage_metrics import coverage_quality_name
+from robin.gui.coverage_metrics import coverage_quality_name, read_length_summary_line
+from robin.analysis.bam_preprocessor import load_on_off_target_length_stats
 
 
 _SUMMARY_CACHE: "OrderedDict[str, Dict[str, Any]]" = OrderedDict()
@@ -417,6 +418,10 @@ def _analysis_section(sample_dir: Path, launcher: Any = None):
                     coverage_data.get("target_coverage", "Not available"),
                     coverage_data.get("global_coverage", "Not available"),
                     coverage_data.get("enrichment", "Not available"),
+                    coverage_data.get(
+                        "read_length_summary",
+                        "On/off-target read length: not available",
+                    ),
                     anchor_key="coverage",
                 )
 
@@ -700,6 +705,7 @@ def _create_coverage_dashboard_card_with_data(
     target_coverage: str,
     global_coverage: str,
     enrichment: str,
+    read_length_summary: str = "On/off-target read length: not available",
     anchor_key: str = "coverage",
 ) -> None:
     """Coverage insight card — same shell as classification (design.md §9)."""
@@ -746,6 +752,7 @@ def _create_coverage_dashboard_card_with_data(
                 ui.label(f"Enrichment: {enrichment}").classes(
                     "classification-insight-meta"
                 )
+                ui.label(read_length_summary).classes("classification-insight-meta")
             with ui.row().classes("gap-1 flex-wrap"):
                 ui.label("≥30x").classes(
                     "analysis-insight-pill analysis-insight-pill--emerald"
@@ -1299,6 +1306,7 @@ def _extract_coverage_data(sample_dir: Path) -> Dict[str, Any]:
         "global_coverage": "Not available",
         "target_coverage": "Not available",
         "enrichment": "Not available",
+        "read_length_summary": "On/off-target read length: not available",
     }
 
     try:
@@ -1374,6 +1382,10 @@ def _extract_coverage_data(sample_dir: Path) -> Dict[str, Any]:
         if global_cov is not None and target_cov_v is not None and global_cov > 0:
             enrich_v = target_cov_v / global_cov
             coverage_data["enrichment"] = f"{enrich_v:.2f}x"
+
+        coverage_data["read_length_summary"] = read_length_summary_line(
+            load_on_off_target_length_stats(sample_dir)
+        )
 
     except Exception as e:
         logging.debug(f"   MGMT: <access denied>: {e}")
@@ -1707,7 +1719,24 @@ def _extract_classification_data(sample_dir: Path) -> Dict[str, Any]:
                     reader = csv.DictReader(f)
                     for row in reader:
                         # Get the latest row (last one)
-                        features = int(row.get("number_probes", 0))
+                        try:
+                            features = int(float(row.get("number_probes") or 0))
+                        except (TypeError, ValueError):
+                            features = 0
+                        if features <= 0:
+                            from robin.analysis.random_forest_analysis import (
+                                parse_rf_feature_count_from_report,
+                            )
+
+                            features = (
+                                parse_rf_feature_count_from_report(
+                                    str(
+                                        sample_dir
+                                        / "random_forest_calibrated_classification.tsv"
+                                    )
+                                )
+                                or 0
+                            )
                         # Find the highest scoring classification
                         max_score = 0.0
                         best_class = "Unknown"

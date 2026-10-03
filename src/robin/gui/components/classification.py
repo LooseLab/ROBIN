@@ -741,6 +741,20 @@ def add_classification_section(sample_dir: Path, launcher: Any = None) -> None:
                             break
                 except Exception:
                     number_probes = None
+                if number_probes is None and csv_path.name == "random_forest_scores.csv":
+                    try:
+                        from robin.analysis.random_forest_analysis import (
+                            parse_rf_feature_count_from_report,
+                        )
+
+                        number_probes = parse_rf_feature_count_from_report(
+                            str(
+                                csv_path.parent
+                                / "random_forest_calibrated_classification.tsv"
+                            )
+                        )
+                    except Exception:
+                        number_probes = None
                 return {
                     "last": last_scores,
                     "x": x_labels,

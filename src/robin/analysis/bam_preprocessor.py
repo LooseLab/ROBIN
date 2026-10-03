@@ -8,9 +8,11 @@ import os
 import sys
 import time
 import re
+import math
 import hashlib
+from bisect import bisect_left
 from dataclasses import dataclass, field
-from typing import Dict, Any, Optional, List, Tuple
+from typing import Dict, Any, Iterable, Optional, List, Tuple
 from pathlib import Path
 
 if sys.version_info < (3, 12):
@@ -59,6 +61,15 @@ _PROCESS_LARGE_BAMS_INDIVIDUALLY = os.getenv("ROBIN_PROCESS_LARGE_BAMS", "0").st
 _MGMT_CHR = "chr10"
 _MGMT_START = 129466536
 _MGMT_END = 129467536
+
+# Compact log-spaced histogram for on/off-target read-length medians.
+# Bins cover 50 bp .. 500 kb so Nanopore adaptive-sampling lengths fit.
+_LENGTH_HIST_MIN = 50.0
+_LENGTH_HIST_MAX = 500_000.0
+_LENGTH_HIST_BINS = 40
+_LENGTH_HIST_LOG_MIN = math.log(_LENGTH_HIST_MIN)
+_LENGTH_HIST_LOG_SPAN = math.log(_LENGTH_HIST_MAX) - _LENGTH_HIST_LOG_MIN
+_TARGET_INTERVAL_CACHE: Dict[str, Tuple[float, "TargetIntervalIndex"]] = {}
 
 # ============================================================================
 # DATA STRUCTURES
@@ -111,6 +122,294 @@ def _persist_supplementary_read_ids(
     os.replace(tmp_path, supp_path)
     metadata.extracted_data["supplementary_read_ids_path"] = supp_path
     metadata.extracted_data.pop("supplementary_read_ids", None)
+
+
+# ============================================================================
+# ON / OFF-TARGET READ LENGTH
+# ============================================================================
+
+
+def normalize_contig_name(name: str | None) -> str:
+    """Normalise contig labels so ``1`` and ``chr1`` share an index key."""
+    raw = "" if name is None else str(name).strip()
+    if not raw:
+        return ""
+    lower = raw.lower()
+    if lower in {"m", "mt", "chrm", "chrmt"}:
+        return "chrM"
+    rest = raw[3:] if lower.startswith("chr") else raw
+    if rest.upper() in {"X", "Y"}:
+        return f"chr{rest.upper()}"
+    if rest.upper() in {"M", "MT"}:
+        return "chrM"
+    return f"chr{rest}"
+
+
+def _merge_intervals(intervals: List[Tuple[int, int]]) -> List[Tuple[int, int]]:
+    if not intervals:
+        return []
+    ordered = sorted((int(start), int(end)) for start, end in intervals if end > start)
+    if not ordered:
+        return []
+    merged = [ordered[0]]
+    for start, end in ordered[1:]:
+        last_start, last_end = merged[-1]
+        if start <= last_end:
+            merged[-1] = (last_start, max(last_end, end))
+        else:
+            merged.append((start, end))
+    return merged
+
+
+@dataclass(slots=True)
+class TargetIntervalIndex:
+    """Per-chromosome merged intervals with binary-search overlap tests."""
+
+    starts_by_chrom: Dict[str, List[int]]
+    ends_by_chrom: Dict[str, List[int]]
+
+    def overlaps(self, chrom: str | None, start: int, end: int) -> bool:
+        if end <= start:
+            return False
+        key = normalize_contig_name(chrom)
+        starts = self.starts_by_chrom.get(key)
+        if not starts:
+            return False
+        ends = self.ends_by_chrom[key]
+        idx = bisect_left(starts, end) - 1
+        return idx >= 0 and ends[idx] > start
+
+
+def load_target_interval_index(bed_path: str | Path) -> Optional[TargetIntervalIndex]:
+    """Load a panel BED into a contig-normalised interval index."""
+    path = Path(bed_path)
+    if not path.is_file():
+        return None
+
+    intervals: Dict[str, List[Tuple[int, int]]] = {}
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            for line in handle:
+                text = line.strip()
+                if not text or text.startswith("#"):
+                    continue
+                parts = text.split("\t")
+                if len(parts) < 3:
+                    continue
+                try:
+                    start = int(parts[1])
+                    end = int(parts[2])
+                except (TypeError, ValueError):
+                    continue
+                if end <= start:
+                    continue
+                key = normalize_contig_name(parts[0])
+                if not key:
+                    continue
+                intervals.setdefault(key, []).append((start, end))
+    except OSError:
+        return None
+
+    if not intervals:
+        return None
+
+    starts_by_chrom: Dict[str, List[int]] = {}
+    ends_by_chrom: Dict[str, List[int]] = {}
+    for chrom, raw in intervals.items():
+        merged = _merge_intervals(raw)
+        starts_by_chrom[chrom] = [start for start, _end in merged]
+        ends_by_chrom[chrom] = [end for _start, end in merged]
+    return TargetIntervalIndex(starts_by_chrom, ends_by_chrom)
+
+
+def get_target_interval_index(bed_path: str | Path) -> Optional[TargetIntervalIndex]:
+    """Return a cached interval index keyed by BED path and mtime."""
+    path = os.fspath(bed_path)
+    try:
+        mtime = os.path.getmtime(path)
+    except OSError:
+        return None
+    cached = _TARGET_INTERVAL_CACHE.get(path)
+    if cached and cached[0] == mtime:
+        return cached[1]
+    index = load_target_interval_index(path)
+    if index is not None:
+        _TARGET_INTERVAL_CACHE[path] = (mtime, index)
+    return index
+
+
+def resolve_target_bed_from_metadata(metadata: Optional[Dict[str, Any]]) -> Optional[str]:
+    """Resolve a panel BED from job metadata (explicit path or panel name)."""
+    if not metadata:
+        return None
+
+    for key in ("target_bed", "bedfile"):
+        explicit = metadata.get(key)
+        if explicit not in (None, "") and os.path.isfile(str(explicit)):
+            return str(explicit)
+
+    panel = metadata.get("target_panel")
+    if panel in (None, ""):
+        return None
+    try:
+        from robin.utils.sequencing_files import resolve_panel_bed_path
+
+        resolved = resolve_panel_bed_path(str(panel).strip())
+    except Exception:
+        return None
+    if resolved is not None and resolved.is_file():
+        return str(resolved)
+    return None
+
+
+def length_hist_bin(length: int) -> int:
+    """Map a read length onto a log-spaced histogram bin."""
+    if length <= _LENGTH_HIST_MIN:
+        return 0
+    if length >= _LENGTH_HIST_MAX:
+        return _LENGTH_HIST_BINS - 1
+    frac = (math.log(float(length)) - _LENGTH_HIST_LOG_MIN) / _LENGTH_HIST_LOG_SPAN
+    return min(_LENGTH_HIST_BINS - 1, max(0, int(frac * _LENGTH_HIST_BINS)))
+
+
+def length_hist_bin_edges() -> List[float]:
+    """Inclusive lower edges plus a final upper edge for the length histogram."""
+    edges = [
+        math.exp(_LENGTH_HIST_LOG_MIN + (_LENGTH_HIST_LOG_SPAN * i / _LENGTH_HIST_BINS))
+        for i in range(_LENGTH_HIST_BINS)
+    ]
+    edges.append(_LENGTH_HIST_MAX)
+    return edges
+
+
+def length_hist_bin_centers() -> List[float]:
+    edges = length_hist_bin_edges()
+    return [math.sqrt(edges[i] * edges[i + 1]) for i in range(_LENGTH_HIST_BINS)]
+
+
+def encode_length_histogram(counts: Iterable[int]) -> str:
+    values = [max(0, int(v)) for v in counts]
+    if len(values) < _LENGTH_HIST_BINS:
+        values.extend([0] * (_LENGTH_HIST_BINS - len(values)))
+    return ",".join(str(v) for v in values[:_LENGTH_HIST_BINS])
+
+
+def decode_length_histogram(encoded: Any) -> List[int]:
+    if encoded in (None, "", "nan"):
+        return [0] * _LENGTH_HIST_BINS
+    if isinstance(encoded, float) and math.isnan(encoded):
+        return [0] * _LENGTH_HIST_BINS
+    text = str(encoded).strip()
+    if not text or text.lower() == "nan":
+        return [0] * _LENGTH_HIST_BINS
+    counts: List[int] = []
+    for part in text.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        try:
+            counts.append(max(0, int(float(part))))
+        except (TypeError, ValueError):
+            counts.append(0)
+    if len(counts) < _LENGTH_HIST_BINS:
+        counts.extend([0] * (_LENGTH_HIST_BINS - len(counts)))
+    return counts[:_LENGTH_HIST_BINS]
+
+
+def merge_length_histograms(existing: Any, incoming: Any) -> str:
+    left = decode_length_histogram(existing)
+    right = decode_length_histogram(incoming)
+    return encode_length_histogram(a + b for a, b in zip(left, right))
+
+
+def median_from_length_histogram(counts: Iterable[int]) -> Optional[float]:
+    """Approximate the median read length from a log-spaced histogram."""
+    values = [max(0, int(v)) for v in counts]
+    total = sum(values)
+    if total <= 0:
+        return None
+    centers = length_hist_bin_centers()
+    low_rank = (total + 1) // 2
+    high_rank = low_rank if total % 2 else (total + 2) // 2
+    found: List[float] = []
+    cumulative = 0
+    for count, center in zip(values, centers):
+        previous = cumulative
+        cumulative += count
+        if previous < low_rank <= cumulative:
+            found.append(float(center))
+        if high_rank != low_rank and previous < high_rank <= cumulative:
+            found.append(float(center))
+        if len(found) >= (1 if high_rank == low_rank else 2):
+            break
+    if not found:
+        return None
+    return sum(found) / len(found)
+
+
+def format_read_length(length_bp: float | None) -> str:
+    if length_bp is None:
+        return "—"
+    try:
+        value = float(length_bp)
+    except (TypeError, ValueError):
+        return "—"
+    if not math.isfinite(value) or value < 0:
+        return "—"
+    if value >= 1000:
+        return f"{value / 1000:.1f} kb"
+    return f"{value:.0f} bp"
+
+
+def summarize_on_off_target_lengths(row: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """Derive mean/median on- and off-target lengths from master.csv counters."""
+    data = row or {}
+
+    def _as_int(key: str) -> int:
+        try:
+            return max(0, int(float(data.get(key, 0) or 0)))
+        except (TypeError, ValueError):
+            return 0
+
+    on_reads = _as_int("counter_on_target_reads")
+    off_reads = _as_int("counter_off_target_reads")
+    on_bases = _as_int("counter_on_target_bases")
+    off_bases = _as_int("counter_off_target_bases")
+    on_hist = decode_length_histogram(data.get("on_target_length_hist"))
+    off_hist = decode_length_histogram(data.get("off_target_length_hist"))
+    mean_on = (on_bases / on_reads) if on_reads else None
+    mean_off = (off_bases / off_reads) if off_reads else None
+    return {
+        "on_target_reads": on_reads,
+        "off_target_reads": off_reads,
+        "on_target_bases": on_bases,
+        "off_target_bases": off_bases,
+        "mean_on_target_length": mean_on,
+        "mean_off_target_length": mean_off,
+        "median_on_target_length": median_from_length_histogram(on_hist),
+        "median_off_target_length": median_from_length_histogram(off_hist),
+        "on_target_length_hist": on_hist,
+        "off_target_length_hist": off_hist,
+        "hist_bin_centers": length_hist_bin_centers(),
+        "available": (on_reads + off_reads) > 0,
+    }
+
+
+def load_on_off_target_length_stats(sample_dir: str | Path) -> Dict[str, Any]:
+    """Read accumulated on/off-target length stats from a sample master.csv."""
+    empty = summarize_on_off_target_lengths({})
+    master_csv = Path(sample_dir) / "master.csv"
+    if not master_csv.is_file():
+        return empty
+    try:
+        import pandas as pd
+
+        frame = pd.read_csv(master_csv)
+        if frame.empty:
+            return empty
+        return summarize_on_off_target_lengths(frame.iloc[0].to_dict())
+    except Exception:
+        return empty
 
 
 # ============================================================================
@@ -302,6 +601,7 @@ def process_bam_reads(
     bam_file: str,
     *,
     detect_barcodes: bool = True,
+    target_bed: str | Path | None = None,
 ) -> Optional[Dict[str, Any]]:
     """
     Processes the reads in the BAM file and aggregates information.
@@ -310,6 +610,8 @@ def process_bam_reads(
 
     Args:
         bam_file: Path to the BAM file
+        target_bed: Optional panel BED used to classify primary mapped reads
+            as on-target (alignment overlaps a panel interval) or off-target.
 
     Returns:
         Optional[Dict[str, Any]]: A dictionary containing aggregated read information,
@@ -395,6 +697,17 @@ def process_bam_reads(
             has_mgmt_reads = False
             mgmt_read_count = 0
 
+            target_index = (
+                get_target_interval_index(target_bed) if target_bed else None
+            )
+            classify_target = target_index.overlaps if target_index is not None else None
+            on_target_reads = 0
+            off_target_reads = 0
+            on_target_bases = 0
+            off_target_bases = 0
+            on_target_length_hist = [0] * _LENGTH_HIST_BINS
+            off_target_length_hist = [0] * _LENGTH_HIST_BINS
+
             # Step 4: Process reads in streaming fashion
             for read in sam_file.fetch(until_eof=True):
                 # Extract RG tag and check for barcode - early termination optimization
@@ -448,6 +761,28 @@ def process_bam_reads(
                         else:
                             fail_mapped_bases += read_length
                             fail_mapped_reads_num += 1
+
+                        if (
+                            classify_target is not None
+                            and not is_supplementary
+                            and read_length > 0
+                        ):
+                            ref_start = read.reference_start
+                            ref_end = read.reference_end
+                            if (
+                                ref_start is not None
+                                and ref_end is not None
+                                and classify_target(
+                                    read.reference_name, ref_start, ref_end
+                                )
+                            ):
+                                on_target_reads += 1
+                                on_target_bases += read_length
+                                on_target_length_hist[length_hist_bin(read_length)] += 1
+                            else:
+                                off_target_reads += 1
+                                off_target_bases += read_length
+                                off_target_length_hist[length_hist_bin(read_length)] += 1
 
                         # Check for MGMT reads (chr10:129466536-129467536)
                         if not has_mgmt_reads and read.reference_name == _MGMT_CHR:
@@ -516,6 +851,16 @@ def process_bam_reads(
             # Add MGMT read information to metadata
             bam_read["has_mgmt_reads"] = has_mgmt_reads
             bam_read["mgmt_read_count"] = mgmt_read_count
+            bam_read["on_target_reads"] = on_target_reads
+            bam_read["off_target_reads"] = off_target_reads
+            bam_read["on_target_bases"] = on_target_bases
+            bam_read["off_target_bases"] = off_target_bases
+            bam_read["on_target_length_hist"] = encode_length_histogram(
+                on_target_length_hist
+            )
+            bam_read["off_target_length_hist"] = encode_length_histogram(
+                off_target_length_hist
+            )
 
             # Parse dates once at the end instead of during the loop
             if last_start and bam_read["time_of_run"]:
@@ -628,7 +973,37 @@ def calculate_bam_summary(bam_data: Dict[str, Any]) -> Dict[str, Any]:
         # Add MGMT read statistics
         "has_mgmt_reads": bam_data.get("has_mgmt_reads", False),
         "mgmt_read_count": bam_data.get("mgmt_read_count", 0),
+        # On / off-target primary-read length accumulators
+        "on_target_reads": bam_data.get("on_target_reads", 0),
+        "off_target_reads": bam_data.get("off_target_reads", 0),
+        "on_target_bases": bam_data.get("on_target_bases", 0),
+        "off_target_bases": bam_data.get("off_target_bases", 0),
+        "on_target_length_hist": bam_data.get("on_target_length_hist", ""),
+        "off_target_length_hist": bam_data.get("off_target_length_hist", ""),
     }
+
+    on_target_reads = result["on_target_reads"]
+    off_target_reads = result["off_target_reads"]
+    on_target_bases = result["on_target_bases"]
+    off_target_bases = result["off_target_bases"]
+    result["mean_on_target_length"] = (
+        on_target_bases / on_target_reads if on_target_reads > 0 else 0
+    )
+    result["mean_off_target_length"] = (
+        off_target_bases / off_target_reads if off_target_reads > 0 else 0
+    )
+    result["median_on_target_length"] = (
+        median_from_length_histogram(
+            decode_length_histogram(result["on_target_length_hist"])
+        )
+        or 0
+    )
+    result["median_off_target_length"] = (
+        median_from_length_histogram(
+            decode_length_histogram(result["off_target_length_hist"])
+        )
+        or 0
+    )
 
     return result
 
@@ -642,6 +1017,7 @@ def extract_bam_metadata(
     bam_path: str,
     *,
     detect_barcodes: bool = True,
+    target_bed: str | Path | None = None,
 ) -> BamMetadata:
     """
     Extract comprehensive metadata from a BAM file.
@@ -676,7 +1052,11 @@ def extract_bam_metadata(
     )
 
     # Step 2: Process BAM reads and extract comprehensive data
-    bam_info = process_bam_reads(bam_path, detect_barcodes=detect_barcodes)
+    bam_info = process_bam_reads(
+        bam_path,
+        detect_barcodes=detect_barcodes,
+        target_bed=target_bed,
+    )
     if bam_info is None:
         # Fallback to basic extraction if processing fails
         sample_id = _extract_sample_id_from_bam(
@@ -841,9 +1221,11 @@ def bam_preprocessing_handler(job, center: str = None):
         # Step 2: Extract metadata from BAM file
         logger.debug(f"Extracting metadata from: {bam_path}")
         detect_barcodes = job.context.metadata.get("detect_barcodes", True)
+        target_bed = resolve_target_bed_from_metadata(job.context.metadata)
         metadata = extract_bam_metadata(
             bam_path,
             detect_barcodes=detect_barcodes,
+            target_bed=target_bed,
         )
         logger.debug(f"Extracted metadata: {metadata.extracted_data}")
 
@@ -1024,6 +1406,12 @@ def bam_preprocessing_handler(job, center: str = None):
                     "reads_with_supplementary",
                     "has_mgmt_reads",
                     "mgmt_read_count",
+                    "on_target_reads",
+                    "off_target_reads",
+                    "on_target_bases",
+                    "off_target_bases",
+                    "on_target_length_hist",
+                    "off_target_length_hist",
                 )
                 bam_stats = {key: metadata.extracted_data.get(key, 0) for key in _bam_stat_keys}
 
@@ -1122,6 +1510,24 @@ def bam_preprocessing_handler(job, center: str = None):
             )
         else:
             logger.info("No MGMT reads found")
+
+        on_target_reads = metadata.extracted_data.get("on_target_reads", 0)
+        off_target_reads = metadata.extracted_data.get("off_target_reads", 0)
+        if on_target_reads or off_target_reads:
+            logger.info(
+                "On-target reads: "
+                f"{on_target_reads:,} (mean {format_read_length(metadata.extracted_data.get('mean_on_target_length'))}, "
+                f"median {format_read_length(metadata.extracted_data.get('median_on_target_length'))})"
+            )
+            logger.info(
+                "Off-target reads: "
+                f"{off_target_reads:,} (mean {format_read_length(metadata.extracted_data.get('mean_off_target_length'))}, "
+                f"median {format_read_length(metadata.extracted_data.get('median_off_target_length'))})"
+            )
+        elif target_bed:
+            logger.info(
+                f"No primary mapped reads available to classify against {os.path.basename(str(target_bed))}"
+            )
 
         # Step 7: Detailed debug logging (only if debug is enabled)
         if logger.logger.isEnabledFor(10):  # DEBUG level

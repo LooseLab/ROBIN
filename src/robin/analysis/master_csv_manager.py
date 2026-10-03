@@ -168,6 +168,13 @@ class MasterCSVManager:
             "samples_overview_job_types": "",
             # Unix epoch seconds for last activity used by GUI
             "samples_overview_last_seen": 0.0,
+            # On / off-target primary-read length accumulators
+            "counter_on_target_reads": 0,
+            "counter_off_target_reads": 0,
+            "counter_on_target_bases": 0,
+            "counter_off_target_bases": 0,
+            "on_target_length_hist": "",
+            "off_target_length_hist": "",
         }
 
     def _update_pass_counters(
@@ -209,7 +216,58 @@ class MasterCSVManager:
         data["counter_unmapped_reads_num"] += bam_data.get("unmapped_reads_num", 0)
         data["counter_mapped_bases"] += bam_data.get("mapped_bases", 0)
         data["counter_unmapped_bases"] += bam_data.get("unmapped_bases", 0)
+        data["counter_on_target_reads"] = int(
+            data.get("counter_on_target_reads", 0) or 0
+        ) + int(bam_data.get("on_target_reads", 0) or 0)
+        data["counter_off_target_reads"] = int(
+            data.get("counter_off_target_reads", 0) or 0
+        ) + int(bam_data.get("off_target_reads", 0) or 0)
+        data["counter_on_target_bases"] = int(
+            data.get("counter_on_target_bases", 0) or 0
+        ) + int(bam_data.get("on_target_bases", 0) or 0)
+        data["counter_off_target_bases"] = int(
+            data.get("counter_off_target_bases", 0) or 0
+        ) + int(bam_data.get("off_target_bases", 0) or 0)
+        data["on_target_length_hist"] = self._merge_length_histogram(
+            data.get("on_target_length_hist", ""),
+            bam_data.get("on_target_length_hist", ""),
+        )
+        data["off_target_length_hist"] = self._merge_length_histogram(
+            data.get("off_target_length_hist", ""),
+            bam_data.get("off_target_length_hist", ""),
+        )
         return data
+
+    @staticmethod
+    def _merge_length_histogram(existing: Any, incoming: Any) -> str:
+        """Add two comma-separated length-histogram columns without importing the preprocessor."""
+        def _parts(value: Any) -> list[int]:
+            if value in (None, "", "nan"):
+                return []
+            text = str(value).strip()
+            if not text or text.lower() == "nan":
+                return []
+            counts: list[int] = []
+            for part in text.split(","):
+                part = part.strip()
+                if not part:
+                    continue
+                try:
+                    counts.append(max(0, int(float(part))))
+                except (TypeError, ValueError):
+                    counts.append(0)
+            return counts
+
+        left = _parts(existing)
+        right = _parts(incoming)
+        if not left:
+            return ",".join(str(v) for v in right)
+        if not right:
+            return ",".join(str(v) for v in left)
+        n = max(len(left), len(right))
+        left.extend([0] * (n - len(left)))
+        right.extend([0] * (n - len(right)))
+        return ",".join(str(a + b) for a, b in zip(left, right))
 
     def _update_run_info(
         self, data: Dict[str, Any], bam_info: Dict[str, Any]

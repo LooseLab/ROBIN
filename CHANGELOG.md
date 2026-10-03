@@ -7,6 +7,10 @@ and this project (almost) adheres to [Semantic Versioning](https://semver.org/sp
 
 ## [Unreleased]
 
+### Added
+- **On/off-target read lengths:** Preprocessing classifies each primary mapped read against the panel BED and accumulates on-target vs off-target counts, yield, and a compact length histogram. The Coverage page shows mean/median lengths plus the two distributions; the sample insight card reports the medians.
+- **Random Forest feature count:** The RapidCNS2 classifier already reports `Number of features`; ROBIN now writes that value as `number_probes` in `random_forest_scores.csv` so the classification summary and detail cards can show it.
+
 ### Fixed
 - **MNP-Flex live parquet:** Bed conversion now copies the sample parquet under the writer lock before reading, so live updates cannot replace the file mid-conversion.
 - **Coverage quality labels:** Summary and coverage pages now use the same quality tiers (Excellent / Good / Moderate / Insufficient). Empty coverage dataframes are no longer treated as “no update”.
