@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "robin"
-version = "0.5.4"
+version = "0.6.0"
 description = "A Python CLI tool with file watching capabilities"
 readme = "README.md"
 license = {text = "MIT"}

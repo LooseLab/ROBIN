@@ -7,6 +7,8 @@ and this project (almost) adheres to [Semantic Versioning](https://semver.org/sp
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-10-03
+
 ### Added
 - **ClairS-TO readable runtime image:** SNP calling still runs ClairS-TO as the host UID/GID so bind-mounted outputs are not root-owned. ROBIN derives a local `robin/clairs-to:readable` image with world-readable bundled models, databases, and CNA/Verdict loci, then preflights loci-file access before launching analysis.
 - **ClinVar significance for SNPs:** Variant classification now considers germline pathogenicity (`CLNSIG`), oncogenicity (`ONC`), and somatic clinical impact (`SCI` tiers I/II) via shared `variant_classification` logic. The SNP GUI table adds ONC/SCI columns and a **ClinVar significant only** filter.
@@ -26,7 +28,8 @@ and this project (almost) adheres to [Semantic Versioning](https://semver.org/sp
 - **Methylation model safeguards:** ROBIN now reads `modbase_models` from BAM headers, records it in sample metadata, displays it in the run summary and reports, and warns when all-context, unknown, or missing modified-base models are detected. CpG-only `5mCG_5hmCG` calling remains the recommended configuration.
 - **Reference-based CpG extraction:** Added optional `ROBIN_MATKIT_CPG_MODE=1` support for CpG-only pileup with strand combination; this mode requires the workflow reference FASTA.
 - **Report exports:** Individual and bulk report dialogs can produce PDF reports, CSV ZIP bundles, and sample-tracking TSV exports. MNP-Flex summary, hierarchy, and score data are included in export artifacts when available.
-- **Watched folders:** The folder picker supports selecting and adding multiple watch directories in one operation.
+- **Watched folders:** The folder picker supports selecting and adding multiple watch directories in one operation. Ray GUI workflows can also start without an initial input path and add the first watched directory after launch (`PATH` is optional when Ray, file watching, the GUI, and `--work-dir` are enabled).
+- **Barcode suppression:** `--disable-barcode-demultiplexing` disables barcode detection and barcode-based sample splitting during BAM preprocessing, including watch-folder sample-ID probing.
 - **Large result tables:** Added server-side pagination, search, and filtering for large SNP, coverage, and fusion tables to reduce browser memory use.
 - **Admin sample management:** The **Administration** page adds a **Sample management** tab (admin only) to permanently delete completed sample output folders or archive them as `tar.gz` files to a server-side destination outside the work directory. Live runs and samples with active or pending jobs are blocked. Archives include analysis outputs and `sample_identifier_manifest.json` but exclude housekeeping folders (for example `_locks` and `_fusion_staging`). Successful archive removes the sample from live tracking; delete and archive actions are audit-logged (`sample.deleted`, `sample.archived`).
 
@@ -47,6 +50,9 @@ and this project (almost) adheres to [Semantic Versioning](https://semver.org/sp
 - **Theme and IGV:** Stabilized per-user dark-mode persistence and table theme synchronization. IGV remains a deliberately light panel in either app theme and reports clearer loading/ready states.
 - **Documentation:** MinKNOW and quickstart guidance now explicitly requires 5mC/5hmC modified-base calling in **CpG contexts only** and warns against all-context models.
 - **Dependencies:** Raised the PyArrow requirement from `16.1` to `>=23.0.1` for the updated Parquet processing paths.
+- **Developer-mode BED outputs:** Adaptive CNV, fusion, and master BED files are generated only in developer mode. Analysis workers resolve developer-mode state from the persisted workflow TOML, and the BED Coverage GUI is hidden outside developer mode. Classifier and target-analysis BED outputs are unchanged.
+- **Version:** Package and application metadata are aligned to `0.6.0`.
+
 ### Fixed
 - Fixed ClairS-TO CNA/Verdict failing with a misleading “loci file does not appear to exist” error when bundled resource files were present but not readable by the host UID/GID (`0640` archive permissions).
 - Fixed SNP containers executing `/opt/bin/run_clairs_to` as a shell script (`import: not found`) after the derived readable image inherited `ENTRYPOINT ["/bin/sh"]` from the chmod step. Commits now restore the upstream Entrypoint/Cmd, and a layout label forces rebuild of the broken local image.
