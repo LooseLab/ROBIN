@@ -11,8 +11,12 @@ Run the **Little John** orchestrated pipeline on BAM files under a watched direc
 ## Synopsis
 
 ```bash
-robin workflow <PATH> -w <WORKFLOW> --center <ID> --target-panel <PANEL> [OPTIONS]
+robin workflow [PATH] -w <WORKFLOW> --center <ID> --target-panel <PANEL> [OPTIONS]
 ```
+
+Omit `PATH` to launch the Ray GUI without an initial watched directory, then
+add the first directory from **Manage watched directories**. This mode requires
+file watching, the GUI, and `--work-dir` to be enabled.
 
 Or load settings from a TOML file:
 
@@ -28,7 +32,7 @@ robin workflow /path/to/bams --toml my_settings.toml
 
 | Argument / option | Required | Description |
 |-------------------|----------|-------------|
-| `PATH` | Yes* | Directory containing (or receiving) BAM files. Must exist. |
+| `PATH` | No | Existing directory containing (or receiving) BAM files. If omitted, add a watch directory from the GUI after launch; this requires Ray, watching, the GUI, and `--work-dir`. |
 | `-t` / `--toml` | No | TOML file with workflow settings (see [Configuration file](#configuration-file)). |
 | `-w` / `--workflow` | Yes* | Comma-separated job types or legacy `queue:job` steps (see [Job types](jobs.md)). |
 | `--center` | Yes* | Site or study label (e.g. `Sherwood`, `Auckland`) — used in outputs and reports. |
@@ -43,7 +47,8 @@ robin workflow /path/to/bams --toml my_settings.toml
 Use a TOML file to store repeatable run settings. An example ships with the repository at [`examples/workflow.example.toml`](https://github.com/LooseLab/ROBIN/blob/main/examples/workflow.example.toml).
 
 ```toml
-path = "empty_folder"
+# Optional; omit to add the first watch directory from the GUI
+# path = "empty_folder"
 workflow = "cnv,fusion,target,mgmt,sturgeon,nanodx,pannanodx,random_forest"
 center = "NUH"
 target_panel = "rCNS2"

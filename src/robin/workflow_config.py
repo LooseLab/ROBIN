@@ -12,7 +12,7 @@ from click.core import ParameterSource
 
 from robin.minknow.toml_config import MinKnowWorkflowConfig, extract_minknow_config, load_minknow_toml
 
-WORKFLOW_REQUIRED_KEYS = ("path", "workflow", "center", "target_panel")
+WORKFLOW_REQUIRED_KEYS = ("workflow", "center", "target_panel")
 
 # Default ruptures KernelCPD penalty for CNV breakpoint detection.
 DEFAULT_CNV_PENALTY_VALUE = 10
@@ -54,7 +54,8 @@ WORKFLOW_CONFIG_EXAMPLE = """\
 # Run with: robin workflow --toml my_settings.toml
 # CLI flags override values from this file when explicitly provided.
 
-path = "empty_folder"
+# Optional: uncomment to start with an initial watched folder.
+# path = "empty_folder"
 workflow = "cnv,fusion,target,mgmt,sturgeon,nanodx,pannanodx,random_forest"
 center = "NUH"
 target_panel = "rCNS2"

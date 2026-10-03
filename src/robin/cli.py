@@ -3027,13 +3027,16 @@ def _create_classifier_with_work_dir(
 
 
 def _validate_inputs(
-    path: Path, workflow: str, analysis_workers: int, ray_num_cpus: Optional[int]
+    path: Optional[Path],
+    workflow: str,
+    analysis_workers: int,
+    ray_num_cpus: Optional[int],
 ) -> None:
     """Validate input parameters and provide helpful error messages."""
-    if not path.exists():
+    if path is not None and not path.exists():
         raise click.BadParameter(f"Path '{path}' does not exist")
 
-    if not path.is_dir():
+    if path is not None and not path.is_dir():
         raise click.BadParameter(f"Path '{path}' is not a directory")
 
     if not workflow.strip():
@@ -3047,7 +3050,7 @@ def _validate_inputs(
 
 
 def _display_workflow_config(
-    path: Path,
+    path: Optional[Path],
     center: str,
     work_dir: Optional[Path],
     workflow_steps: List[str],
@@ -3069,14 +3072,19 @@ def _display_workflow_config(
     """Display workflow configuration information."""
     _echo_styled(f"Center: {center}", level="info")
     
-    if no_process_existing:
-            _echo_styled(
+    if path is None:
+        _echo_styled(
+            "Starting workflow without an initial watch folder; add one from the GUI.",
+            level="info",
+        )
+    elif no_process_existing:
+        _echo_styled(
             f"Starting workflow on {path} for BAM files (skipping existing files)..."
-            )
+        )
     else:
-            _echo_styled(
+        _echo_styled(
             f"Starting workflow on {path} for BAM files (will process existing files first)..."
-            )
+        )
 
     if work_dir:
         _echo_styled(f"Output directory: {work_dir}", level="info")
@@ -3362,7 +3370,12 @@ def workflow(
     target_panel: Optional[str],
     disable_barcode_demultiplexing: bool,
 ) -> None:
-    """Run various operations on BAM files in a directory. Preprocessing is automatically included as the first step."""
+    """Run analyses on BAM files.
+
+    PATH is optional when launching the Ray GUI with file watching enabled;
+    in that mode, a watch folder can be added from the GUI after launch.
+    Preprocessing is automatically included as the first step.
+    """
     try:
         merged = merge_workflow_params(
             ctx,
@@ -3518,6 +3531,15 @@ def workflow(
 
         _warn_if_process_large_bams()
 
+        if path is None and (
+            not use_ray or no_watch or not with_gui or work_dir is None
+        ):
+            raise click.BadParameter(
+                "PATH may be omitted only when the Ray workflow, file watching, "
+                "GUI, and --work-dir are enabled so a watch folder can be added "
+                "after launch."
+            )
+
         # Validate input parameters
         _validate_inputs(path, workflow, analysis_workers, ray_num_cpus)
 
@@ -3639,7 +3661,7 @@ def workflow(
                 asyncio.run(
                     wrn.run(
                         plan=workflow_steps,
-                        paths=[str(path)],
+                        paths=[str(path)] if path is not None else [],
                         target_panel=target_panel,
                         analysis_workers=analysis_workers,
                         preprocessing_workers=preprocessing_workers,
