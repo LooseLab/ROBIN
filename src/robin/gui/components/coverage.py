@@ -2646,33 +2646,9 @@ def _load_coverage_time_series_points(npy_path: Path) -> Dict[str, Any]:
 
 def _read_length_chart_payload(stats: Dict[str, Any]) -> Dict[str, Any]:
     """Build JSON-safe ECharts series for on/off-target length histograms."""
-    centers = [float(v) for v in stats.get("hist_bin_centers") or []]
-    on_hist = [int(v) for v in stats.get("on_target_length_hist") or []]
-    off_hist = [int(v) for v in stats.get("off_target_length_hist") or []]
-    n = min(len(centers), len(on_hist), len(off_hist))
-    if n == 0 or not stats.get("available"):
-        return {"ok": False, "labels": [], "on_pct": [], "off_pct": []}
+    from robin.gui.coverage_metrics import read_length_histogram_series
 
-    first = 0
-    last = n - 1
-    for i in range(n):
-        if on_hist[i] or off_hist[i]:
-            first = i
-            break
-    for i in range(n - 1, -1, -1):
-        if on_hist[i] or off_hist[i]:
-            last = i
-            break
-    on_total = sum(on_hist) or 1
-    off_total = sum(off_hist) or 1
-    labels = []
-    on_pct = []
-    off_pct = []
-    for i in range(first, last + 1):
-        labels.append(format_read_length(centers[i]))
-        on_pct.append(round(100.0 * on_hist[i] / on_total, 2))
-        off_pct.append(round(100.0 * off_hist[i] / off_total, 2))
-    return {"ok": True, "labels": labels, "on_pct": on_pct, "off_pct": off_pct}
+    return read_length_histogram_series(stats)
 
 
 def _coverage_load_refresh_data(
@@ -3015,7 +2991,8 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                 cov_enrich_lbl = ui.label("Estimated enrichment: --x").classes(
                     "text-sm text-gray-600"
                 )
-        with ui.row().classes("w-full gap-4 flex-wrap mt-2"):
+        read_length_metrics = ui.row().classes("w-full gap-4 flex-wrap mt-2")
+        with read_length_metrics:
             with ui.column().classes("gap-0 min-w-[12rem]"):
                 ui.label("On-target read length").classes("text-xs font-medium text-gray-500")
                 cov_on_len_lbl = ui.label("Mean — · Median —").classes(
@@ -3032,7 +3009,8 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                 cov_off_n_lbl = ui.label("0 primary reads").classes(
                     "text-xs text-gray-500"
                 )
-        with ui.card().classes("w-full"):
+        read_length_chart_card = ui.card().classes("w-full")
+        with read_length_chart_card:
             _cp_len = _cov_chrome_palette()
             _on_c, _off_c = _cov_on_off_colors()
             echart_read_len = ui.echart(
@@ -3100,6 +3078,8 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                     ],
                 }
             ).classes("w-full h-72")
+        read_length_metrics.set_visibility(False)
+        read_length_chart_card.set_visibility(False)
         with ui.card().classes("w-full"):
             # Per Chromosome Target Coverage (grouped bar — design.md §9.5)
             _cp0 = _cov_chrome_palette()
@@ -7924,7 +7904,15 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                     if enrich_v is not None:
                         cov_enrich_lbl.set_text(f"Estimated enrichment: {enrich_v:.2f}x")
                     read_lengths = summary.get("read_lengths") or {}
-                    if read_lengths.get("available"):
+                    chart_payload = _read_length_chart_payload(read_lengths)
+                    has_read_length_metrics = bool(read_lengths.get("available"))
+                    has_read_length_plot = bool(chart_payload.get("ok"))
+                    try:
+                        read_length_metrics.set_visibility(has_read_length_metrics)
+                        read_length_chart_card.set_visibility(has_read_length_plot)
+                    except Exception:
+                        pass
+                    if has_read_length_metrics:
                         cov_on_len_lbl.set_text(
                             "Mean "
                             f"{format_read_length(read_lengths.get('mean_on_target_length'))}"
@@ -7943,32 +7931,24 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                         cov_off_n_lbl.set_text(
                             f"{format_read_count(read_lengths.get('off_target_reads'))} primary reads"
                         )
-                        chart_payload = _read_length_chart_payload(read_lengths)
-                        if chart_payload.get("ok"):
-                            on_c, off_c = _cov_on_off_colors()
-                            echart_read_len.options["xAxis"]["data"] = chart_payload[
-                                "labels"
-                            ]
-                            echart_read_len.options["series"][0]["data"] = chart_payload[
-                                "on_pct"
-                            ]
-                            echart_read_len.options["series"][0]["itemStyle"] = {
-                                "color": on_c
-                            }
-                            echart_read_len.options["series"][1]["data"] = chart_payload[
-                                "off_pct"
-                            ]
-                            echart_read_len.options["series"][1]["itemStyle"] = {
-                                "color": off_c
-                            }
-                            echart_read_len.update()
-                    else:
-                        cov_on_len_lbl.set_text("Mean — · Median —")
-                        cov_off_len_lbl.set_text("Mean — · Median —")
-                        cov_on_n_lbl.set_text(
-                            "Available after preprocessing with a target panel"
-                        )
-                        cov_off_n_lbl.set_text("0 primary reads")
+                    if has_read_length_plot:
+                        on_c, off_c = _cov_on_off_colors()
+                        echart_read_len.options["xAxis"]["data"] = chart_payload[
+                            "labels"
+                        ]
+                        echart_read_len.options["series"][0]["data"] = chart_payload[
+                            "on_pct"
+                        ]
+                        echart_read_len.options["series"][0]["itemStyle"] = {
+                            "color": on_c
+                        }
+                        echart_read_len.options["series"][1]["data"] = chart_payload[
+                            "off_pct"
+                        ]
+                        echart_read_len.options["series"][1]["itemStyle"] = {
+                            "color": off_c
+                        }
+                        echart_read_len.update()
                 except Exception as e:
                     _log_notify(
                         f"Coverage summary update failed: {e}",
@@ -8084,8 +8064,9 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
             return
         _last_cov_theme_sig[0] = cur
         try:
-            _apply_coverage_read_length_chrome(echart_read_len)
-            echart_read_len.update()
+            if getattr(read_length_chart_card, "visible", False):
+                _apply_coverage_read_length_chrome(echart_read_len)
+                echart_read_len.update()
         except Exception:
             pass
         try:

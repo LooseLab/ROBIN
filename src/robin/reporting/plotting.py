@@ -66,6 +66,19 @@ _CNV_GENE_LABEL_BBOX = {
     "edgecolor": "none",
     "alpha": 0.70,
 }
+_CNV_CHROMOSOME_GENE_LABEL_PATH_EFFECTS = [
+    mpath_effects.withStroke(linewidth=1.15, foreground="white", alpha=0.94),
+]
+_CNV_CHROMOSOME_GENE_LABEL_BBOX = {
+    "boxstyle": "round,pad=0.06",
+    "facecolor": "white",
+    "edgecolor": "none",
+    "alpha": 0.90,
+}
+# Per-chromosome PDF panels are much smaller than the genome-wide figure.
+_CNV_CHROMOSOME_GENE_LABEL_SCALE = 7 / 12
+_CNV_CHROMOSOME_GENE_LABEL_MIN = 6
+_CNV_CHROMOSOME_GENE_LABEL_MAX = 8
 
 CNV_FONT = {
     "title": 11,
@@ -411,6 +424,22 @@ def _panel_label_matches_configured(label: str, configured_genes: Sequence[str])
     return False
 
 
+def _chromosome_gene_label_font_size(preferred: Optional[int] = None) -> int:
+    """Scale the shared gene-label preference down for compact chromosome panels."""
+    if preferred is None:
+        from robin.gui.plotting_preferences import resolve_cnv_gene_label_font_size
+
+        preferred = resolve_cnv_gene_label_font_size()
+    try:
+        size = int(round(float(preferred) * _CNV_CHROMOSOME_GENE_LABEL_SCALE))
+    except (TypeError, ValueError):
+        size = _CNV_CHROMOSOME_GENE_LABEL_MIN
+    return max(
+        _CNV_CHROMOSOME_GENE_LABEL_MIN,
+        min(_CNV_CHROMOSOME_GENE_LABEL_MAX, size),
+    )
+
+
 def _layout_panel_coverage_point_labels(
     coverage_points: List[Dict[str, Any]],
     y_min: float,
@@ -419,32 +448,40 @@ def _layout_panel_coverage_point_labels(
     *,
     x_key: str,
     min_x_spacing: float,
-) -> Dict[tuple[str, float], float]:
+    compact: bool = False,
+) -> Dict[tuple[str, float], tuple[float, float]]:
     """Place gene labels above gains / below losses, staggering overlaps on the CNV axis."""
-    layouts: Dict[tuple[str, float], float] = {}
+    layouts: Dict[tuple[str, float], tuple[float, float]] = {}
     occupied: List[tuple[float, float]] = []
-    x_spacing = max(x_max * 0.020, min_x_spacing)
+    x_frac = 0.032 if compact else 0.020
+    x_spacing = max(x_max * x_frac, min_x_spacing)
     y_span = max(y_max - y_min, 1e-6)
-    y_step = y_span * 0.055
-    pad = y_span * 0.025
+    y_step = y_span * (0.12 if compact else 0.055)
+    pad = y_span * (0.045 if compact else 0.025)
+    x_nudge = x_max * (0.014 if compact else 0.0)
+    max_attempts = 12 if compact else 8
 
     for point in sorted(coverage_points, key=lambda item: item[x_key]):
         x_pos = float(point[x_key])
         y_head = float(point["y_norm"])
         above = point.get("direction") != "loss"
+        label_x = x_pos
         label_y = y_head + pad if above else y_head - pad
         attempts = 0
         while any(
-            abs(x_pos - ox) < x_spacing and abs(label_y - oy) < y_step
+            abs(label_x - ox) < x_spacing and abs(label_y - oy) < y_step
             for ox, oy in occupied
         ):
             label_y += y_step if above else -y_step
+            if x_nudge:
+                label_x = x_pos + (x_nudge if attempts % 2 == 0 else -x_nudge)
             attempts += 1
-            if attempts > 8:
+            if attempts > max_attempts:
                 break
+        label_x = min(max(label_x, x_max * 0.01), x_max * 0.99)
         label_y = min(max(label_y, y_min + y_span * 0.02), y_max - y_span * 0.02)
-        occupied.append((x_pos, label_y))
-        layouts[(point["label"], x_pos)] = label_y
+        occupied.append((label_x, label_y))
+        layouts[(point["label"], x_pos)] = (label_x, label_y)
     return layouts
 
 
@@ -589,6 +626,7 @@ def _add_panel_coverage_points(
     y_min: float,
     y_max: float,
     label_font_size: Optional[int] = None,
+    compact_labels: bool = False,
 ) -> bool:
     """Plot panel genes as coverage normalised onto the shared CNV axis."""
     if not coverage_points:
@@ -599,6 +637,18 @@ def _add_panel_coverage_points(
         if label_font_size is not None
         else LOLLIPOP_LABEL_FONT_SIZE
     )
+    if compact_labels:
+        _setup_cnv_fonts()
+        font_size = _chromosome_gene_label_font_size(font_size)
+        label_bbox = _CNV_CHROMOSOME_GENE_LABEL_BBOX
+        label_effects = _CNV_CHROMOSOME_GENE_LABEL_PATH_EFFECTS
+        label_weight = "normal"
+        label_font = _CNV_FONT_REGULAR
+    else:
+        label_bbox = _CNV_GENE_LABEL_BBOX
+        label_effects = _CNV_GENE_LABEL_PATH_EFFECTS
+        label_weight = "bold"
+        label_font = _CNV_FONT_BOLD
 
     for point in coverage_points:
         x_pos = float(point[x_key])
@@ -639,16 +689,18 @@ def _add_panel_coverage_points(
             clip_on=True,
         )
 
-    head_label_y = _layout_panel_coverage_point_labels(
+    head_label_xy = _layout_panel_coverage_point_labels(
         coverage_points,
         y_min,
         y_max,
         x_max,
         x_key=x_key,
         min_x_spacing=min_x_spacing,
+        compact=compact_labels,
     )
     for point in coverage_points:
         x_pos = float(point[x_key])
+        label_x, label_y = head_label_xy[(point["label"], x_pos)]
         color = (
             CNV_COLORS["plot_gain"]
             if point.get("direction") == "gain"
@@ -656,18 +708,19 @@ def _add_panel_coverage_points(
         )
         above = point.get("direction") != "loss"
         ax_cnv.text(
-            x_pos,
-            head_label_y[(point["label"], x_pos)],
+            label_x,
+            label_y,
             _truncate_panel_label(point["label"]),
             ha="center",
             va="bottom" if above else "top",
             fontsize=font_size,
             color=color,
-            fontweight="bold",
+            fontweight=label_weight,
+            fontproperties=label_font,
             zorder=8,
             clip_on=False,
-            bbox=_CNV_GENE_LABEL_BBOX,
-            path_effects=_CNV_GENE_LABEL_PATH_EFFECTS,
+            bbox=label_bbox,
+            path_effects=label_effects,
         )
     return True
 
@@ -760,6 +813,7 @@ def _add_chromosome_panel_coverage_overlay(
         y_min=y_min,
         y_max=y_max,
         label_font_size=label_font_size,
+        compact_labels=True,
     )
 
 

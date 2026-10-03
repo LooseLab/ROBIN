@@ -21,6 +21,17 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+from robin.analysis.bam_preprocessor import (
+    format_read_length,
+    load_on_off_target_length_stats,
+)
+from robin.gui.coverage_metrics import (
+    coverage_read_length_export_fields,
+    format_read_count,
+    read_length_histogram_series,
+    read_length_plot_available,
+    read_length_summary_line,
+)
 from robin.reference_contigs import is_visible_contig
 
 
@@ -55,6 +66,7 @@ class CoverageSection(ReportSection):
         self.chromosome_data = []
         self.target_data = []
         self.distribution_data = {}
+        self.read_length_stats = load_on_off_target_length_stats(output_dir)
 
         # Read coverage data if available
         if os.path.exists(os.path.join(output_dir, "coverage_main.csv")):
@@ -404,6 +416,7 @@ class CoverageSection(ReportSection):
         self.add_coverage_summary()
 
         self.add_detailed_coverage()
+        self.add_read_length_analysis()
 
         # Add summary to summary section
         self.summary_elements.append(
@@ -425,6 +438,11 @@ class CoverageSection(ReportSection):
                 summary_text.append(
                     f"Coverage >=30x: {self.distribution_data.get('above_30x', 0):.1f}%"
                 )
+            read_length_line = read_length_summary_line(
+                getattr(self, "read_length_stats", None)
+            )
+            if read_length_line:
+                summary_text.append(read_length_line)
 
             self.summary_elements.append(
                 Paragraph(" <br/> ".join(summary_text), self.styles.styles["Normal"])
@@ -456,6 +474,7 @@ class CoverageSection(ReportSection):
                     self.export_frames["coverage_distribution"] = pd.DataFrame(
                         [self.distribution_data]
                     )
+                self._export_read_length_frame()
             except Exception:
                 pass
         else:
@@ -670,6 +689,152 @@ class CoverageSection(ReportSection):
 
         self.elements.append(stats_table)
         self.elements.append(Spacer(1, 6))
+
+    def _export_read_length_frame(self) -> None:
+        """Add on/off-target length measurements to the CSV ZIP export."""
+        stats = getattr(self, "read_length_stats", None)
+        if not stats or not stats.get("available"):
+            return
+        try:
+            self.export_frames["coverage_read_lengths"] = pd.DataFrame(
+                [coverage_read_length_export_fields(stats)]
+            )
+        except Exception:
+            pass
+
+    def add_read_length_analysis(self):
+        """Add on/off-target read-length metrics and histogram to the detailed report."""
+        stats = getattr(self, "read_length_stats", None)
+        if not stats or not stats.get("available"):
+            return
+
+        self._export_read_length_frame()
+        self.elements.append(
+            Paragraph("On / off-target read length", self.styles.styles["Heading3"])
+        )
+        self.elements.append(Spacer(1, 4))
+        self.elements.append(
+            Paragraph(
+                "Primary mapped reads classified against the target panel. "
+                "Mean length is yield divided by read count; medians come from the "
+                "compact log-spaced length histogram.",
+                ParagraphStyle(
+                    "ReadLengthIntro",
+                    parent=self.styles.styles["Normal"],
+                    fontSize=8,
+                    leading=10,
+                    spaceAfter=6,
+                ),
+            )
+        )
+
+        metrics = coverage_read_length_export_fields(stats)
+        on_read_pct = metrics.get("on_target_read_percent")
+        on_reads = metrics.get("on_target_reads") or 0
+        off_reads = metrics.get("off_target_reads") or 0
+        total_reads = int(on_reads) + int(off_reads)
+        off_read_pct = (
+            round(100.0 * int(off_reads) / total_reads, 2) if total_reads else ""
+        )
+        table_data = [
+            ["Metric", "On-target", "Off-target"],
+            [
+                "Primary reads",
+                format_read_count(metrics.get("on_target_reads")),
+                format_read_count(metrics.get("off_target_reads")),
+            ],
+            [
+                "Bases",
+                format_read_count(metrics.get("on_target_bases")),
+                format_read_count(metrics.get("off_target_bases")),
+            ],
+            [
+                "Mean length",
+                format_read_length(stats.get("mean_on_target_length")),
+                format_read_length(stats.get("mean_off_target_length")),
+            ],
+            [
+                "Median length",
+                format_read_length(stats.get("median_on_target_length")),
+                format_read_length(stats.get("median_off_target_length")),
+            ],
+            [
+                "Share of reads",
+                f"{on_read_pct}%" if on_read_pct != "" else "—",
+                f"{off_read_pct}%" if off_read_pct != "" else "—",
+            ],
+        ]
+        table = Table(table_data, colWidths=[2 * inch, 2 * inch, 2 * inch])
+        table.setStyle(
+            TableStyle(
+                [
+                    *self.MODERN_TABLE_STYLE._cmds,
+                    ("ALIGN", (0, 0), (0, -1), "LEFT"),
+                    ("ALIGN", (1, 0), (-1, -1), "RIGHT"),
+                ]
+            )
+        )
+        self.elements.append(table)
+        self.elements.append(Spacer(1, 6))
+
+        if read_length_plot_available(stats):
+            plot_buf = self._create_read_length_plot()
+            if plot_buf and plot_buf.getvalue():
+                self.elements.append(Image(plot_buf, width=6 * inch, height=3 * inch))
+                self.elements.append(Spacer(1, 6))
+
+    def _create_read_length_plot(self):
+        """Grouped bar plot of on/off-target read-length distributions."""
+        try:
+            series = read_length_histogram_series(
+                getattr(self, "read_length_stats", None)
+            )
+            if not series.get("ok"):
+                return None
+            labels = series["labels"]
+            on_pct = series["on_pct"]
+            off_pct = series["off_pct"]
+            x = np.arange(len(labels))
+            width = 0.42
+            fig, ax = plt.subplots(figsize=(8, 3.4))
+            ax.bar(
+                x - width / 2,
+                on_pct,
+                width,
+                label="On-target",
+                color="#10b981",
+            )
+            ax.bar(
+                x + width / 2,
+                off_pct,
+                width,
+                label="Off-target",
+                color="#64748b",
+            )
+            ax.set_title("On / off-target read length")
+            ax.set_ylabel("Percent of primary reads")
+            ax.set_xlabel("Read length")
+            step = max(1, len(labels) // 8)
+            ax.set_xticks(x)
+            ax.set_xticklabels(
+                [lab if i % step == 0 else "" for i, lab in enumerate(labels)],
+                rotation=45,
+                ha="right",
+                fontsize=7,
+            )
+            ax.set_ylim(0, max(max(on_pct or [0]), max(off_pct or [0]), 1) * 1.15)
+            ax.grid(True, axis="y", alpha=0.3)
+            ax.legend(frameon=False, fontsize=8)
+            fig.tight_layout()
+            buf = io.BytesIO()
+            fig.savefig(buf, format="png", dpi=300, bbox_inches="tight")
+            plt.close(fig)
+            buf.seek(0)
+            return buf if buf.getvalue() else None
+        except Exception as e:
+            logger.warning("Error creating read-length plot: %s", e)
+            plt.close("all")
+            return None
 
     def _get_coverage_quality(self, coverage):
         """Determine coverage quality level based on depth."""

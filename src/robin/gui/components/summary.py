@@ -422,10 +422,7 @@ def _analysis_section(sample_dir: Path, launcher: Any = None):
                     coverage_data.get("target_coverage", "Not available"),
                     coverage_data.get("global_coverage", "Not available"),
                     coverage_data.get("enrichment", "Not available"),
-                    coverage_data.get(
-                        "read_length_summary",
-                        "On/off-target read length: not available",
-                    ),
+                    coverage_data.get("read_length_summary", ""),
                     anchor_key="coverage",
                 )
 
@@ -709,7 +706,7 @@ def _create_coverage_dashboard_card_with_data(
     target_coverage: str,
     global_coverage: str,
     enrichment: str,
-    read_length_summary: str = "On/off-target read length: not available",
+    read_length_summary: str = "",
     anchor_key: str = "coverage",
 ) -> None:
     """Coverage insight card — same shell as classification (design.md §9)."""
@@ -756,7 +753,8 @@ def _create_coverage_dashboard_card_with_data(
                 ui.label(f"Enrichment: {enrichment}").classes(
                     "classification-insight-meta"
                 )
-                ui.label(read_length_summary).classes("classification-insight-meta")
+                if read_length_summary:
+                    ui.label(read_length_summary).classes("classification-insight-meta")
             with ui.row().classes("gap-1 flex-wrap"):
                 ui.label("≥30x").classes(
                     "analysis-insight-pill analysis-insight-pill--emerald"
@@ -1313,7 +1311,7 @@ def _extract_coverage_data(sample_dir: Path) -> Dict[str, Any]:
         "global_coverage": "Not available",
         "target_coverage": "Not available",
         "enrichment": "Not available",
-        "read_length_summary": "On/off-target read length: not available",
+        "read_length_summary": "",
         **coverage_read_length_export_fields(None),
     }
 

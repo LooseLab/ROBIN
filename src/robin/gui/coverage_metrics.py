@@ -102,12 +102,53 @@ def format_read_count(count: int | None) -> str:
     return f"{value:,}"
 
 
+def read_length_histogram_series(stats: Dict[str, Any] | None) -> Dict[str, Any]:
+    """Trimmed on/off-target length histogram as percentages for GUI and PDF plots."""
+    from robin.analysis.bam_preprocessor import format_read_length
+
+    empty = {"ok": False, "labels": [], "on_pct": [], "off_pct": []}
+    if not stats or not stats.get("available"):
+        return empty
+    centers = [float(v) for v in stats.get("hist_bin_centers") or []]
+    on_hist = [int(v) for v in stats.get("on_target_length_hist") or []]
+    off_hist = [int(v) for v in stats.get("off_target_length_hist") or []]
+    n = min(len(centers), len(on_hist), len(off_hist))
+    if n == 0 or not any(on_hist[i] or off_hist[i] for i in range(n)):
+        return empty
+
+    first = 0
+    last = n - 1
+    for i in range(n):
+        if on_hist[i] or off_hist[i]:
+            first = i
+            break
+    for i in range(n - 1, -1, -1):
+        if on_hist[i] or off_hist[i]:
+            last = i
+            break
+    on_total = sum(on_hist) or 1
+    off_total = sum(off_hist) or 1
+    labels = []
+    on_pct = []
+    off_pct = []
+    for i in range(first, last + 1):
+        labels.append(format_read_length(centers[i]))
+        on_pct.append(round(100.0 * on_hist[i] / on_total, 2))
+        off_pct.append(round(100.0 * off_hist[i] / off_total, 2))
+    return {"ok": True, "labels": labels, "on_pct": on_pct, "off_pct": off_pct}
+
+
+def read_length_plot_available(stats: Dict[str, Any] | None) -> bool:
+    """True when the on/off-target length histogram has counts to plot."""
+    return bool(read_length_histogram_series(stats).get("ok"))
+
+
 def read_length_summary_line(stats: Dict[str, Any] | None) -> str:
     """One-line on/off-target median summary for the sample insight card."""
     from robin.analysis.bam_preprocessor import format_read_length
 
     if not stats or not stats.get("available"):
-        return "On/off-target read length: not available"
+        return ""
     on_median = format_read_length(stats.get("median_on_target_length"))
     off_median = format_read_length(stats.get("median_off_target_length"))
     return f"On-target median {on_median} · Off-target median {off_median}"
