@@ -15,12 +15,64 @@ from robin.analysis.temp_utilities import exclusive_file_lock
 from robin.analysis.utilities.matkit import reconstruct_full_bedmethyl_for_mnpflex
 from robin.analysis.utilities.mnp_flex import APIClient as MnpFlexApiClient
 
+_METHYLATION_CHROM_ALIASES = frozenset({"chrom", "chr", "chromosome"})
+_METHYLATION_START_ALIASES = frozenset(
+    {"chromStart", "start", "start_pos", "startpos", "pos"}
+)
+_METHYLATION_VALUE_ALIASES = frozenset(
+    {
+        "percent_modified",
+        "methylation_percent",
+        "mod_percent",
+        "mod_code",
+        "valid_cov",
+        "n_mod",
+        "n_canonical",
+    }
+)
+_HOUSEKEEPING_PARQUET_MARKERS = (
+    "mnpflex_snapshot",
+    "_target_coverage",
+    "_candidates",
+    "snpsift",
+    "_display",
+)
+
+
+def _looks_like_housekeeping_parquet(path: Path) -> bool:
+    name = path.name
+    if name.startswith(".") or name.startswith("_"):
+        return True
+    lowered = name.lower()
+    return any(marker in lowered for marker in _HOUSEKEEPING_PARQUET_MARKERS)
+
+
+def parquet_has_methylation_coordinates(path: Path) -> bool:
+    """True when a parquet looks like methylation sites, not coverage/fusion caches."""
+    try:
+        import pyarrow.parquet as pq
+
+        names = {str(name) for name in pq.read_schema(path).names}
+    except Exception:
+        return False
+    return (
+        bool(names & _METHYLATION_CHROM_ALIASES)
+        and bool(names & _METHYLATION_START_ALIASES)
+        and bool(names & _METHYLATION_VALUE_ALIASES)
+    )
+
 
 def find_parquet_file(sample_dir: Path, sample_id: str) -> Optional[Path]:
     preferred = sample_dir / f"{sample_id}.parquet"
-    if preferred.exists():
+    if preferred.is_file() and parquet_has_methylation_coordinates(preferred):
         return preferred
-    matches = list(sample_dir.glob("*.parquet"))
+    matches = [
+        path
+        for path in sorted(sample_dir.glob("*.parquet"))
+        if path != preferred
+        and not _looks_like_housekeeping_parquet(path)
+        and parquet_has_methylation_coordinates(path)
+    ]
     return matches[0] if matches else None
 
 
@@ -65,7 +117,11 @@ def locked_parquet_snapshot(parquet_path: Path) -> Iterator[Path]:
 def build_bed_file_from_parquet(sample_dir: Path, sample_id: str) -> Path:
     parquet_path = find_parquet_file(sample_dir, sample_id)
     if not parquet_path or not parquet_path.exists():
-        raise RuntimeError("No parquet data found for this sample.")
+        raise RuntimeError(
+            "No methylation parquet found for this sample. "
+            f"Expected {sample_id}.parquet from bed conversion "
+            "(coverage/fusion/SNP parquet files are ignored)."
+        )
     bed_path = sample_dir / f"{sample_id}.mnpflex.bed"
     with locked_parquet_snapshot(parquet_path) as snapshot_path:
         bed_df = reconstruct_full_bedmethyl_for_mnpflex(str(snapshot_path))

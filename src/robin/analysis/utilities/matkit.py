@@ -741,6 +741,36 @@ def merge_modkit_files(
         gc.collect()
 
 
+_BEDMETHYL_COLUMN_ALIASES = {
+    "chrom": ("chrom", "chr", "chromosome"),
+    "chromStart": ("chromStart", "start", "start_pos", "startpos", "pos"),
+    "percent_modified": (
+        "percent_modified",
+        "methylation_percent",
+        "mod_percent",
+        "score",
+    ),
+    "mod_code": ("mod_code", "mod", "modification_code"),
+    "strand": ("strand", "strand_info"),
+    "valid_cov": ("valid_cov", "Nvalid", "coverage", "cov"),
+    "n_mod": ("n_mod", "Nmod"),
+    "n_canonical": ("n_canonical", "Ncanon"),
+}
+
+
+def _normalize_bedmethyl_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """Map common parquet aliases onto the optimized bedMethyl column names."""
+    rename = {}
+    for dest, aliases in _BEDMETHYL_COLUMN_ALIASES.items():
+        if dest in df.columns:
+            continue
+        for alias in aliases:
+            if alias in df.columns:
+                rename[alias] = dest
+                break
+    return df.rename(columns=rename) if rename else df
+
+
 def reconstruct_full_bedmethyl_for_mnpflex(parquet_file_path: str) -> pd.DataFrame:
     """
     Reconstruct full 18-column bedmethyl format from optimized parquet file for MNP-FLEX compatibility.
@@ -756,12 +786,23 @@ def reconstruct_full_bedmethyl_for_mnpflex(parquet_file_path: str) -> pd.DataFra
     """
     try:
         # Read the optimized parquet file
-        df = pd.read_parquet(parquet_file_path)
+        df = _normalize_bedmethyl_columns(pd.read_parquet(parquet_file_path))
 
         # Check if this is already in full format
         if len(df.columns) >= 15:  # Full format has 18 columns
             logging.info("Parquet file already in full format, returning as-is")
             return df
+
+        missing = [
+            column
+            for column in ("chrom", "chromStart", "percent_modified", "mod_code", "strand")
+            if column not in df.columns
+        ]
+        if missing:
+            raise KeyError(
+                "Methylation parquet is missing required columns "
+                f"{missing}. Available columns: {list(df.columns)}"
+            )
 
         # Reconstruct missing columns
         logging.info("Reconstructing full bedmethyl format from optimized data")

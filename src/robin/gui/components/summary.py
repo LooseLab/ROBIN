@@ -36,7 +36,11 @@ from robin.gui.config import (
     launcher_visibility_context,
     CLASSIFICATION_STEPS,
 )
-from robin.gui.coverage_metrics import coverage_quality_name, read_length_summary_line
+from robin.gui.coverage_metrics import (
+    coverage_quality_name,
+    coverage_read_length_export_fields,
+    read_length_summary_line,
+)
 from robin.analysis.bam_preprocessor import load_on_off_target_length_stats
 
 
@@ -1135,7 +1139,8 @@ def _apply_master_csv_to_run_info(sample_dir: Path, run_info: Dict[str, str]) ->
     - ``run_info_flow_cell`` / ``flowcell_ids`` → Flow cell
     - ``analysis_panel`` → Analysis panel
     - ``counter_bam_passed`` / ``counter_bam_failed`` / ``counter_bases_count`` /
-      ``counter_mapped_count`` / ``counter_unmapped_count`` → BAM / bases tiles
+      ``counter_mapped_count`` / ``counter_unmapped_count`` /
+      ``counter_mapped_bases`` / ``counter_unmapped_bases`` → BAM / bases tiles
     - ``bam_tracking_counter`` / ``bam_tracking_total_files`` → BAM batches (current / total)
     """
     master_path = sample_dir / "master.csv"
@@ -1194,6 +1199,8 @@ def _apply_master_csv_to_run_info(sample_dir: Path, run_info: Dict[str, str]) ->
             ("counter_bases_count", "total_bases"),
             ("counter_mapped_count", "mapped_reads"),
             ("counter_unmapped_count", "unmapped_reads"),
+            ("counter_mapped_bases", "mapped_bases"),
+            ("counter_unmapped_bases", "unmapped_bases"),
         ):
             raw = get_ci(row, csv_key)
             if raw is not None and str(raw).strip() != "":
@@ -1307,6 +1314,7 @@ def _extract_coverage_data(sample_dir: Path) -> Dict[str, Any]:
         "target_coverage": "Not available",
         "enrichment": "Not available",
         "read_length_summary": "On/off-target read length: not available",
+        **coverage_read_length_export_fields(None),
     }
 
     try:
@@ -1383,9 +1391,9 @@ def _extract_coverage_data(sample_dir: Path) -> Dict[str, Any]:
             enrich_v = target_cov_v / global_cov
             coverage_data["enrichment"] = f"{enrich_v:.2f}x"
 
-        coverage_data["read_length_summary"] = read_length_summary_line(
-            load_on_off_target_length_stats(sample_dir)
-        )
+        length_stats = load_on_off_target_length_stats(sample_dir)
+        coverage_data["read_length_summary"] = read_length_summary_line(length_stats)
+        coverage_data.update(coverage_read_length_export_fields(length_stats))
 
     except Exception as e:
         logging.debug(f"   MGMT: <access denied>: {e}")

@@ -26,6 +26,7 @@ from collections import deque
 import csv
 from datetime import datetime
 from robin.analysis.master_csv_manager import MasterCSVManager
+from robin.analysis.mnpflex_bed import find_parquet_file
 from robin.analysis.mnpflex_eligibility import (
     DEFAULT_MNPFLEX_IDLE_SECONDS,
     sample_ready_for_mnpflex_auto_run,
@@ -7525,13 +7526,9 @@ class GUILauncher:
     def _mnpflex_parquet_path_for_sample(
         self, sample_dir: Path, sample_id: str
     ) -> Optional[Path]:
-        """Preferred parquet is `<sample_id>.parquet`, else any `*.parquet`."""
-        preferred = sample_dir / f"{sample_id}.parquet"
-        if preferred.exists():
-            return preferred
+        """Preferred parquet is a methylation `<sample_id>.parquet`."""
         try:
-            matches = list(sample_dir.glob("*.parquet"))
-            return matches[0] if matches else None
+            return find_parquet_file(sample_dir, sample_id)
         except Exception:
             return None
 
@@ -7687,6 +7684,8 @@ class GUILauncher:
                 "total_bases",
                 "mapped_reads",
                 "unmapped_reads",
+                "mapped_bases",
+                "unmapped_bases",
                 "bam_batches",
             ]
             classification_models = [
@@ -7699,7 +7698,22 @@ class GUILauncher:
                 "tucan",
             ]
             analysis_fields = {
-                "coverage": ["quality", "global_coverage", "target_coverage", "enrichment"],
+                "coverage": [
+                    "quality",
+                    "global_coverage",
+                    "target_coverage",
+                    "enrichment",
+                    "on_target_reads",
+                    "off_target_reads",
+                    "on_target_bases",
+                    "off_target_bases",
+                    "on_target_read_percent",
+                    "on_target_base_percent",
+                    "mean_on_target_length",
+                    "mean_off_target_length",
+                    "median_on_target_length",
+                    "median_off_target_length",
+                ],
                 "cnv": [
                     "genetic_sex",
                     "bin_width",
@@ -8043,6 +8057,27 @@ class GUILauncher:
                         analysis["variants"] = variant_data
                     if cnv_broad_data:
                         analysis["cnv_broad"] = cnv_broad_data
+
+                    try:
+                        from robin.analysis.bam_preprocessor import (
+                            load_on_off_target_length_stats,
+                        )
+                        from robin.gui.coverage_metrics import (
+                            coverage_read_length_export_fields,
+                        )
+
+                        coverage_section = analysis.setdefault("coverage", {})
+                        coverage_section.update(
+                            coverage_read_length_export_fields(
+                                load_on_off_target_length_stats(sample_dir)
+                            )
+                        )
+                    except Exception as ex:
+                        logging.debug(
+                            "Could not extract read-length TSV fields for %s: %s",
+                            sample_id,
+                            ex,
+                        )
 
                     export_row: Dict[str, Any] = {k: row_data.get(k, "") for k in table_fields}
                     for key in run_info_fields:
