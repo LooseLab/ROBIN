@@ -2976,6 +2976,14 @@ def _generate_output_files(
             Dictionary mapping file type to file path
     """
     output_start = time.time()
+    from robin.readfish.analysis_hook import is_batman_analysis_mode
+
+    batman_mode = is_batman_analysis_mode(
+        work_dir=work_dir,
+        target_panel=fusion_metadata.target_panel,
+        reference=reference,
+    )
+
     def _build_filtered_candidates(
         candidate_type: str,
         output_csv_name: str,
@@ -3258,15 +3266,17 @@ def _generate_output_files(
             f.write("0")
 
     
-    # Generate fusion breakpoint BED file only when content has changed.
-    fusion_breakpoint_changed = _generate_fusion_breakpoint_bed(
-        sample_id, fusion_metadata, work_dir
-    )
+    # Versioned breakpoint BEDs exist solely for BATMAN/readfish live targets.
+    fusion_breakpoint_changed = False
+    if batman_mode:
+        fusion_breakpoint_changed = _generate_fusion_breakpoint_bed(
+            sample_id, fusion_metadata, work_dir
+        )
     
     # Generate master BED breakpoint BED file (new target regions from supplementary alignments)
     # This is called incrementally as data accumulates. For large datasets, we use an incremental
     # approach: only process NEW staging files and merge with existing breakpoints.
-    if generate_master_bed:
+    if generate_master_bed and batman_mode:
         master_bed_candidates = _load_fusion_candidates_parquet("master_bed_candidates", work_dir, sample_id)
     
     #ToDo: This is the slow code from here.
@@ -3281,7 +3291,7 @@ def _generate_output_files(
         )
     
     
-    if ENABLE_MASTER_BED:
+    if ENABLE_MASTER_BED and batman_mode:
         
         
         # Ask the master BED generator to refresh. It is content-signature gated,
@@ -6898,6 +6908,13 @@ def finalize_fusion_accumulation_for_sample(
     """
     try:
         logger.info(f"Finalizing fusion accumulation for sample {sample_id}")
+        from robin.readfish.analysis_hook import is_batman_analysis_mode
+
+        batman_mode = is_batman_analysis_mode(
+            work_dir=work_dir,
+            target_panel=target_panel,
+            reference=reference,
+        )
         
         # Check if there are pending files
         pending_count = _get_pending_count(work_dir, sample_id)
@@ -6917,7 +6934,9 @@ def finalize_fusion_accumulation_for_sample(
         
         # If accumulation succeeded but master BED wasn't generated (e.g., no pending files),
         # generate it now as a final step
-        if result.get("status") == "success" or pending_count == 0:
+        if batman_mode and (
+            result.get("status") == "success" or pending_count == 0
+        ):
             try:
                 from robin.analysis.master_bed_generator import generate_master_bed
                 

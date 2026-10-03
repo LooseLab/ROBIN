@@ -6091,28 +6091,29 @@ class GUILauncher:
                                             except Exception:
                                                 pass
 
-                                        try:
+                                        if self.batman_mode:
                                             try:
-                                                from .gui.components.bed_coverage import add_bed_coverage_section  # type: ignore
-                                            except ImportError:
-                                                from robin.gui.components.bed_coverage import add_bed_coverage_section
+                                                try:
+                                                    from .gui.components.bed_coverage import add_bed_coverage_section  # type: ignore
+                                                except ImportError:
+                                                    from robin.gui.components.bed_coverage import add_bed_coverage_section
 
-                                            if is_section_visible(
-                                                "bed_coverage",
-                                                workflow_steps=workflow_steps,
-                                                display_config=display_config,
-                                                viewer_role=viewer_role,
-                                            ):
-                                                with _sample_page_section_timer(
-                                                    "live_data", sample_id, "bed_coverage"
+                                                if is_section_visible(
+                                                    "bed_coverage",
+                                                    workflow_steps=workflow_steps,
+                                                    display_config=display_config,
+                                                    viewer_role=viewer_role,
                                                 ):
-                                                    add_bed_coverage_section(self, sample_dir)
-                                        except Exception as e:
-                                            logging.exception(f"[GUI] BED coverage section failed: {e}")
-                                            try:
-                                                ui.notify(f"BED Coverage section failed: {e}", type="warning")
-                                            except Exception:
-                                                pass
+                                                    with _sample_page_section_timer(
+                                                        "live_data", sample_id, "bed_coverage"
+                                                    ):
+                                                        add_bed_coverage_section(self, sample_dir)
+                                            except Exception as e:
+                                                logging.exception(f"[GUI] BED coverage section failed: {e}")
+                                                try:
+                                                    ui.notify(f"BED Coverage section failed: {e}", type="warning")
+                                                except Exception:
+                                                    pass
 
                                     # ITD / insertion hotspot section
                                     if is_section_visible(

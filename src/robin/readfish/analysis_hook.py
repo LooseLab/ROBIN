@@ -17,6 +17,40 @@ _WORKFLOW_POINTER_NAME = ".robin_workflow_toml"
 LIVE_TOML_MAX_BIN_WIDTH_BP = DEFAULT_LIVE_TOML_MAX_BIN_WIDTH_BP
 
 
+def is_batman_analysis_mode(
+    *,
+    work_dir: str | Path,
+    target_panel: Optional[str] = None,
+    reference: Optional[str] = None,
+) -> bool:
+    """Return whether analysis-time adaptive BED outputs are required.
+
+    Analysis often runs in Ray workers, so this resolves the persisted workflow
+    TOML rather than relying on GUI storage or process-local launcher state.
+    """
+    try:
+        context = _resolve_readfish_context(
+            work_dir=work_dir,
+            target_panel=target_panel,
+            reference=reference,
+        )
+    except Exception:
+        LOGGER.debug(
+            "Could not resolve BATMAN workflow context for %s",
+            work_dir,
+            exc_info=True,
+        )
+        return False
+
+    if context is None:
+        return False
+
+    from robin.readfish.batman import is_batman_mode
+
+    preset, readfish_config = context
+    return is_batman_mode(preset=preset, readfish=readfish_config)
+
+
 def write_workflow_toml_pointer(
     work_dir: str | Path,
     workflow_toml: str | Path,

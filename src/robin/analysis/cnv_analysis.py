@@ -1607,37 +1607,46 @@ def save_cnv_files(
             state_metadata, os.path.join(state_dir, "tracker_metadata.pkl")
         )
 
-        # Create BED files directory
-        bed_dir = os.path.join(sample_dir, "bed_files")
-        os.makedirs(bed_dir, exist_ok=True)
+        sample_id = os.path.basename(sample_dir)
+        work_dir = os.path.dirname(sample_dir)
+        from robin.readfish.analysis_hook import is_batman_analysis_mode
 
-        # Generate BED files for CNV regions and breakpoints
-        resolved_min_bins = (
-            int(min_contiguous_bins) if min_contiguous_bins is not None else 1
-        )
-        generate_bed_files(
-            bed_dir,
-            analysis_counter,
-            breakpoints,
-            result3_cnv,
-            bin_width,
-            logger,
-            min_contiguous_bins=resolved_min_bins,
+        batman_mode = is_batman_analysis_mode(
+            work_dir=work_dir,
+            target_panel=target_panel,
+            reference=reference,
         )
 
-        # Generate master BED file only if requested (should only be done once per batch at the end)
-        # Use async (non-blocking) generation to avoid blocking the analysis pipeline
-        if generate_master_bed:
+        if batman_mode:
+            # These versioned BED files feed live readfish target updates and are
+            # intentionally omitted from ordinary (non-BATMAN) analyses.
+            bed_dir = os.path.join(sample_dir, "bed_files")
+            os.makedirs(bed_dir, exist_ok=True)
+            resolved_min_bins = (
+                int(min_contiguous_bins) if min_contiguous_bins is not None else 1
+            )
+            generate_bed_files(
+                bed_dir,
+                analysis_counter,
+                breakpoints,
+                result3_cnv,
+                bin_width,
+                logger,
+                min_contiguous_bins=resolved_min_bins,
+            )
+        else:
+            logger.debug(
+                "Skipping CNV adaptive BED outputs for %s: BATMAN mode is disabled",
+                sample_id,
+            )
+
+        # Generate master BED only for BATMAN batch processing.
+        if generate_master_bed and batman_mode:
             try:
                 from robin.analysis.master_bed_generator import (
                     generate_master_bed_async,
                     _try_get_target_panel_from_fusion_metadata,
                 )
-                
-                # Extract sample_id from sample_dir
-                sample_id = os.path.basename(sample_dir)
-                # work_dir is the parent of sample_dir
-                work_dir = os.path.dirname(sample_dir)
                 
                 # Prefer the workflow panel passed from cnv_handler; fall back to
                 # fusion metadata only when the caller did not supply one.
