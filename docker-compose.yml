@@ -1,0 +1,71 @@
+# Experimental ROBIN container. See docs/getting-started/docker.md.
+#
+# Uses rcns2_new.workflow-settings.toml by default (same workflow, CNV, ITD,
+# center, panel, work_dir, and reference as a native run).
+#
+#   cp docker/compose.env.example .env
+#   # set ROBIN_ADMIN_PASSWORD; keep ROBIN_WORK / ROBIN_REFERENCE in sync with the TOML
+#   docker compose up --build
+#
+# GUI: http://localhost:8081  (admin / ROBIN_ADMIN_PASSWORD)
+
+services:
+  robin:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        ROBIN_GIT_COMMIT: ${ROBIN_GIT_COMMIT:-}
+    image: robin:local
+    hostname: robin
+    ports:
+      - "${ROBIN_GUI_PORT:-8081}:8081"
+      - "${ROBIN_RAY_DASHBOARD_PORT:-8265}:8265"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      ROBIN_RESEARCH_ACK: "I agree"
+      ROBIN_ADMIN_PASSWORD: ${ROBIN_ADMIN_PASSWORD:-}
+      ROBIN_SKIP_MODEL_CHECK: ${ROBIN_SKIP_MODEL_CHECK:-0}
+      ROBIN_GIT_COMMIT: ${ROBIN_GIT_COMMIT:-}
+      ROBIN_WORKFLOW_TOML: /config/workflow.toml
+      MPLCONFIGDIR: /tmp/matplotlib
+      XDG_CACHE_HOME: /tmp
+      # Writable by mambauser. Docker creates ~/.config as root when the
+      # robin-config volume is mounted at ~/.config/robin.
+      XDG_CONFIG_HOME: /home/mambauser/.local
+      LD_LIBRARY_PATH: /opt/conda/lib
+    volumes:
+      - ${ROBIN_TOML:-./rcns2_new.workflow-settings.toml}:/config/workflow.toml:ro
+      - ${ROBIN_WORK:-/Users/mattloose/GIT/REF_SAMPLES_NEW}:${ROBIN_WORK:-/Users/mattloose/GIT/REF_SAMPLES_NEW}
+      - ${ROBIN_REFERENCE_DIR:-/Users/mattloose/references}:${ROBIN_REFERENCE_DIR:-/Users/mattloose/references}:ro
+      - robin-config:/home/mambauser/.config/robin
+    command:
+      - robin
+      - workflow
+      - --toml
+      - /config/workflow.toml
+      - --gui-host
+      - 0.0.0.0
+      - --gui-port
+      - "8081"
+    # Uncomment to let ROBIN launch ClairS-To / MNP-Flex on the host daemon.
+    # ROBIN_WORK / ROBIN_REFERENCE are already bind-mounted at the same host
+    # paths so inner containers can see them.
+    # volumes:
+    #   - /var/run/docker.sock:/var/run/docker.sock
+
+  models:
+    profiles: ["setup"]
+    image: robin:local
+    environment:
+      GITHUB_TOKEN: ${GITHUB_TOKEN:-}
+    volumes:
+      - robin-config:/home/mambauser/.config/robin
+    command:
+      - robin
+      - utils
+      - update-models
+
+volumes:
+  robin-config:

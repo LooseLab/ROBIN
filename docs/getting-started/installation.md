@@ -129,4 +129,5 @@ robin list-job-types
 ## Next steps
 
 - [Quickstart](quickstart.md) — run a workflow  
+- [Docker (experimental)](docker.md) — run ROBIN in a container  
 - [README — Usage](https://github.com/LooseLab/ROBIN/blob/main/README.md#usage) — deep operational detail  

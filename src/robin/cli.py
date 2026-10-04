@@ -377,6 +377,14 @@ def _get_user_acknowledgment() -> bool:
     except Exception:
         pass
 
+    env_ack = os.environ.get("ROBIN_RESEARCH_ACK", "").strip()
+    if env_ack == "I agree":
+        _echo_styled(
+            "Research-use acknowledgment accepted via ROBIN_RESEARCH_ACK.",
+            level="info",
+        )
+        return True
+
     if _RICH_AVAILABLE and _RICH_CONSOLE is not None:
         _RICH_CONSOLE.print(
             Panel(

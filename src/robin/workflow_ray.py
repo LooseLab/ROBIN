@@ -132,7 +132,11 @@ try:
         UpdateType as _GUIUpdateType,
         launch_gui as _gui_launch,
     )
-except Exception:
+except Exception as exc:
+    logging.getLogger(__name__).warning(
+        "GUI modules unavailable; NiceGUI will not start: %s", exc
+    )
+
     def _gui_send_update(*args, **kwargs):
         return None
 

@@ -75,6 +75,7 @@ nav:
     - "v0.5 (from v0.1.7)": releases/v0.5.md
   - Getting Started:
     - Installation: getting-started/installation.md
+    - Docker (experimental): getting-started/docker.md
     - ROBIN Quickstart: getting-started/quickstart.md
     - At startup (disclaimer, GUI, password): getting-started/startup.md
     - Library Preparation: getting-started/library-preparation.md

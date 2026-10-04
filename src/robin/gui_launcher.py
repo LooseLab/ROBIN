@@ -251,6 +251,16 @@ def ensure_default_admin_password_set(auth_service: "AuthService") -> bool:
     if auth_service.store.has_users():
         return True
 
+    env_password = os.environ.get("ROBIN_ADMIN_PASSWORD", "").strip()
+    if env_password:
+        if not auth_service.bootstrap_default_admin(
+            env_password, username=DEFAULT_ADMIN_USERNAME
+        ):
+            logging.error("Could not create the default admin user from ROBIN_ADMIN_PASSWORD.")
+            return False
+        logging.info("Bootstrapped default admin user 'admin' from ROBIN_ADMIN_PASSWORD")
+        return True
+
     legacy_path = _get_gui_password_hash_path()
     if auth_service.bootstrap_admin_from_legacy_hash(legacy_path):
         logging.info("Bootstrapped default admin user from legacy GUI password hash")
