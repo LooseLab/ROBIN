@@ -20,6 +20,7 @@ if sys.version_info < (3, 12):
 
 import pysam
 from dateutil import parser
+from robin.analysis.bam_sanitize import iter_alignments
 from robin.analysis.master_csv_manager import MasterCSVManager
 from robin.logging_config import get_job_logger
 
@@ -709,7 +710,7 @@ def process_bam_reads(
             off_target_length_hist = [0] * _LENGTH_HIST_BINS
 
             # Step 4: Process reads in streaming fashion
-            for read in sam_file.fetch(until_eof=True):
+            for read in iter_alignments(sam_file, until_eof=True):
                 # Extract RG tag and check for barcode - early termination optimization
                 if detect_barcodes and not barcode_found and read.has_tag(_RG_TAG):
                     rg_tag = read.get_tag(_RG_TAG)

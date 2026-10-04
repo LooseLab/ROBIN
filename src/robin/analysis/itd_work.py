@@ -20,6 +20,11 @@ from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 import pandas as pd
 import pysam
 
+from robin.analysis.bam_sanitize import (
+    is_corrupt_alignment_error,
+    is_missing_index_error,
+    iter_alignments,
+)
 from robin.analysis.master_bed_generator import FileLock
 from robin.utils.sequencing_files import resolve_panel_bed_path
 
@@ -717,36 +722,8 @@ def extract_indels_in_region(
         logger.warning("Contig %s not found in BAM; skipping region", chrom)
         return {}, {}
 
-    for read in bam.fetch(bam_chrom, start, end + 1):
-        if read.is_unmapped or read.is_secondary or read.is_supplementary:
-            continue
-        if read.cigartuples is None or read.reference_start is None:
-            continue
-
-        qname = read.query_name or f"unnamed:{id(read)}"
-        ref_pos = int(read.reference_start)
-        for op, length in read.cigartuples:
-            # pysam: M=0, I=1, D=2, N=3, S=4, H=5, P=6, =7, X=8
-            if op in (0, 7, 8):  # match / sequence match / mismatch
-                seg_start = max(start, ref_pos)
-                seg_end = min(end, ref_pos + length - 1)
-                if seg_end >= seg_start:
-                    read_intervals.append((seg_start, seg_end, qname))
-                ref_pos += length
-            elif op == 1:  # insertion
-                if start <= ref_pos <= end:
-                    indel_reads[ref_pos][length].add(qname)
-            elif op in (2, 3):  # deletion / skip
-                seg_start = max(start, ref_pos)
-                seg_end = min(end, ref_pos + length - 1)
-                if seg_end >= seg_start:
-                    read_intervals.append((seg_start, seg_end, qname))
-                if start <= ref_pos <= end:
-                    indel_reads[ref_pos][-length].add(qname)
-                ref_pos += length
-            elif op == 6:  # pad
-                ref_pos += length
-            # soft/hard clip: ignore
+    for read in _iter_region_reads(bam, bam_chrom, start, end):
+        _accumulate_indel_read(read, start, end, indel_reads, read_intervals)
 
     indels = {
         pos: {length: len(names) for length, names in lengths.items()}
@@ -765,6 +742,72 @@ def extract_indels_in_region(
             names.update(carriers)
         coverage[pos] = len(names)
     return indels, coverage
+
+
+def _iter_region_reads(
+    bam: pysam.AlignmentFile,
+    chrom: str,
+    start: int,
+    end: int,
+):
+    """Yield readable alignments over a region; scan the file if fetch needs an index."""
+    try:
+        yield from iter_alignments(bam, chrom, start, end + 1)
+        return
+    except ValueError as exc:
+        if not is_missing_index_error(exc):
+            raise
+    for read in iter_alignments(bam, until_eof=True):
+        if _read_overlaps_region(read, chrom, start, end):
+            yield read
+
+
+def _read_overlaps_region(
+    read: pysam.AlignedSegment, chrom: str, start: int, end: int
+) -> bool:
+    if read.is_unmapped or read.reference_name != chrom:
+        return False
+    if read.reference_start is None or read.reference_end is None:
+        return False
+    return read.reference_start < end + 1 and read.reference_end > start
+
+
+def _accumulate_indel_read(
+    read: pysam.AlignedSegment,
+    start: int,
+    end: int,
+    indel_reads: Dict[int, Dict[int, set[str]]],
+    read_intervals: List[Tuple[int, int, str]],
+) -> None:
+    if read.is_unmapped or read.is_secondary or read.is_supplementary:
+        return
+    if read.cigartuples is None or read.reference_start is None:
+        return
+
+    qname = read.query_name or f"unnamed:{id(read)}"
+    ref_pos = int(read.reference_start)
+    for op, length in read.cigartuples:
+        # pysam: M=0, I=1, D=2, N=3, S=4, H=5, P=6, =7, X=8
+        if op in (0, 7, 8):  # match / sequence match / mismatch
+            seg_start = max(start, ref_pos)
+            seg_end = min(end, ref_pos + length - 1)
+            if seg_end >= seg_start:
+                read_intervals.append((seg_start, seg_end, qname))
+            ref_pos += length
+        elif op == 1:  # insertion
+            if start <= ref_pos <= end:
+                indel_reads[ref_pos][length].add(qname)
+        elif op in (2, 3):  # deletion / skip
+            seg_start = max(start, ref_pos)
+            seg_end = min(end, ref_pos + length - 1)
+            if seg_end >= seg_start:
+                read_intervals.append((seg_start, seg_end, qname))
+            if start <= ref_pos <= end:
+                indel_reads[ref_pos][-length].add(qname)
+            ref_pos += length
+        elif op == 6:  # pad
+            ref_pos += length
+        # soft/hard clip: ignore
 
 
 def _depth_at(
@@ -941,46 +984,176 @@ def process_bam_itd_pass(
     hotspots: Mapping[str, ItdHotspot],
 ) -> pd.DataFrame:
     """Scan one BAM over active hotspots; return per-(gene,pos,len) count rows."""
+    try:
+        with pysam.AlignmentFile(bam_path, "rb") as bam:
+            if bam.has_index():
+                return _itd_counts_from_regions(bam, bam_path, hotspots)
+            logger.warning(
+                "ITD: %s has no index; scanning readable alignments sequentially",
+                os.path.basename(bam_path),
+            )
+            return _itd_counts_from_sequential_scan(bam, bam_path, hotspots)
+    except Exception as exc:
+        if not (is_missing_index_error(exc) or is_corrupt_alignment_error(exc)):
+            raise
+        logger.warning(
+            "ITD fetch failed on %s (%s); recounting while skipping unreadable alignments",
+            os.path.basename(bam_path),
+            exc,
+        )
+        try:
+            with pysam.AlignmentFile(bam_path, "rb") as bam:
+                return _itd_counts_from_sequential_scan(bam, bam_path, hotspots)
+        except Exception as retry_exc:
+            logger.warning(
+                "Skipping ITD scan for %s: %s",
+                os.path.basename(bam_path),
+                retry_exc,
+            )
+            return pd.DataFrame(columns=ITD_COUNT_COLUMNS)
+
+
+def _itd_counts_from_regions(
+    bam: pysam.AlignmentFile,
+    bam_path: str,
+    hotspots: Mapping[str, ItdHotspot],
+) -> pd.DataFrame:
+    """Indexed path: fetch each hotspot window, skipping unreadable alignments."""
     rows: List[Dict[str, Any]] = []
-    with pysam.AlignmentFile(bam_path, "rb") as bam:
-        for gene, hotspot in hotspots.items():
-            # Merge indel/coverage across sparse scan intervals for this gene.
-            merged_indels: Dict[int, Dict[int, int]] = defaultdict(dict)
-            merged_coverage: Dict[int, int] = {}
-            for seg_start, seg_end in hotspot.iter_scan_intervals():
-                indels, coverage = extract_indels_in_region(
-                    bam, hotspot.chrom, seg_start, seg_end
-                )
-                for position, lengths in indels.items():
-                    if not hotspot.contains(position):
-                        continue
-                    for length, support in lengths.items():
-                        if length <= 0:
-                            continue
-                        prev = merged_indels[position].get(length, 0)
-                        merged_indels[position][length] = max(prev, int(support))
-                    merged_coverage[position] = max(
-                        merged_coverage.get(position, 0),
-                        int(coverage.get(position, 0)),
-                    )
-            for position, lengths in merged_indels.items():
-                depth = int(merged_coverage.get(position, 0))
-                for length, support in lengths.items():
-                    rows.append(
-                        {
-                            "gene": gene,
-                            "chrom": hotspot.chrom,
-                            "position": int(position),
-                            "length": int(length),
-                            "support": int(support),
-                            "coverage": depth,
-                            "label": hotspot.label,
-                            "bam_path": os.path.basename(bam_path),
-                        }
-                    )
+    for gene, hotspot in hotspots.items():
+        merged_indels, merged_coverage = _merge_hotspot_windows(
+            (
+                extract_indels_in_region(bam, hotspot.chrom, seg_start, seg_end)
+                for seg_start, seg_end in hotspot.iter_scan_intervals()
+            ),
+            hotspot,
+        )
+        rows.extend(
+            _itd_count_rows(gene, hotspot, merged_indels, merged_coverage, bam_path)
+        )
     if not rows:
         return pd.DataFrame(columns=ITD_COUNT_COLUMNS)
     return pd.DataFrame(rows, columns=ITD_COUNT_COLUMNS)
+
+
+def _itd_counts_from_sequential_scan(
+    bam: pysam.AlignmentFile,
+    bam_path: str,
+    hotspots: Mapping[str, ItdHotspot],
+) -> pd.DataFrame:
+    """
+    Same recount as coverage: walk the original BAM once and skip bad records.
+
+    Used when the BAM has no index or indexed fetch aborted on a CIGAR/query
+    length mismatch. The source BAM is not rewritten.
+    """
+    windows: List[Tuple[str, ItdHotspot, str, int, int]] = []
+    for gene, hotspot in hotspots.items():
+        bam_chrom = resolve_bam_contig(bam, hotspot.chrom)
+        if bam_chrom is None:
+            logger.warning("Contig %s not found in BAM; skipping region", hotspot.chrom)
+            continue
+        for seg_start, seg_end in hotspot.iter_scan_intervals():
+            windows.append((gene, hotspot, bam_chrom, seg_start, seg_end))
+
+    window_state = [
+        (gene, hotspot, chrom, start, end, defaultdict(lambda: defaultdict(set)), [])
+        for gene, hotspot, chrom, start, end in windows
+    ]
+    by_chrom: Dict[str, List[int]] = defaultdict(list)
+    for idx, (_gene, _hotspot, chrom, _start, _end, _indels, _intervals) in enumerate(
+        window_state
+    ):
+        by_chrom[chrom].append(idx)
+
+    for read in iter_alignments(bam, until_eof=True):
+        if read.is_unmapped or read.reference_name is None:
+            continue
+        for idx in by_chrom.get(read.reference_name, ()):
+            _gene, _hotspot, chrom, start, end, indel_reads, read_intervals = (
+                window_state[idx]
+            )
+            if _read_overlaps_region(read, chrom, start, end):
+                _accumulate_indel_read(read, start, end, indel_reads, read_intervals)
+
+    rows: List[Dict[str, Any]] = []
+    grouped: Dict[str, List[Tuple[ItdHotspot, Dict[int, Dict[int, int]], Dict[int, int]]]] = defaultdict(list)
+    for gene, hotspot, _chrom, start, end, indel_reads, read_intervals in window_state:
+        indels = {
+            pos: {length: len(names) for length, names in lengths.items()}
+            for pos, lengths in indel_reads.items()
+        }
+        coverage: Dict[int, int] = {}
+        for pos, lengths in indel_reads.items():
+            names = set()
+            for seg_start, seg_end, qname in read_intervals:
+                if seg_start <= pos <= seg_end:
+                    names.add(qname)
+            for carriers in lengths.values():
+                names.update(carriers)
+            coverage[pos] = len(names)
+        grouped[gene].append((hotspot, indels, coverage))
+
+    for gene, pieces in grouped.items():
+        hotspot = pieces[0][0]
+        merged_indels, merged_coverage = _merge_hotspot_windows(
+            ((indels, coverage) for _hotspot, indels, coverage in pieces),
+            hotspot,
+        )
+        rows.extend(
+            _itd_count_rows(gene, hotspot, merged_indels, merged_coverage, bam_path)
+        )
+    if not rows:
+        return pd.DataFrame(columns=ITD_COUNT_COLUMNS)
+    return pd.DataFrame(rows, columns=ITD_COUNT_COLUMNS)
+
+
+def _merge_hotspot_windows(
+    window_results: Iterable[Tuple[Dict[int, Dict[int, int]], Dict[int, int]]],
+    hotspot: ItdHotspot,
+) -> Tuple[Dict[int, Dict[int, int]], Dict[int, int]]:
+    merged_indels: Dict[int, Dict[int, int]] = defaultdict(dict)
+    merged_coverage: Dict[int, int] = {}
+    for indels, coverage in window_results:
+        for position, lengths in indels.items():
+            if not hotspot.contains(position):
+                continue
+            for length, support in lengths.items():
+                if length <= 0:
+                    continue
+                prev = merged_indels[position].get(length, 0)
+                merged_indels[position][length] = max(prev, int(support))
+            merged_coverage[position] = max(
+                merged_coverage.get(position, 0),
+                int(coverage.get(position, 0)),
+            )
+    return merged_indels, merged_coverage
+
+
+def _itd_count_rows(
+    gene: str,
+    hotspot: ItdHotspot,
+    merged_indels: Mapping[int, Mapping[int, int]],
+    merged_coverage: Mapping[int, int],
+    bam_path: str,
+) -> List[Dict[str, Any]]:
+    rows: List[Dict[str, Any]] = []
+    for position, lengths in merged_indels.items():
+        depth = int(merged_coverage.get(position, 0))
+        for length, support in lengths.items():
+            rows.append(
+                {
+                    "gene": gene,
+                    "chrom": hotspot.chrom,
+                    "position": int(position),
+                    "length": int(length),
+                    "support": int(support),
+                    "coverage": depth,
+                    "label": hotspot.label,
+                    "bam_path": os.path.basename(bam_path),
+                }
+            )
+    return rows
 
 
 def _sample_dir(work_dir: str, sample_id: str) -> str:

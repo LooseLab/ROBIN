@@ -34,6 +34,13 @@ import pandas as pd
 import pysam
 from robin.logging_config import get_job_logger
 from robin.runtime_limits import resolve_bam_io_threads
+from robin.analysis.bam_sanitize import (
+    bam_index_exists,
+    is_corrupt_alignment_error,
+    is_missing_index_error,
+    is_samtools_tool_error,
+    iter_alignments,
+)
 from robin.analysis.snp_processing import write_clair_variant_display_files
 from robin.utils.clairs_to_docker import (
     ClairsToImageError,
@@ -312,7 +319,7 @@ def _bam_has_any_alignment(bam_path: str) -> bool:
         if not os.path.exists(bam_path) or os.path.getsize(bam_path) == 0:
             return False
         with pysam.AlignmentFile(bam_path, "rb") as bam:
-            for _ in bam.fetch(until_eof=True):
+            for _ in iter_alignments(bam, until_eof=True):
                 return True
     except OSError:
         return False
@@ -511,89 +518,123 @@ def run_bedtools(bamfile, bedfile, tempbamfile, regions: Optional[List[Tuple[str
             pysam.index(tempbamfile)
             return
         
-        # Open input BAM and collect read names from primary alignments overlapping regions
-        read_names = set()
-        with pysam.AlignmentFile(bamfile, "rb") as in_bam:
-            # Require BAM index for performance and correctness
-            index_file = f"{bamfile}.bai"
-            if not os.path.exists(index_file):
-                raise FileNotFoundError(f"BAM index (.bai) not found for {bamfile}")
-            
-            # Use indexed access (faster)
-            for chrom, start, end in regions:
-                try:
-                    # Fetch reads overlapping this region
-                    for read in in_bam.fetch(chrom, start, end):
-                        # Only primary alignments (not supplementary or secondary)
-                        if (read.flag & _BAM_NON_PRIMARY_MASK) == 0:
-                            read_names.add(read.query_name)
-                except ValueError:
-                    # Chromosome not found in BAM, skip
-                    logger.debug(f"Chromosome {chrom} not found in BAM file, skipping")
-                    continue
-        
-        logger.debug(f"Found {len(read_names)} unique read names overlapping target regions")
-        
-        if not read_names:
-            logger.warning("No reads found overlapping target regions")
-            # Create empty BAM file with same header
-            with pysam.AlignmentFile(bamfile, "rb") as in_bam:
-                header = in_bam.header.copy()
-                with pysam.AlignmentFile(tempbamfile, "wb", header=header) as out_bam:
-                    pass
-            pysam.index(tempbamfile)
-            return
-        
-        # Step 2: Extract ALL alignments (primary, secondary, supplementary) for those read names
-        logger.debug(f"Step 2: Extracting all alignments for {len(read_names)} read names")
-        
-        reads_written = 0
-        names = read_names
-        with pysam.AlignmentFile(bamfile, "rb") as in_bam:
-            header = in_bam.header.copy()
-            with pysam.AlignmentFile(tempbamfile, "wb", header=header) as out_bam:
-                # Single pass: emit all alignments for reads that hit target regions in step 1
-                for read in in_bam.fetch(until_eof=True):
-                    if read.query_name in names:
-                        out_bam.write(read)
-                        reads_written += 1
-                
-                # Ensure all data is written to disk before closing
-                out_bam.flush()
-                logger.debug(f"Wrote {reads_written} alignments (including secondary/supplementary) to output BAM")
-        
-        # Verify the file was written successfully before indexing
-        if not os.path.exists(tempbamfile):
-            raise RuntimeError(f"Output BAM file was not created: {tempbamfile}")
-        
-        file_size = os.path.getsize(tempbamfile)
-        if file_size == 0:
-            logger.warning(f"Output BAM file is empty: {tempbamfile}")
-        else:
-            logger.debug(f"Output BAM file size: {file_size} bytes")
-        
-        # Index the output BAM (only if file has content)
-        if file_size > 0:
-            try:
-                pysam.index(tempbamfile)
-                logger.info(f"Successfully extracted target regions to {tempbamfile} ({reads_written} alignments)")
-            except Exception as e:
-                logger.error(f"Failed to index BAM file {tempbamfile}: {e}")
-                # Try to verify if the BAM file is valid
-                try:
-                    with pysam.AlignmentFile(tempbamfile, "rb") as test_bam:
-                        test_count = test_bam.count(until_eof=True)
-                        logger.info(f"BAM file is readable, contains {test_count} reads")
-                except Exception as verify_error:
-                    logger.error(f"BAM file appears corrupted: {verify_error}")
-                    raise
-        else:
-            logger.warning(f"Skipping indexing for empty BAM file: {tempbamfile}")
-        
+        _extract_target_reads(bamfile, regions, tempbamfile, logger)
+        return
+
     except Exception as e:
         logger.error(f"Error in run_bedtools: {e}")
         import traceback
         logger.error(traceback.format_exc())
+
+
+def _extract_target_reads(
+    bamfile: str,
+    regions: List[Tuple[str, int, int]],
+    tempbamfile: str,
+    logger: logging.Logger,
+) -> None:
+    """Write alignments for reads overlapping ``regions`` into ``tempbamfile``."""
+    read_names = set()
+    with pysam.AlignmentFile(bamfile, "rb") as in_bam:
+        use_index = bool(in_bam.has_index()) if hasattr(in_bam, "has_index") else bam_index_exists(bamfile)
+        if use_index:
+            try:
+                for chrom, start, end in regions:
+                    try:
+                        for read in iter_alignments(in_bam, chrom, start, end):
+                            if (read.flag & _BAM_NON_PRIMARY_MASK) == 0:
+                                read_names.add(read.query_name)
+                    except ValueError:
+                        logger.debug(f"Chromosome {chrom} not found in BAM file, skipping")
+                        continue
+            except Exception as exc:
+                if not is_corrupt_alignment_error(exc):
+                    raise
+                logger.warning(
+                    "Indexed fetch failed on %s (%s); scanning readable alignments sequentially",
+                    os.path.basename(bamfile),
+                    exc,
+                )
+                use_index = False
+                read_names.clear()
+        if not use_index:
+            logger.warning(
+                "BAM index not available for %s; scanning all alignments",
+                os.path.basename(bamfile),
+            )
+            region_by_chrom: Dict[str, List[Tuple[int, int]]] = {}
+            for chrom, start, end in regions:
+                region_by_chrom.setdefault(chrom, []).append((start, end))
+            for read in iter_alignments(in_bam, until_eof=True):
+                if (read.flag & _BAM_NON_PRIMARY_MASK) != 0:
+                    continue
+                if read.is_unmapped or read.reference_name is None:
+                    continue
+                intervals = region_by_chrom.get(read.reference_name)
+                if not intervals:
+                    continue
+                ref_start = read.reference_start
+                ref_end = read.reference_end
+                if ref_start is None or ref_end is None:
+                    continue
+                if any(start < ref_end and end > ref_start for start, end in intervals):
+                    read_names.add(read.query_name)
+
+    logger.debug(f"Found {len(read_names)} unique read names overlapping target regions")
+
+    if not read_names:
+        logger.warning("No reads found overlapping target regions")
+        with pysam.AlignmentFile(bamfile, "rb") as in_bam:
+            header = in_bam.header.copy()
+            with pysam.AlignmentFile(tempbamfile, "wb", header=header) as out_bam:
+                pass
+        try:
+            pysam.index(tempbamfile)
+        except Exception as index_exc:
+            logger.debug("Could not index empty target BAM %s: %s", tempbamfile, index_exc)
+        return
+
+    logger.debug(f"Step 2: Extracting all alignments for {len(read_names)} read names")
+
+    reads_written = 0
+    names = read_names
+    with pysam.AlignmentFile(bamfile, "rb") as in_bam:
+        header = in_bam.header.copy()
+        with pysam.AlignmentFile(tempbamfile, "wb", header=header) as out_bam:
+            for read in iter_alignments(in_bam, until_eof=True):
+                if read.query_name in names:
+                    out_bam.write(read)
+                    reads_written += 1
+            out_bam.flush()
+            logger.debug(
+                "Wrote %d alignments (including secondary/supplementary) to output BAM",
+                reads_written,
+            )
+
+    if not os.path.exists(tempbamfile):
+        raise RuntimeError(f"Output BAM file was not created: {tempbamfile}")
+
+    file_size = os.path.getsize(tempbamfile)
+    if file_size == 0:
+        logger.warning(f"Output BAM file is empty: {tempbamfile}")
+        logger.warning(f"Skipping indexing for empty BAM file: {tempbamfile}")
+        return
+
+    logger.debug(f"Output BAM file size: {file_size} bytes")
+    try:
+        pysam.index(tempbamfile)
+        logger.info(
+            f"Successfully extracted target regions to {tempbamfile} ({reads_written} alignments)"
+        )
+    except Exception as e:
+        logger.error(f"Failed to index BAM file {tempbamfile}: {e}")
+        try:
+            with pysam.AlignmentFile(tempbamfile, "rb") as test_bam:
+                test_count = test_bam.count(until_eof=True)
+                logger.info(f"BAM file is readable, contains {test_count} reads")
+        except Exception as verify_error:
+            logger.error(f"BAM file appears corrupted: {verify_error}")
+            raise
 
 
 def get_covdfs(bamfile, bedfile=None):
@@ -619,85 +660,209 @@ def get_covdfs(bamfile, bedfile=None):
 
     Notes
     -----
-    Uses pysam for efficient BAM file processing.
+    Uses pysam/samtools for BAM processing. If a record has a CIGAR/query
+    length mismatch, samtools coverage/bedcov abort; we then recount from
+    readable alignments in-place so the rest of the sample can continue.
     """
     logger = logging.getLogger("robin.target")
+    target_bed = _resolve_target_bed(bedfile)
 
     try:
-        # Get genome-wide coverage using pysam.coverage
-        coverage_output = pysam.coverage(f"{bamfile}")
+        return _extract_covdfs(bamfile, target_bed, logger)
+    except Exception as exc:
+        if not (is_corrupt_alignment_error(exc) or is_samtools_tool_error(exc)):
+            logger.error(f"Error in get_covdfs: {str(exc)}")
+            return None, None
+        logger.warning(
+            "Coverage tools failed on %s (%s); recounting while skipping unreadable alignments",
+            os.path.basename(bamfile),
+            exc,
+        )
+        try:
+            return _extract_covdfs_skipping_corrupt(bamfile, target_bed, logger)
+        except Exception as retry_exc:
+            logger.error(f"Error in get_covdfs: {str(retry_exc)}")
+            return None, None
 
-        newcovdf = pd.read_csv(StringIO(coverage_output), sep="\t")
 
-        if logger.isEnabledFor(logging.DEBUG):
-            logger.debug(f"Raw pysam.coverage columns: {list(newcovdf.columns)}")
-            logger.debug(
-                "Sample raw coverage data: %s",
-                newcovdf.head(2).to_dict("records"),
+def _resolve_target_bed(bedfile: Optional[str]) -> Optional[str]:
+    """Return the target BED path, falling back to unique_genes.bed."""
+    if bedfile:
+        return bedfile
+    if resources is not None:
+        try:
+            target_bed = os.path.join(
+                os.path.dirname(os.path.abspath(resources.__file__)),
+                "unique_genes.bed",
             )
+            if os.path.exists(target_bed):
+                return target_bed
+        except Exception:
+            pass
+    for path in (
+        "unique_genes.bed",
+        "data/unique_genes.bed",
+        "/usr/local/share/unique_genes.bed",
+    ):
+        if os.path.exists(path):
+            return path
+    return None
 
-        newcovdf.drop(
-            columns=["coverage", "meanbaseq", "meanmapq"],
-            inplace=True,
+
+def _extract_covdfs(bamfile: str, target_bed: Optional[str], logger: logging.Logger):
+    """Run samtools coverage + bedcov against a BAM that tools can read."""
+    coverage_output = pysam.coverage(f"{bamfile}")
+    newcovdf = pd.read_csv(StringIO(coverage_output), sep="\t")
+
+    if logger.isEnabledFor(logging.DEBUG):
+        logger.debug(f"Raw pysam.coverage columns: {list(newcovdf.columns)}")
+        logger.debug(
+            "Sample raw coverage data: %s",
+            newcovdf.head(2).to_dict("records"),
         )
 
-        if logger.isEnabledFor(logging.DEBUG):
-            logger.debug(f"After dropping columns: {list(newcovdf.columns)}")
+    newcovdf.drop(
+        columns=["coverage", "meanbaseq", "meanmapq"],
+        inplace=True,
+    )
 
-        # Find target BED file - use provided bedfile or fallback to unique_genes.bed
-        target_bed = bedfile
-        if target_bed is None:
-            # Fallback to unique_genes.bed for backward compatibility
-            if resources is not None:
-                try:
-                    target_bed = os.path.join(
-                        os.path.dirname(os.path.abspath(resources.__file__)),
-                        "unique_genes.bed",
-                    )
-                    if not os.path.exists(target_bed):
-                        target_bed = None
-                except Exception:
-                    pass
+    if logger.isEnabledFor(logging.DEBUG):
+        logger.debug(f"After dropping columns: {list(newcovdf.columns)}")
 
-            # Fallback paths for unique_genes.bed
-            if target_bed is None:
-                possible_paths = [
-                    "unique_genes.bed",
-                    "data/unique_genes.bed",
-                    "/usr/local/share/unique_genes.bed",
-                ]
-                for path in possible_paths:
-                    if os.path.exists(path):
-                        target_bed = path
-                        break
+    if target_bed is None:
+        logger.warning("Target BED file not found, skipping bedcov analysis")
+        bedcovdf = pd.DataFrame(
+            columns=["chrom", "startpos", "endpos", "name", "bases"]
+        )
+    else:
+        bedcovdf = pd.read_csv(
+            StringIO(
+                pysam.bedcov(
+                    target_bed,
+                    f"{bamfile}",
+                )
+            ),
+            names=["chrom", "startpos", "endpos", "name", "bases"],
+            sep="\t",
+        )
 
-        if target_bed is None:
-            logger.warning("Target BED file not found, skipping bedcov analysis")
-            bedcovdf = pd.DataFrame(
-                columns=["chrom", "startpos", "endpos", "name", "bases"]
-            )
+    logger.info(f"Successfully extracted coverage data from {bamfile}")
+    logger.info(f"Genome coverage: {len(newcovdf)} regions")
+    logger.info(f"Target coverage: {len(bedcovdf)} regions")
+    return newcovdf, bedcovdf
+
+
+def _merge_covered_bases(intervals: List[Tuple[int, int]]) -> int:
+    """Return the number of unique bases covered by half-open intervals."""
+    if not intervals:
+        return 0
+    intervals.sort()
+    total = 0
+    current_start, current_end = intervals[0]
+    for start, end in intervals[1:]:
+        if start <= current_end:
+            current_end = max(current_end, end)
         else:
-            # Get target region coverage using pysam.bedcov
-            bedcovdf = pd.read_csv(
-                StringIO(
-                    pysam.bedcov(
-                        target_bed,
-                        f"{bamfile}",
-                    )
-                ),
-                names=["chrom", "startpos", "endpos", "name", "bases"],
-                sep="\t",
-            )
+            total += current_end - current_start
+            current_start, current_end = start, end
+    return total + current_end - current_start
 
-        logger.info(f"Successfully extracted coverage data from {bamfile}")
-        logger.info(f"Genome coverage: {len(newcovdf)} regions")
-        logger.info(f"Target coverage: {len(bedcovdf)} regions")
 
-        return newcovdf, bedcovdf
+def _extract_covdfs_skipping_corrupt(
+    bamfile: str, target_bed: Optional[str], logger: logging.Logger
+):
+    """
+    Recount genome and target coverage while skipping unreadable alignments.
 
-    except Exception as e:
-        logger.error(f"Error in get_covdfs: {str(e)}")
-        return None, None
+    Used when samtools coverage/bedcov abort on a CIGAR/query-length mismatch.
+    The source BAM is not rewritten.
+    """
+    bed_regions: List[Tuple[str, int, int, str]] = []
+    if target_bed:
+        with open(target_bed, "r") as handle:
+            for line in handle:
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                parts = line.split("\t")
+                if len(parts) < 3:
+                    continue
+                name = parts[3] if len(parts) >= 4 and parts[3].strip() else f"{parts[0]}:{parts[1]}-{parts[2]}"
+                bed_regions.append((parts[0], int(parts[1]), int(parts[2]), name))
+
+    with pysam.AlignmentFile(bamfile, "rb", check_sq=False) as bam:
+        contig_reads: Dict[str, int] = {ref: 0 for ref in bam.references}
+        contig_spans: Dict[str, List[Tuple[int, int]]] = {ref: [] for ref in bam.references}
+        contig_aligned: Dict[str, int] = {ref: 0 for ref in bam.references}
+        contig_length = {
+            ref: int(bam.get_reference_length(ref) or 0) for ref in bam.references
+        }
+        bed_bases = [0] * len(bed_regions)
+        regions_by_chrom: Dict[str, List[Tuple[int, int, int]]] = {}
+        for idx, (chrom, start, end, _name) in enumerate(bed_regions):
+            regions_by_chrom.setdefault(chrom, []).append((idx, start, end))
+
+        for read in iter_alignments(bam, until_eof=True):
+            if read.is_unmapped or read.reference_name is None:
+                continue
+            ref = read.reference_name
+            ref_start = read.reference_start
+            ref_end = read.reference_end
+            if ref_start is None or ref_end is None or ref_end <= ref_start:
+                continue
+            if ref in contig_reads:
+                contig_reads[ref] += 1
+                contig_spans[ref].append((ref_start, ref_end))
+                contig_aligned[ref] += ref_end - ref_start
+            for idx, start, end in regions_by_chrom.get(ref, ()):
+                overlap = min(ref_end, end) - max(ref_start, start)
+                if overlap > 0:
+                    bed_bases[idx] += overlap
+
+    genome_rows = []
+    for ref in contig_reads:
+        length = contig_length.get(ref, 0) or 0
+        genome_rows.append(
+            {
+                "#rname": ref,
+                "startpos": 1,
+                "endpos": length or 1,
+                "numreads": contig_reads[ref],
+                "covbases": _merge_covered_bases(contig_spans[ref]),
+                "meandepth": (contig_aligned[ref] / length) if length else 0.0,
+            }
+        )
+    newcovdf = pd.DataFrame(
+        genome_rows,
+        columns=["#rname", "startpos", "endpos", "numreads", "covbases", "meandepth"],
+    )
+    if target_bed is None:
+        logger.warning("Target BED file not found, skipping bedcov analysis")
+        bedcovdf = pd.DataFrame(
+            columns=["chrom", "startpos", "endpos", "name", "bases"]
+        )
+    else:
+        bedcovdf = pd.DataFrame(
+            [
+                {
+                    "chrom": chrom,
+                    "startpos": start,
+                    "endpos": end,
+                    "name": name,
+                    "bases": bases,
+                }
+                for (chrom, start, end, name), bases in zip(bed_regions, bed_bases)
+            ],
+            columns=["chrom", "startpos", "endpos", "name", "bases"],
+        )
+
+    logger.info(
+        "Extracted coverage from readable alignments in %s",
+        os.path.basename(bamfile),
+    )
+    logger.info(f"Genome coverage: {len(newcovdf)} regions")
+    logger.info(f"Target coverage: {len(bedcovdf)} regions")
+    return newcovdf, bedcovdf
 
 
 def get_read_counts_per_target(bamfile, bedfile):
@@ -742,8 +907,7 @@ def get_read_counts_per_target(bamfile, bedfile):
         # Count reads per region
         read_counts = []
         with pysam.AlignmentFile(bamfile, "rb") as bam:
-            index_file = f"{bamfile}.bai"
-            if not os.path.exists(index_file):
+            if not bam_index_exists(bamfile):
                 logger.debug(
                     "BAM index (.bai) not found for %s; pysam may work if BAM is coordinate-sorted",
                     bamfile,
@@ -751,7 +915,7 @@ def get_read_counts_per_target(bamfile, bedfile):
             for chrom, start, end, name in bed_regions:
                 try:
                     read_count = 0
-                    for read in bam.fetch(chrom, start, end):
+                    for read in iter_alignments(bam, chrom, start, end):
                         if (read.flag & _BAM_NON_PRIMARY_MASK) == 0:
                             read_count += 1
                     
