@@ -279,6 +279,155 @@ def _create_data_hash(data: Dict[str, Any]) -> str:
         return ""
 
 
+def _validated_fusion_cluster_table(data: Dict[str, Any]) -> pd.DataFrame:
+    """Return breakpoint-validated fusion clusters, or an empty frame."""
+    try:
+        if not data or data.get("annotated_data") is None:
+            return pd.DataFrame()
+
+        annotated_data = data.get("annotated_data", pd.DataFrame())
+        goodpairs = data.get("goodpairs", pd.Series())
+
+        if annotated_data.empty:
+            return pd.DataFrame()
+
+        if not goodpairs.empty and goodpairs.sum() > 0:
+            aligned_goodpairs = goodpairs.reindex(annotated_data.index, fill_value=False)
+            filtered_data = annotated_data[aligned_goodpairs]
+        else:
+            filtered_data = annotated_data
+
+        if filtered_data.empty:
+            return pd.DataFrame()
+
+        clustered_data = _cluster_fusion_reads(
+            filtered_data, max_distance=10000, use_breakpoint_validation=True
+        )
+        if clustered_data is None or clustered_data.empty:
+            return pd.DataFrame()
+        return clustered_data
+    except Exception as e:
+        logging.warning(f"[Fusion] Failed to cluster validated fusion pairs: {e}")
+        return pd.DataFrame()
+
+
+def _cluster_row_breakpoint(row: pd.Series, prefix: str) -> str:
+    """Return a compact start-end (or single) coordinate for one fusion partner."""
+    pos_col = f"{prefix}_position"
+    if pos_col in row.index:
+        pos_raw = row.get(pos_col)
+        if pd.notna(pos_raw):
+            pos_text = str(pos_raw).strip().replace(",", "")
+            if pos_text and pos_text.lower() not in {"nan", "none"}:
+                return pos_text
+
+    start_col, end_col = f"{prefix}_start", f"{prefix}_end"
+    if start_col in row.index and end_col in row.index:
+        try:
+            start = int(row[start_col])
+            end = int(row[end_col])
+        except (TypeError, ValueError):
+            return ""
+        if start == end:
+            return str(start)
+        return f"{min(start, end)}-{max(start, end)}"
+    return ""
+
+
+def _format_fusion_locus(chrom: Any, position: str) -> str:
+    chrom_s = str(chrom or "").strip()
+    if chrom_s.lower() in {"nan", "none", "unknown"}:
+        chrom_s = ""
+    pos_s = str(position or "").strip()
+    if chrom_s and pos_s:
+        return f"{chrom_s}:{pos_s}"
+    return chrom_s or pos_s
+
+
+def _format_fusion_pair_with_breakpoints(row: pd.Series) -> str:
+    """Format one clustered fusion as ``PAIR|chr:pos|chr:pos``."""
+    pair = str(row.get("fusion_pair", "") or "").strip()
+    if not pair or pair.lower() in {"nan", "none"}:
+        return ""
+    loc1 = _format_fusion_locus(row.get("chr1"), _cluster_row_breakpoint(row, "gene1"))
+    loc2 = _format_fusion_locus(row.get("chr2"), _cluster_row_breakpoint(row, "gene2"))
+    parts = [part for part in (pair, loc1, loc2) if part]
+    return "|".join(parts)
+
+
+def _unique_fusion_pair_labels_from_table(clustered: pd.DataFrame) -> List[str]:
+    if clustered.empty or "fusion_pair" not in clustered.columns:
+        return []
+    pairs = {
+        str(p).strip()
+        for p in clustered["fusion_pair"].dropna().tolist()
+        if str(p).strip()
+    }
+    return sorted(pairs)
+
+
+def _fusion_pair_export_items_from_table(clustered: pd.DataFrame) -> List[str]:
+    """One TSV item per clustered breakpoint (pair plus coordinates)."""
+    if clustered.empty:
+        return []
+    items: List[str] = []
+    seen = set()
+    for _, row in clustered.iterrows():
+        formatted = _format_fusion_pair_with_breakpoints(row)
+        if formatted and formatted not in seen:
+            seen.add(formatted)
+            items.append(formatted)
+    return sorted(items)
+
+
+def _unique_fusion_pair_labels(data: Dict[str, Any]) -> List[str]:
+    """Return unique validated fusion pair labels, sorted.
+
+    Uses the same breakpoint-validation clustering as the fusion GUI / counts,
+    so exported pair names match ``target_fusions`` / ``genome_fusions``.
+    """
+    return _unique_fusion_pair_labels_from_table(_validated_fusion_cluster_table(data))
+
+
+def _fusion_pair_export_items(data: Dict[str, Any]) -> List[str]:
+    """Return sorted ``PAIR|chr:pos|chr:pos`` strings for validated clusters."""
+    return _fusion_pair_export_items_from_table(_validated_fusion_cluster_table(data))
+
+
+def _format_fusion_pair_list(pairs: List[str]) -> str:
+    """Join fusion pair labels for a single TSV cell."""
+    return "; ".join(pairs)
+
+
+def fusion_pair_lists_for_sample(sample_dir: Path) -> Dict[str, str]:
+    """Load processed fusion pickles and return TSV-ready pair lists.
+
+    ``target_pair_list`` comes from ``fusion_candidates_master_processed.pkl``.
+    ``genome_pair_list`` comes from ``fusion_candidates_all_processed.pkl``.
+    Each item is ``PAIR|chr:pos|chr:pos`` for a validated breakpoint cluster.
+    """
+    sample_dir = Path(sample_dir)
+    result = {"target_pair_list": "", "genome_pair_list": ""}
+    try:
+        target_file = sample_dir / "fusion_candidates_master_processed.pkl"
+        genome_file = sample_dir / "fusion_candidates_all_processed.pkl"
+        if target_file.exists():
+            target_data = _load_processed_pickle(target_file)
+            if target_data and isinstance(target_data, dict):
+                result["target_pair_list"] = _format_fusion_pair_list(
+                    _fusion_pair_export_items(target_data)
+                )
+        if genome_file.exists():
+            genome_data = _load_processed_pickle(genome_file)
+            if genome_data and isinstance(genome_data, dict):
+                result["genome_pair_list"] = _format_fusion_pair_list(
+                    _fusion_pair_export_items(genome_data)
+                )
+    except Exception as e:
+        logging.warning(f"[Fusion] Failed to build fusion pair lists for {sample_dir}: {e}")
+    return result
+
+
 def _count_unique_fusion_pairs(data: Dict[str, Any]) -> int:
     """Count unique fusion pairs from fusion data.
 
@@ -288,39 +437,7 @@ def _count_unique_fusion_pairs(data: Dict[str, Any]) -> int:
     Returns:
         Number of unique fusion pairs
     """
-    try:
-        if not data or data.get("annotated_data") is None:
-            return 0
-
-        annotated_data = data.get("annotated_data", pd.DataFrame())
-        goodpairs = data.get("goodpairs", pd.Series())
-
-        if annotated_data.empty:
-            return 0
-
-        # Filter to good pairs if available
-        if not goodpairs.empty and goodpairs.sum() > 0:
-            aligned_goodpairs = goodpairs.reindex(annotated_data.index, fill_value=False)
-            filtered_data = annotated_data[aligned_goodpairs]
-        else:
-            filtered_data = annotated_data
-
-        if filtered_data.empty:
-            return 0
-
-        # Get validated fusion pairs using breakpoint validation
-        clustered_data = _cluster_fusion_reads(filtered_data, max_distance=10000, use_breakpoint_validation=True)
-
-        if clustered_data.empty:
-            return 0
-
-        # Count unique fusion pairs
-        unique_pairs = clustered_data["fusion_pair"].nunique()
-        return int(unique_pairs)
-
-    except Exception as e:
-        logging.warning(f"[Fusion] Failed to count unique fusion pairs: {e}")
-        return 0
+    return len(_unique_fusion_pair_labels(data))
 
 
 def _get_validated_fusion_groups(data: Dict[str, Any]) -> List[List[str]]:

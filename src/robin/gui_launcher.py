@@ -7753,6 +7753,8 @@ class GUILauncher:
                     "target_groups",
                     "genome_pairs",
                     "genome_groups",
+                    "target_pair_list",
+                    "genome_pair_list",
                 ],
                 "mnpflex": [
                     "qc_status",
@@ -8085,6 +8087,18 @@ class GUILauncher:
                     except Exception as ex:
                         logging.debug(
                             "Could not extract read-length TSV fields for %s: %s",
+                            sample_id,
+                            ex,
+                        )
+
+                    try:
+                        from robin.gui.components.fusion import fusion_pair_lists_for_sample
+
+                        fusion_section = analysis.setdefault("fusion", {})
+                        fusion_section.update(fusion_pair_lists_for_sample(sample_dir))
+                    except Exception as ex:
+                        logging.debug(
+                            "Could not extract fusion pair lists for %s: %s",
                             sample_id,
                             ex,
                         )

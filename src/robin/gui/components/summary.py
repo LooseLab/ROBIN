@@ -1932,7 +1932,9 @@ def _extract_fusion_data(sample_dir: Path) -> Dict[str, Any]:
         "target_pairs": 0,
         "target_groups": 0,
         "genome_pairs": 0,
-        "genome_groups": 0
+        "genome_groups": 0,
+        "target_pair_list": "",
+        "genome_pair_list": "",
     }
     
     logging.info(f"[Summary] _extract_fusion_data() called with sample_dir: {sample_dir}")
@@ -2003,7 +2005,13 @@ def _extract_fusion_data(sample_dir: Path) -> Dict[str, Any]:
         
         # If still no data, try to load directly from pickle files and count gene_pairs
         try:
-            from robin.gui.components.fusion import _load_processed_pickle, _count_unique_fusion_pairs, _count_unique_fusion_groups
+            from robin.gui.components.fusion import (
+                _count_unique_fusion_groups,
+                _format_fusion_pair_list,
+                _fusion_pair_export_items,
+                _load_processed_pickle,
+                _unique_fusion_pair_labels,
+            )
             target_file = sample_dir / "fusion_candidates_master_processed.pkl"
             genome_file = sample_dir / "fusion_candidates_all_processed.pkl"
             
@@ -2014,15 +2022,23 @@ def _extract_fusion_data(sample_dir: Path) -> Dict[str, Any]:
             
             if target_data and isinstance(target_data, dict):
                 # Use filtered counts to match what's displayed in fusion section
-                fusion_data["target_fusions"] = _count_unique_fusion_pairs(target_data)
-                fusion_data["target_pairs"] = _count_unique_fusion_pairs(target_data)
+                target_pairs = _unique_fusion_pair_labels(target_data)
+                fusion_data["target_fusions"] = len(target_pairs)
+                fusion_data["target_pairs"] = len(target_pairs)
                 fusion_data["target_groups"] = _count_unique_fusion_groups(target_data)
+                fusion_data["target_pair_list"] = _format_fusion_pair_list(
+                    _fusion_pair_export_items(target_data)
+                )
             
             if genome_data and isinstance(genome_data, dict):
                 # Use filtered counts to match what's displayed in fusion section
-                fusion_data["genome_fusions"] = _count_unique_fusion_pairs(genome_data)
-                fusion_data["genome_pairs"] = _count_unique_fusion_pairs(genome_data)
+                genome_pairs = _unique_fusion_pair_labels(genome_data)
+                fusion_data["genome_fusions"] = len(genome_pairs)
+                fusion_data["genome_pairs"] = len(genome_pairs)
                 fusion_data["genome_groups"] = _count_unique_fusion_groups(genome_data)
+                fusion_data["genome_pair_list"] = _format_fusion_pair_list(
+                    _fusion_pair_export_items(genome_data)
+                )
             
             logging.info(f"[Summary] Fusion data loaded directly from pickle files - target: {fusion_data['target_fusions']} fusions, {fusion_data['target_pairs']} pairs, {fusion_data['target_groups']} groups; genome: {fusion_data['genome_fusions']} fusions, {fusion_data['genome_pairs']} pairs, {fusion_data['genome_groups']} groups")
             return fusion_data
