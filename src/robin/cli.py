@@ -3076,6 +3076,7 @@ def _display_workflow_config(
     use_ray: bool = False,
     ray_num_cpus: Optional[int] = None,
     queue_priority: tuple = (),
+    preset: Optional[str] = None,
 ) -> None:
     """Display workflow configuration information."""
     _echo_styled(f"Center: {center}", level="info")
@@ -3139,6 +3140,18 @@ def _display_workflow_config(
         click.echo(f"  - Analysis pool concurrency: {analysis_workers}")
         click.echo(f"  - Preprocessing pool concurrency: {preprocessing_workers}")
         click.echo(f"  - Bed conversion pool concurrency: {bed_workers}")
+        from robin.workflow_ray import (
+            _max_waiting_per_queue_cap,
+            _waiting_cap_multiplier,
+        )
+
+        waiting_mult = _waiting_cap_multiplier(preset)
+        waiting_per_queue = _max_waiting_per_queue_cap(64, waiting_mult)
+        click.echo(f"  - Waiting jobs per queue: {waiting_per_queue}")
+        if waiting_mult != 1:
+            click.echo(
+                f"  - Waiting cap multiplier: {waiting_mult}x (preset={preset or 'standard'})"
+            )
         click.echo(f"  - Log level: {log_level} (applied to all Ray actors)")
 
         # Display priority configuration
@@ -3643,6 +3656,7 @@ def workflow(
                 use_ray=True,
                 ray_num_cpus=ray_num_cpus,
                 queue_priority=queue_priority,
+                preset=preset,
             )
 
             # Create workflow runner for Ray workflow (needed for GUI integration)
@@ -3831,6 +3845,7 @@ def workflow(
             use_ray=use_ray,
             ray_num_cpus=ray_num_cpus,
             queue_priority=queue_priority,
+            preset=preset,
         )
 
         # Launch GUI if requested

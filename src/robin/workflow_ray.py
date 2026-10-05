@@ -1466,6 +1466,36 @@ def _job_timeout_seconds() -> int:
         return 0
 
 
+def _waiting_cap_multiplier(preset: Optional[str] = None) -> int:
+    """How many times the default waiting-queue caps to apply.
+
+    ``--preset high`` holds 10× more waiting jobs. Override with
+    ``ROBIN_WAITING_CAP_MULTIPLIER`` (minimum 1).
+    """
+    raw = os.getenv("ROBIN_WAITING_CAP_MULTIPLIER", "").strip()
+    if raw:
+        try:
+            return max(1, int(raw))
+        except (TypeError, ValueError):
+            pass
+    if (preset or "").lower().strip() == "high":
+        return 10
+    return 1
+
+
+def _max_waiting_per_queue_cap(
+    inflight_per_type: int, multiplier: int = 1
+) -> int:
+    """Per-queue waiting-job cap. Override with ``ROBIN_MAX_WAITING_PER_QUEUE``."""
+    raw = os.getenv("ROBIN_MAX_WAITING_PER_QUEUE", "").strip()
+    if raw:
+        try:
+            return max(1, int(raw))
+        except (TypeError, ValueError):
+            pass
+    return max(1, int(inflight_per_type) * 200 * max(1, int(multiplier)))
+
+
 @ray.remote
 class Coordinator:
     def __init__(
@@ -1496,6 +1526,8 @@ class Coordinator:
         self.preprocessing_workers = max(1, int(preprocessing_workers))
         self.bed_workers = max(1, int(bed_workers))
         self.target_panel = target_panel
+        self.preset: Optional[str] = preset
+        self.waiting_cap_multiplier: int = _waiting_cap_multiplier(preset)
 
         # Per-sample per-type serialization tracking
         self.running_by_type_sample: Dict[Tuple[str, str], int] = {}
@@ -1531,9 +1563,11 @@ class Coordinator:
         #   ROBIN_MAX_TOTAL_WAITING_SLACK=int  (default: 2 * max_total_inflight)
         #   ROBIN_MAX_TOTAL_WAITING=int        (if set, overrides cap for testing, e.g. 1280)
         _env_waiting_cap = os.getenv("ROBIN_MAX_TOTAL_WAITING", "").strip()
+        _used_explicit_waiting_cap = False
         if _env_waiting_cap:
             try:
                 self.max_total_waiting: int = max(64, int(_env_waiting_cap))
+                _used_explicit_waiting_cap = True
             except Exception:
                 try:
                     _slack = int(
@@ -1556,6 +1590,10 @@ class Coordinator:
             except Exception:
                 _slack = self.max_total_inflight * 2
             self.max_total_waiting: int = self.max_total_inflight * 40 + max(0, _slack)
+        if not _used_explicit_waiting_cap and self.waiting_cap_multiplier > 1:
+            self.max_total_waiting = (
+                int(self.max_total_waiting) * self.waiting_cap_multiplier
+            )
         # _wait_for_global_capacity blocks when total > max + this slack (not when > max).
         # Sequential _dispatch_ready_job calls in one submit burst can land a few slots
         # above max_total_waiting before the next check; without slack, Wait shows max+1
@@ -1582,7 +1620,10 @@ class Coordinator:
             q: self.max_inflight_per_type for q in QUEUE_TO_TYPES
         }
         self.max_waiting_per_queue: Dict[str, int] = {
-            q: self.max_inflight_per_type * 200 for q in QUEUE_TO_TYPES
+            q: _max_waiting_per_queue_cap(
+                self.max_inflight_per_type, self.waiting_cap_multiplier
+            )
+            for q in QUEUE_TO_TYPES
         }
         # Optional debug logging when backpressure caps are hit.
         # Enable with:
@@ -1632,7 +1673,6 @@ class Coordinator:
 
         # Preset controls how processing actors are created and their concurrency
         # None -> legacy per-type actors; otherwise use grouped Pool actors
-        self.preset: Optional[str] = preset
         self.using_pools: bool = False
 
         # Reference genome for SNP calling and other analyses
@@ -2305,7 +2345,12 @@ class Coordinator:
 
     def _queue_waiting_cap(self, queue_name: str) -> int:
         return int(
-            self.max_waiting_per_queue.get(queue_name, self.max_inflight_per_type * 20)
+            self.max_waiting_per_queue.get(
+                queue_name,
+                _max_waiting_per_queue_cap(
+                    self.max_inflight_per_type, self.waiting_cap_multiplier
+                ),
+            )
         )
 
     def _global_waiting_relief_threshold(self) -> int:
