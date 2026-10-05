@@ -1,6 +1,7 @@
 """
 Ray Core implementation of the robin workflow engine
 - Specialized per-queue actors (preprocessing, bed_conversion, mgmt, cnv, target, fusion, classification, slow)
+- Optional ``dedicated`` preset: lazy Pool-like actors keyed by (sample_id, job_type)
 - Central Coordinator actor for dedup (1 running + 1 pending per (sample_id, job_type)), triggers, stats
 - Handlers registered for real robin job types, with resource hints per job
 - tqdm-based live monitor similar to the original implementation
@@ -582,7 +583,7 @@ DEDUP_TYPES: Set[str] = {
 # Disabled: treat CNV like other analysis jobs (mgmt/target/fusion)
 SERIALIZE_BY_TYPE_PER_SAMPLE: Set[str] = set()
 
-# Classification job types (single global pipeline per type)
+# Classification job types (single global pipeline per type under non-sharded presets)
 CLASSIFICATION_TYPES: Set[str] = {
     "sturgeon",
     "nanodx",
@@ -592,6 +593,54 @@ CLASSIFICATION_TYPES: Set[str] = {
     "lamprey",
     "tucan",
 }
+
+# Job types that get a sticky Pool actor per sample under --preset dedicated.
+# target and target_bam_finalize share one per-sample actor so fold/finalize
+# cannot overlap target writes.
+_TARGET_SHARD_TYPES: Tuple[str, ...] = ("target", "target_bam_finalize")
+SHARDED_JOB_TYPES: Set[str] = {
+    "bed_conversion",
+    "mgmt",
+    "cnv",
+    "target",
+    "target_bam_finalize",
+    "fusion",
+    "itd",
+    *CLASSIFICATION_TYPES,
+    "igv_bam",
+    "snp_analysis",
+}
+
+
+def _shard_worker_key(job_type: str) -> str:
+    """Actor key within a sample. Target analysis and BAM finalize share one worker."""
+    if job_type in _TARGET_SHARD_TYPES:
+        return "target"
+    return job_type
+
+
+def _job_types_for_shard_key(shard_key: str) -> Tuple[str, ...]:
+    if shard_key == "target":
+        return _TARGET_SHARD_TYPES
+    return (shard_key,)
+
+
+def _sample_worker_lookup_key(
+    sample_id: Optional[str], job_type: str
+) -> Tuple[str, str]:
+    sid = sample_id or "unknown"
+    if not sid:
+        sid = "unknown"
+    return (sid, _shard_worker_key(job_type))
+
+
+def _uses_sample_shards(preset: Optional[str] = None) -> bool:
+    """True for ``--preset dedicated`` or ``ROBIN_SAMPLE_SHARDING=1``."""
+    raw = os.getenv("ROBIN_SAMPLE_SHARDING", "").strip().lower()
+    if raw in {"1", "true", "yes", "on"}:
+        return True
+    return (preset or "").lower().strip() == "dedicated"
+
 
 # Handlers record errors under analysis-specific keys; Pool must treat those as failures.
 _HANDLER_ERROR_ALIASES: Dict[str, Tuple[str, ...]] = {
@@ -1469,8 +1518,8 @@ def _job_timeout_seconds() -> int:
 def _waiting_cap_multiplier(preset: Optional[str] = None) -> int:
     """How many times the default waiting-queue caps to apply.
 
-    ``--preset high`` holds 10× more waiting jobs. Override with
-    ``ROBIN_WAITING_CAP_MULTIPLIER`` (minimum 1).
+    ``--preset high`` and ``--preset dedicated`` hold 10× more waiting jobs.
+    Override with ``ROBIN_WAITING_CAP_MULTIPLIER`` (minimum 1).
     """
     raw = os.getenv("ROBIN_WAITING_CAP_MULTIPLIER", "").strip()
     if raw:
@@ -1478,7 +1527,7 @@ def _waiting_cap_multiplier(preset: Optional[str] = None) -> int:
             return max(1, int(raw))
         except (TypeError, ValueError):
             pass
-    if (preset or "").lower().strip() == "high":
+    if (preset or "").lower().strip() in {"high", "dedicated"}:
         return 10
     return 1
 
@@ -1537,13 +1586,18 @@ class Coordinator:
         # Per-sample one-shot scheduling for classifiers/slow
         self.scheduled_by_sample: Dict[str, Set[str]] = {}
 
-        # Global one-in-flight per classification type. Extra triggers coalesce
-        # into one pending rerun per (sample, type).
+        # Global one-in-flight per classification type (non-sharded presets).
+        # Extra triggers coalesce into one pending rerun per (sample, type).
         self.classif_pending_by_type: Dict[str, int] = {}
         self.classif_waiting_by_type: Dict[str, Dict[str, Job]] = {}
+        # Per-sample classifier inflight counts used when sample sharding is on.
+        self.classif_pending_by_sample: Dict[Tuple[str, str], int] = {}
 
         # create one TypeProcessor actor per job type
         self.processors: Dict[str, Any] = {}
+        # Lazy Pool actors keyed by (sample_id, shard_key) for --preset dedicated
+        self.sample_workers: Dict[Tuple[str, str], Any] = {}
+        self._handler_specs: Dict[str, Tuple[Any, Dict[str, Any]]] = {}
         # inflight tracking: ObjectRef -> job
         self._inflight: Dict[Any, Job] = {}
         # backpressure: limit outstanding submissions per job type to avoid
@@ -1674,6 +1728,7 @@ class Coordinator:
         # Preset controls how processing actors are created and their concurrency
         # None -> legacy per-type actors; otherwise use grouped Pool actors
         self.using_pools: bool = False
+        self.using_sample_shards: bool = _uses_sample_shards(preset)
 
         # Reference genome for SNP calling and other analyses
         self.reference: Optional[str] = str(reference) if reference else None
@@ -2097,12 +2152,205 @@ class Coordinator:
 
         return job
 
+    # ----- sample-sharded workers (preset dedicated) -----
+    def _spawn_sample_worker(self, sample_id: str, shard_key: str) -> Any:
+        """Create an unnamed Pool actor for one (sample, shard_key). Tests may patch this."""
+        queue_name = "target" if shard_key == "target" else job_queue_of(shard_key)
+        job_timeout = getattr(self, "job_timeout_seconds", 0) or 0
+        max_conc = 1
+        try:
+            return Pool.options(max_concurrency=max_conc, num_cpus=0).remote(
+                queue_name, max_conc, job_timeout
+            )
+        except Exception:
+            try:
+                return Pool.options(
+                    max_concurrency=max_conc, num_cpus=0.001
+                ).remote(queue_name, max_conc, job_timeout)
+            except Exception:
+                return Pool.options(max_concurrency=max_conc).remote(
+                    queue_name, max_conc, job_timeout
+                )
+
+    async def _get_or_create_sample_worker(
+        self, sample_id: str, job_type: str
+    ) -> Any:
+        key = _sample_worker_lookup_key(sample_id, job_type)
+        existing = self.sample_workers.get(key)
+        if existing is not None:
+            return existing
+        pool = self._spawn_sample_worker(key[0], key[1])
+        try:
+            pool.set_coordinator_name.remote("robin_coordinator")
+        except Exception:
+            pass
+        for jt in _job_types_for_shard_key(key[1]):
+            spec = self._handler_specs.get(jt)
+            if spec is None:
+                continue
+            remote_func, opts = spec
+            try:
+                await pool.register_handler.remote(jt, remote_func, opts)
+            except Exception:
+                pass
+        self.sample_workers[key] = pool
+        return pool
+
+    async def _resolve_processor(
+        self, job_type: str, sample_id: Optional[str]
+    ) -> Any:
+        if self.using_sample_shards and job_type in SHARDED_JOB_TYPES:
+            return await self._get_or_create_sample_worker(
+                sample_id or "unknown", job_type
+            )
+        return self.processors.get(job_type)
+
+    def _enqueue_job_on_processor(self, proc: Any, job: Job) -> None:
+        if proc is None:
+            return
+        if getattr(self, "using_pools", False) or getattr(
+            self, "using_sample_shards", False
+        ):
+            try:
+                proc.enqueue.remote(job)
+            except Exception:
+                pass
+            return
+        ref = proc.process.remote(job)
+        self._inflight[ref] = job
+
+    def _classifier_is_busy(self, sample_id: Optional[str], job_type: str) -> bool:
+        if self.using_sample_shards:
+            key = (sample_id or "unknown", job_type)
+            return int(self.classif_pending_by_sample.get(key, 0) or 0) >= 1
+        return int(self.classif_pending_by_type.get(job_type, 0) or 0) >= 1
+
+    def _classifier_mark_started(
+        self, sample_id: Optional[str], job_type: str
+    ) -> None:
+        sid = sample_id or "unknown"
+        self.classif_pending_by_type[job_type] = (
+            int(self.classif_pending_by_type.get(job_type, 0) or 0) + 1
+        )
+        key = (sid, job_type)
+        self.classif_pending_by_sample[key] = (
+            int(self.classif_pending_by_sample.get(key, 0) or 0) + 1
+        )
+
+    def _classifier_mark_finished(
+        self, sample_id: Optional[str], job_type: str
+    ) -> None:
+        if int(self.classif_pending_by_type.get(job_type, 0) or 0) > 0:
+            self.classif_pending_by_type[job_type] -= 1
+            if self.classif_pending_by_type[job_type] == 0:
+                self.classif_pending_by_type.pop(job_type, None)
+        key = (sample_id or "unknown", job_type)
+        if int(self.classif_pending_by_sample.get(key, 0) or 0) > 0:
+            self.classif_pending_by_sample[key] -= 1
+            if self.classif_pending_by_sample[key] == 0:
+                self.classif_pending_by_sample.pop(key, None)
+
+    def _pop_next_classifier_job(
+        self, job_type: str, finished_sample_id: Optional[str]
+    ) -> Optional[Job]:
+        waiting_by_sample = self.classif_waiting_by_type.get(job_type) or {}
+        if not waiting_by_sample:
+            self.classif_waiting_by_type.pop(job_type, None)
+            return None
+        if self.using_sample_shards:
+            sid = finished_sample_id or "unknown"
+            nxt = waiting_by_sample.pop(sid, None)
+        else:
+            next_sample = next(iter(waiting_by_sample))
+            nxt = waiting_by_sample.pop(next_sample)
+        if not waiting_by_sample:
+            self.classif_waiting_by_type.pop(job_type, None)
+        return nxt
+
+    def _kill_sample_workers(self, sample_id: Optional[str] = None) -> None:
+        keys = [
+            key
+            for key in list(self.sample_workers.keys())
+            if sample_id is None or key[0] == sample_id
+        ]
+        for key in keys:
+            pool = self.sample_workers.pop(key, None)
+            if pool is None:
+                continue
+            try:
+                pool.shutdown.remote()
+            except Exception:
+                pass
+            try:
+                ray.kill(pool)
+            except Exception:
+                pass
+
+    def _iter_status_pools(self) -> List[Any]:
+        pools = list(dict.fromkeys(self.processors.values()))
+        for pool in self.sample_workers.values():
+            if pool not in pools:
+                pools.append(pool)
+        return pools
+
+    async def _setup_sharded_workers(
+        self, registrations: List[Tuple[str, Any]]
+    ) -> None:
+        """Global prep pool plus lazy per-sample workers for every other type."""
+        self._handler_specs = {
+            jt: (rf, RESOURCE_HINTS.get(jt, {})) for jt, rf in registrations
+        }
+        self.using_pools = True
+        self.using_sample_shards = True
+        par = max(1, int(self.preprocessing_workers))
+        job_timeout = getattr(self, "job_timeout_seconds", 0) or 0
+        try:
+            pool = Pool.options(
+                name="pool_prep", max_concurrency=par, num_cpus=0
+            ).remote("prep", par, job_timeout)
+        except Exception:
+            try:
+                pool = Pool.options(
+                    name="pool_prep", max_concurrency=par, num_cpus=0.001
+                ).remote("prep", par, job_timeout)
+            except Exception:
+                pool = Pool.options(max_concurrency=par).remote(
+                    "prep", par, job_timeout
+                )
+        try:
+            pool.set_coordinator_name.remote("robin_coordinator")
+        except Exception:
+            pass
+        prep_spec = self._handler_specs.get("preprocessing")
+        if prep_spec is not None:
+            rf, opts = prep_spec
+            try:
+                await pool.register_handler.remote("preprocessing", rf, opts)
+            except Exception:
+                pass
+        self.processors["preprocessing"] = pool
+
     # ----- handler registration API -----
     async def register_handler(self, job_type: str, remote_func) -> None:
         opts = RESOURCE_HINTS.get(job_type, {})
+        self._handler_specs[job_type] = (remote_func, opts)
         proc = self.processors.get(job_type)
         if proc is not None:
-            await proc.update_handler.remote(remote_func, opts)
+            try:
+                await proc.update_handler.remote(remote_func, opts)
+            except Exception:
+                try:
+                    await proc.register_handler.remote(job_type, remote_func, opts)
+                except Exception:
+                    pass
+        shard_key = _shard_worker_key(job_type)
+        for (_sid, sk), pool in list(self.sample_workers.items()):
+            if sk != shard_key:
+                continue
+            try:
+                await pool.register_handler.remote(job_type, remote_func, opts)
+            except Exception:
+                pass
 
     async def setup(self) -> None:
         """Async setup to register default handlers and start drain loop."""
@@ -2138,7 +2386,10 @@ class Coordinator:
         ]
 
         preset = (self.preset or "").lower().strip()
-        if preset in {"p2i", "standard"}:
+        self.using_sample_shards = _uses_sample_shards(self.preset)
+        if self.using_sample_shards:
+            await self._setup_sharded_workers(registrations)
+        elif preset in {"p2i", "standard"}:
             # Optionally reserve CPUs to cap global availability
             try:
                 total_cpus = float((ray.cluster_resources() or {}).get("CPU", 0))
@@ -2515,8 +2766,8 @@ class Coordinator:
                 pass
             return
 
-        # Found processor for job type
-        proc = self.processors.get(job.job_type)
+        # Found processor for job type (sample-sharded when sample_id is known)
+        proc = await self._resolve_processor(job.job_type, sample_id)
         if proc is None:
             return  # Skip jobs without processors
 
@@ -2563,14 +2814,7 @@ class Coordinator:
                 ent["last_seen"] = time.time()
         except Exception:
             pass
-        if getattr(self, "using_pools", False):
-            try:
-                proc.enqueue.remote(job)
-            except Exception:
-                pass
-        else:
-            ref = proc.process.remote(job)
-            self._inflight[ref] = job
+        self._enqueue_job_on_processor(proc, job)
         self.inflight_by_type[job.job_type] = inflight_for_type + 1
         self.inflight_by_queue[q] = int(self.inflight_by_queue.get(q, 0)) + 1
 
@@ -3135,6 +3379,7 @@ class Coordinator:
 
         # Remove completed samples
         for sid in samples_to_remove:
+            self._kill_sample_workers(sid)
             self.samples_by_id.pop(sid, None)
 
     async def _finalize_target_bams(self) -> None:
@@ -3668,14 +3913,15 @@ class Coordinator:
                 sample_id = (
                     ctx.get_sample_id() if hasattr(ctx, "get_sample_id") else "unknown"
                 )
-                # For each requested classification/slow type, allow at most
-                # one submitted at a time globally; keep at most one waiting.
+                # For each requested classification type, allow at most one
+                # in flight per sample when sharding (else globally); keep
+                # at most one waiting refresh per sample.
                 for t in TRIGGERS.get("bed_conversion", []):
                     if req_types is not None and t not in req_types:
                         continue
                     if t not in CLASSIFICATION_TYPES:
                         continue
-                    busy = self.classif_pending_by_type.get(t, 0) >= 1
+                    busy = self._classifier_is_busy(sample_id, t)
                     if not busy:
                         q = job_queue_of(t)
                         j = self._classifier_refresh_job(
@@ -3689,20 +3935,11 @@ class Coordinator:
                             )
                         )
                         # submit directly and mark pending
-                        proc = self.processors.get(t)
+                        proc = await self._resolve_processor(t, sample_id)
                         if proc is not None:
                             class_work = _job_work_count(j)
-                            if getattr(self, "using_pools", False):
-                                try:
-                                    proc.enqueue.remote(j)
-                                except Exception:
-                                    pass
-                            else:
-                                ref = proc.process.remote(j)
-                                self._inflight[ref] = j
-                            self.classif_pending_by_type[t] = (
-                                self.classif_pending_by_type.get(t, 0) + 1
-                            )
+                            self._enqueue_job_on_processor(proc, j)
+                            self._classifier_mark_started(sample_id, t)
                             # Record submission for totals used by GUI
                             try:
                                 self.submitted_by_type[j.job_type] = (
@@ -3919,11 +4156,10 @@ class Coordinator:
                 self.running_by_type_sample[key_ts] = (
                     self.running_by_type_sample.get(key_ts, 0) + 1
                 )
-                proc2 = self.processors.get(nxt_job.job_type)
+                proc2 = await self._resolve_processor(nxt_job.job_type, sid)
                 if proc2 is not None:
                     next_work = _job_work_count(nxt_job)
-                    ref2 = proc2.process.remote(nxt_job)
-                    self._inflight[ref2] = nxt_job
+                    self._enqueue_job_on_processor(proc2, nxt_job)
                     # Record submission for totals used by GUI
                     try:
                         self.submitted_by_type[nxt_job.job_type] = (
@@ -3972,37 +4208,24 @@ class Coordinator:
                     }
 
         if job.job_type in CLASSIFICATION_TYPES:
-            # decrement pending for this type
-            if self.classif_pending_by_type.get(job.job_type, 0) > 0:
-                self.classif_pending_by_type[job.job_type] -= 1
-                if self.classif_pending_by_type[job.job_type] == 0:
-                    self.classif_pending_by_type.pop(job.job_type, None)
-            waiting_by_sample = self.classif_waiting_by_type.get(job.job_type) or {}
-            if waiting_by_sample:
-                next_sample = next(iter(waiting_by_sample))
-                nxt = waiting_by_sample.pop(next_sample)
-            else:
-                nxt = None
-            if not waiting_by_sample:
-                self.classif_waiting_by_type.pop(job.job_type, None)
+            finished_sid = (
+                job.context.get_sample_id()
+                if hasattr(job, "context") and hasattr(job.context, "get_sample_id")
+                else "unknown"
+            )
+            self._classifier_mark_finished(finished_sid, job.job_type)
+            nxt = self._pop_next_classifier_job(job.job_type, finished_sid)
             if nxt is not None:
-                proc3 = self.processors.get(job.job_type)
+                sid_local3 = (
+                    nxt.context.get_sample_id()
+                    if hasattr(nxt, "context")
+                    and hasattr(nxt.context, "get_sample_id")
+                    else "unknown"
+                )
+                proc3 = await self._resolve_processor(job.job_type, sid_local3)
                 if proc3 is not None:
                     next_work = _job_work_count(nxt)
-                    sid_local3 = (
-                        nxt.context.get_sample_id()
-                        if hasattr(nxt, "context")
-                        and hasattr(nxt.context, "get_sample_id")
-                        else "unknown"
-                    )
-                    if getattr(self, "using_pools", False):
-                        try:
-                            proc3.enqueue.remote(nxt)
-                        except Exception:
-                            pass
-                    else:
-                        ref3 = proc3.process.remote(nxt)
-                        self._inflight[ref3] = nxt
+                    self._enqueue_job_on_processor(proc3, nxt)
                     # Record submission for totals used by GUI
                     try:
                         self.submitted_by_type[job.job_type] = (
@@ -4010,7 +4233,7 @@ class Coordinator:
                         )
                     except Exception:
                         pass
-                    self.classif_pending_by_type[job.job_type] = 1
+                    self._classifier_mark_started(sid_local3, job.job_type)
                     self.total_enqueued += next_work
                     # Update per-sample aggregate immediately for GUI samples view
                     try:
@@ -4322,13 +4545,13 @@ class Coordinator:
         # Fallback path: if coordinator active bookkeeping is empty/missing while
         # queue actors still report running jobs, surface those in monitor stats.
         try:
-            unique_processors = list(dict.fromkeys(self.processors.values()))
+            unique_processors = self._iter_status_pools()
             runtime_rows = (
                 await asyncio.gather(
                     *[proc.runtime_status.remote() for proc in unique_processors],
                     return_exceptions=True,
                 )
-                if self.using_pools
+                if (self.using_pools or self.using_sample_shards)
                 else []
             )
         except Exception:
@@ -4536,6 +4759,14 @@ class Coordinator:
             inflight_by_queue_debug = {}
         # Samples payload for GUI
         samples_payload: List[Dict[str, Any]] = []
+        workers_by_sample: Dict[str, List[str]] = {}
+        try:
+            for sid_key, shard_key in self.sample_workers.keys():
+                workers_by_sample.setdefault(sid_key, []).append(shard_key)
+            for sid, keys in workers_by_sample.items():
+                workers_by_sample[sid] = sorted(set(keys))
+        except Exception:
+            workers_by_sample = {}
         try:
             for sid, ent in self.samples_by_id.items():
                 sample_data = {
@@ -4547,6 +4778,7 @@ class Coordinator:
                     "failed_jobs": ent.get("failed_jobs", 0),
                     "job_types": list(ent.get("job_types", set())),
                     "last_seen": ent.get("last_seen", now),
+                    "shard_workers": workers_by_sample.get(sid, []),
                 }
                 samples_payload.append(sample_data)
         except Exception as e:
@@ -4588,6 +4820,8 @@ class Coordinator:
             "running_by_category": running_counts,
             "totals_by_category": totals_counts,
             "samples": samples_payload,
+            "sample_worker_count": len(getattr(self, "sample_workers", {}) or {}),
+            "using_sample_shards": bool(getattr(self, "using_sample_shards", False)),
             "runtime_active_count_by_queue": runtime_active_count_by_queue,
             "runtime_active_count_by_job_type": runtime_active_count_by_job_type,
             # Failed job tracking: last 500 entries for inspection / OOM diagnosis
@@ -4715,6 +4949,12 @@ class Coordinator:
                         except Exception:
                             pass
                     print("[SHUTDOWN] Processor actors shut down")
+
+            shard_count = len(getattr(self, "sample_workers", {}) or {})
+            if shard_count > 0:
+                print(f"[SHUTDOWN] Shutting down {shard_count} sample-shard workers...")
+                self._kill_sample_workers()
+                print("[SHUTDOWN] Sample-shard workers shut down")
 
             print("[SHUTDOWN] Coordinator shutdown complete")
             return True
@@ -6707,8 +6947,8 @@ def parse_args():
     p.add_argument(
         "--preset",
         default=None,
-        choices=["p2i", "standard", "high"],
-        help="Execution preset controlling actor grouping and concurrency",
+        choices=["p2i", "standard", "high", "dedicated"],
+        help="Execution preset controlling actor grouping, sample sharding, and concurrency",
     )
     p.add_argument(
         "--no-ray-dashboard",

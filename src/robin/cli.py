@@ -3337,9 +3337,9 @@ def _display_workflow_config(
 )
 @click.option(
     "--preset",
-    type=click.Choice(["p2i", "standard", "high"]),
+    type=click.Choice(["p2i", "standard", "high", "dedicated"]),
     default="standard",
-    help="Execution preset for Ray Core: 'p2i' (2 CPU cap, grouped pools, concurrency 1), 'standard' (default; grouped pools), 'high' (per-job-type actors and more BAM merge/sort threads).",
+    help="Execution preset for Ray Core: 'p2i' (2 CPU cap, grouped pools, concurrency 1), 'standard' (default; grouped pools), 'high' (per-job-type actors and more BAM merge/sort threads), 'dedicated' (lazy per-sample workers for analysis, classification, and slow jobs).",
 )
 @click.option(
     "--ray-dashboard/--no-ray-dashboard",

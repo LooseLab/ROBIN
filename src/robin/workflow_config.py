@@ -66,7 +66,7 @@ reference = "~/references/GCA_000001405.15_GRCh38_no_alt_analysis_set.fna"
 # Optional settings (defaults match CLI)
 # log_level = "ERROR"
 # analysis_workers = 1
-# preset = "standard"
+# preset = "standard"  # p2i | standard | high | dedicated
 # with_gui = true
 # use_ray = true
 

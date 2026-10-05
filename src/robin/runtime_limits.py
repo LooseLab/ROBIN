@@ -28,7 +28,7 @@ def bam_io_threads_for_preset(
     name = (preset or "standard").lower().strip() or "standard"
     if name == "p2i":
         desired = 1
-    elif name == "high":
+    elif name in {"high", "dedicated"}:
         # One Target actor can use spare cores; leave the mapping conservative.
         desired = max(8, n // 2)
         desired = min(desired, _BAM_IO_THREADS_MAX)
