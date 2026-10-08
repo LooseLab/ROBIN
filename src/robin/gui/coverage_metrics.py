@@ -103,10 +103,21 @@ def format_read_count(count: int | None) -> str:
 
 
 def read_length_histogram_series(stats: Dict[str, Any] | None) -> Dict[str, Any]:
-    """Trimmed on/off-target length histogram as percentages for GUI and PDF plots."""
+    """On/off-target length histogram as percentages for GUI and PDF plots.
+
+    Empty bins are kept so the log-spaced 50 bp–500 kb axis stays proportional.
+    """
     from robin.analysis.bam_preprocessor import format_read_length
 
-    empty = {"ok": False, "labels": [], "on_pct": [], "off_pct": []}
+    empty = {
+        "ok": False,
+        "labels": [],
+        "on_pct": [],
+        "off_pct": [],
+        "n_bins": 0,
+        "first_occupied": 0,
+        "last_occupied": 0,
+    }
     if not stats or not stats.get("available"):
         return empty
     centers = [float(v) for v in stats.get("hist_bin_centers") or []]
@@ -131,11 +142,58 @@ def read_length_histogram_series(stats: Dict[str, Any] | None) -> Dict[str, Any]
     labels = []
     on_pct = []
     off_pct = []
-    for i in range(first, last + 1):
+    for i in range(n):
         labels.append(format_read_length(centers[i]))
         on_pct.append(round(100.0 * on_hist[i] / on_total, 2))
         off_pct.append(round(100.0 * off_hist[i] / off_total, 2))
-    return {"ok": True, "labels": labels, "on_pct": on_pct, "off_pct": off_pct}
+    return {
+        "ok": True,
+        "labels": labels,
+        "on_pct": on_pct,
+        "off_pct": off_pct,
+        "n_bins": n,
+        "first_occupied": first,
+        "last_occupied": last,
+    }
+
+
+def read_length_histogram_zoom_window(
+    series: Dict[str, Any] | None,
+    *,
+    mode: str = "full",
+    pad_bins: int = 1,
+) -> Dict[str, float]:
+    """Return ECharts dataZoom start/end percentages for the length histogram.
+
+    ``full`` covers every log-spaced bin (50 bp–500 kb). ``data`` frames the
+    occupied bins with a small pad so the two length modes can be inspected
+    without collapsing empty bins between them.
+    """
+    series = series or {}
+    n = int(series.get("n_bins") or len(series.get("labels") or []) or 0)
+    if n <= 0:
+        return {"start": 0.0, "end": 100.0}
+    if mode != "data":
+        return {"start": 0.0, "end": 100.0}
+    try:
+        first = int(series.get("first_occupied", 0) or 0)
+    except (TypeError, ValueError):
+        first = 0
+    try:
+        last_raw = series.get("last_occupied", n - 1)
+        last = int(n - 1 if last_raw is None else last_raw)
+    except (TypeError, ValueError):
+        last = n - 1
+    first = min(max(0, first), n - 1)
+    last = min(max(first, last), n - 1)
+    pad = max(0, int(pad_bins))
+    lo = max(0, first - pad)
+    hi = min(n - 1, last + pad)
+    start = round(100.0 * lo / n, 4)
+    end = round(100.0 * (hi + 1) / n, 4)
+    if end <= start:
+        end = min(100.0, start + round(100.0 / n, 4))
+    return {"start": start, "end": min(100.0, end)}
 
 
 def read_length_plot_available(stats: Dict[str, Any] | None) -> bool:

@@ -813,7 +813,7 @@ class CoverageSection(ReportSection):
             )
             ax.set_title("On / off-target read length")
             ax.set_ylabel("Percent of primary reads")
-            ax.set_xlabel("Read length")
+            ax.set_xlabel("Read length (log-spaced bins, 50 bp–500 kb)")
             step = max(1, len(labels) // 8)
             ax.set_xticks(x)
             ax.set_xticklabels(

@@ -449,6 +449,77 @@ def _cov_legend_label(text: str, max_len: int = 44) -> str:
     return t[: max_len - 1] + "…"
 
 
+def _read_length_data_zoom_options(
+    palette: Dict[str, str] | None = None,
+    *,
+    start: float = 0.0,
+    end: float = 100.0,
+) -> List[Dict[str, Any]]:
+    """Inside + slider zoom so the full log-spaced axis can be focused."""
+    p = palette or _cov_chrome_palette()
+    start = max(0.0, min(100.0, float(start)))
+    end = max(start, min(100.0, float(end)))
+    shared = {
+        "xAxisIndex": 0,
+        "filterMode": "filter",
+        "minValueSpan": 5,
+        "start": start,
+        "end": end,
+    }
+    return [
+        {
+            "type": "inside",
+            **shared,
+            "zoomOnMouseWheel": True,
+            "moveOnMouseWheel": False,
+            "moveOnMouseMove": True,
+            "preventDefaultMouseWheel": True,
+        },
+        {
+            "type": "slider",
+            **shared,
+            "show": True,
+            "height": 18,
+            "bottom": 6,
+            "showDetail": False,
+            "brushSelect": True,
+            "borderColor": p["tooltip_border"],
+            "handleStyle": {"color": p["axis"]},
+            "moveHandleStyle": {"color": p["axis"]},
+            "textStyle": {"color": p["axis"], "fontSize": 10},
+            "fillerColor": "rgba(16, 185, 129, 0.18)",
+            "dataBackground": {
+                "lineStyle": {"color": p["axis"]},
+                "areaStyle": {"color": "rgba(148, 163, 184, 0.25)"},
+            },
+            "selectedDataBackground": {
+                "lineStyle": {"color": p["axis"]},
+                "areaStyle": {"color": "rgba(16, 185, 129, 0.35)"},
+            },
+        },
+    ]
+
+
+def _apply_read_length_zoom(chart: Any, start: float, end: float) -> None:
+    """Set both dataZoom windows without dropping the rest of the option."""
+    try:
+        dz_list = chart.options.get("dataZoom")
+        if not isinstance(dz_list, list) or not dz_list:
+            chart.options["dataZoom"] = _read_length_data_zoom_options(
+                start=start, end=end
+            )
+            return
+        for dz in dz_list:
+            if not isinstance(dz, dict):
+                continue
+            dz.pop("startValue", None)
+            dz.pop("endValue", None)
+            dz["start"] = float(start)
+            dz["end"] = float(end)
+    except Exception:
+        pass
+
+
 def _apply_coverage_read_length_chrome(ec: Any) -> None:
     """On/off-target read-length histogram chrome + series colours."""
     try:
@@ -470,14 +541,28 @@ def _apply_coverage_read_length_chrome(ec: Any) -> None:
         o.setdefault("xAxis", {})
         o["xAxis"].setdefault("axisLabel", {})
         o["xAxis"]["axisLabel"]["color"] = p["axis"]
+        o["xAxis"]["axisLabel"]["hideOverlap"] = True
         o["xAxis"].setdefault("axisLine", {}).setdefault("lineStyle", {})
         o["xAxis"]["axisLine"]["lineStyle"]["color"] = p["axis"]
+        o["xAxis"]["nameTextStyle"] = {"color": p["axis"]}
         o.setdefault("yAxis", {})
         o["yAxis"]["nameTextStyle"] = {"color": p["axis"]}
         o["yAxis"]["axisLabel"] = {"color": p["axis"]}
         o["yAxis"]["splitLine"] = {
             "lineStyle": {"color": p["split"], "type": "dashed"},
         }
+        start, end = 0.0, 100.0
+        dz_list = o.get("dataZoom")
+        if isinstance(dz_list, list):
+            for dz in dz_list:
+                if isinstance(dz, dict) and dz.get("start") is not None:
+                    try:
+                        start = float(dz.get("start", 0.0) or 0.0)
+                        end = float(dz.get("end", 100.0) or 100.0)
+                    except (TypeError, ValueError):
+                        start, end = 0.0, 100.0
+                    break
+        o["dataZoom"] = _read_length_data_zoom_options(p, start=start, end=end)
         if o.get("series") and len(o["series"]) >= 2:
             o["series"][0]["itemStyle"] = {"color": on_c}
             o["series"][1]["itemStyle"] = {"color": off_c}
@@ -3010,6 +3095,12 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                     "text-xs text-gray-500"
                 )
         read_length_chart_card = ui.card().classes("w-full")
+        read_length_zoom_state: Dict[str, Any] = {
+            "n_bins": 0,
+            "first_occupied": 0,
+            "last_occupied": 0,
+            "initialized": False,
+        }
         with read_length_chart_card:
             _cp_len = _cov_chrome_palette()
             _on_c, _off_c = _cov_on_off_colors()
@@ -3019,7 +3110,10 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                     "textStyle": {"color": _cp_len["axis"]},
                     "title": {
                         "text": "On / off-target read length",
-                        "subtext": "Primary mapped reads classified by panel overlap",
+                        "subtext": (
+                            "Primary mapped reads classified by panel overlap"
+                            " · log-spaced bins, 50 bp–500 kb"
+                        ),
                         "left": "center",
                         "top": 8,
                         "textStyle": {"fontSize": 15, "color": _cp_len["title"]},
@@ -3037,19 +3131,23 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                     },
                     "grid": {
                         "left": "8%",
-                        "right": "6%",
-                        "bottom": "16%",
+                        "right": "8%",
+                        "bottom": 72,
                         "top": "28%",
                         "containLabel": True,
                     },
                     "xAxis": {
                         "type": "category",
                         "name": "Read length",
+                        "nameLocation": "end",
+                        "nameGap": 8,
+                        "nameTextStyle": {"color": _cp_len["axis"]},
                         "data": [],
                         "axisLabel": {
                             "rotate": 45,
                             "fontSize": 10,
                             "color": _cp_len["axis"],
+                            "hideOverlap": True,
                         },
                         "axisLine": {"lineStyle": {"color": _cp_len["axis"]}},
                     },
@@ -3062,6 +3160,7 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                             "lineStyle": {"color": _cp_len["split"], "type": "dashed"},
                         },
                     },
+                    "dataZoom": _read_length_data_zoom_options(_cp_len),
                     "series": [
                         {
                             "name": "On target",
@@ -3077,7 +3176,36 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                         },
                     ],
                 }
-            ).classes("w-full h-72")
+            ).classes("w-full h-80")
+
+            def _zoom_read_length(mode: str) -> None:
+                from robin.gui.coverage_metrics import read_length_histogram_zoom_window
+
+                window = read_length_histogram_zoom_window(
+                    read_length_zoom_state, mode=mode
+                )
+                _apply_read_length_zoom(
+                    echart_read_len, window["start"], window["end"]
+                )
+                try:
+                    echart_read_len.update()
+                except Exception:
+                    pass
+
+            with ui.row().classes(
+                "w-full items-center justify-between gap-2 mt-1 flex-wrap"
+            ):
+                ui.label(
+                    "Empty bins are kept so spacing stays log-proportional. "
+                    "Drag the slider, click Fit data, or scroll on the chart to zoom."
+                ).classes("text-xs text-gray-500")
+                with ui.row().classes("gap-1 shrink-0"):
+                    ui.button(
+                        "Fit data", on_click=lambda: _zoom_read_length("data")
+                    ).props("flat dense no-caps size=sm")
+                    ui.button(
+                        "Full range", on_click=lambda: _zoom_read_length("full")
+                    ).props("flat dense no-caps size=sm")
         read_length_metrics.set_visibility(False)
         read_length_chart_card.set_visibility(False)
         with ui.card().classes("w-full"):
@@ -7948,6 +8076,29 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                         echart_read_len.options["series"][1]["itemStyle"] = {
                             "color": off_c
                         }
+                        read_length_zoom_state["n_bins"] = int(
+                            chart_payload.get("n_bins") or len(chart_payload["labels"])
+                        )
+                        read_length_zoom_state["first_occupied"] = int(
+                            chart_payload.get("first_occupied") or 0
+                        )
+                        read_length_zoom_state["last_occupied"] = int(
+                            chart_payload.get("last_occupied")
+                            if chart_payload.get("last_occupied") is not None
+                            else read_length_zoom_state["n_bins"] - 1
+                        )
+                        if not read_length_zoom_state.get("initialized"):
+                            from robin.gui.coverage_metrics import (
+                                read_length_histogram_zoom_window,
+                            )
+
+                            window = read_length_histogram_zoom_window(
+                                read_length_zoom_state, mode="full"
+                            )
+                            _apply_read_length_zoom(
+                                echart_read_len, window["start"], window["end"]
+                            )
+                            read_length_zoom_state["initialized"] = True
                         echart_read_len.update()
                 except Exception as e:
                     _log_notify(
