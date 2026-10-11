@@ -10,7 +10,6 @@ from reportlab.lib.units import inch
 from datetime import datetime
 import os
 from robin.gui import images
-from reportlab.lib import colors
 from PIL import Image as PILImage
 
 from robin.__init__ import __version__
@@ -55,12 +54,12 @@ def header_footer_canvas_factory(
 
         def _draw_header_footer(self):
             self.saveState()
+            report_fonts = styles.fonts
+            report_colors = styles.COLORS
 
             # Header
             # Draw header divider line with ROBIN green theme (M3 primary color)
-            self.setStrokeColor(
-                colors.HexColor("#4F9153")
-            )  # ROBIN theme green (M3 primary)
+            self.setStrokeColor(report_colors["primary"])
             self.setLineWidth(4)
             # Calculate margins for 90% width
             margin = self.width * 0.05  # 5% margin on each side
@@ -92,23 +91,23 @@ def header_footer_canvas_factory(
                 )
 
             # Add title and Research Use Only warning with M3 colors
-            self.setFont("FiraSans", 16)
-            self.setFillColor(colors.HexColor("#1C1B1F"))  # M3 on_surface color
+            self.setFont(report_fonts.regular, 16)
+            self.setFillColor(report_colors["on_surface"])
             self.drawString(0.5 * inch, self.height - 0.4 * inch, "ROBIN Report")
-            self.setFont("FiraSans", 12)
-            self.setFillColor(colors.HexColor("#F44336"))  # M3 error color for warning
+            self.setFont(report_fonts.bold, 12)
+            self.setFillColor(report_colors["error"])
             self.drawString(0.5 * inch, self.height - 0.65 * inch, "RESEARCH USE ONLY")
 
             # Add sample ID and centre ID with M3 colors
-            self.setFont("FiraSans", 10)
-            self.setFillColor(colors.HexColor("#49454F"))  # M3 on_surface_variant color
+            self.setFont(report_fonts.regular, 10)
+            self.setFillColor(report_colors["on_surface_variant"])
 
             # Calculate text widths
             sample_id_text = f"Sample ID: {sample_id}"
             centre_id_text = f"Centre ID: {centreID}" if centreID else ""
 
             # Get text widths in points
-            sample_id_width = self.stringWidth(sample_id_text, "FiraSans", 10)
+            sample_id_width = self.stringWidth(sample_id_text, report_fonts.regular, 10)
 
             # Draw Sample ID
             self.drawString(0.5 * inch, self.height - 0.9 * inch, sample_id_text)
@@ -126,7 +125,7 @@ def header_footer_canvas_factory(
                 )
                 # Only draw if it fits on the page (leaving 1.75 inch from right edge for logo)
                 if (
-                    centre_id_x + self.stringWidth(centre_id_text, "FiraSans", 10)
+                    centre_id_x + self.stringWidth(centre_id_text, report_fonts.regular, 10)
                     < self.width - 1.75 * inch
                 ):
                     self.drawString(
@@ -134,17 +133,15 @@ def header_footer_canvas_factory(
                     )
 
             # Footer divider line
-            self.setStrokeColor(
-                colors.HexColor("#4F9153")
-            )  # ROBIN theme green (M3 primary)
+            self.setStrokeColor(report_colors["primary"])
             self.setLineWidth(2)
             self.line(
                 margin, 0.4 * inch, self.width - margin, 0.4 * inch
             )  # Footer divider line
 
             # Footer text with M3 colors
-            self.setFont("FiraSans", 8)
-            self.setFillColor(colors.HexColor("#49454F"))  # M3 on_surface_variant color
+            self.setFont(report_fonts.regular, 8)
+            self.setFillColor(report_colors["on_surface_variant"])
             timestamp = generated_at or datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             page_text = f"Page {self._pageNumber} | Generated: {timestamp}"
             if generated_by:
@@ -155,7 +152,7 @@ def header_footer_canvas_factory(
             self.drawString(0.5 * inch, 0.15 * inch, page_text)
 
             warning_text = "RESEARCH USE ONLY"
-            self.setFillColor(colors.HexColor("#F44336"))  # M3 error color for warning
+            self.setFillColor(report_colors["error"])
             self.drawRightString(self.width - 0.5 * inch, 0.15 * inch, warning_text)
 
             self.restoreState()

@@ -5,12 +5,12 @@ This module contains styling-related code for the ROBIN report generation.
 """
 
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
-from reportlab.lib.colors import HexColor
-from reportlab.pdfbase import pdfmetrics
-from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.platypus import TableStyle
-import os
 import logging
+from reportlab.lib.colors import HexColor
+
+from robin.reporting.fonts import register_report_fonts
+from robin.reporting.theme import DEFAULT_REPORT_THEME
 
 logger = logging.getLogger(__name__)
 
@@ -18,11 +18,12 @@ logger = logging.getLogger(__name__)
 class ReportStyles:
     """Encapsulates all styling-related functionality for the report."""
 
-    def __init__(self, fonts_dir):
+    def __init__(self, fonts_dir, theme=None, fonts=None):
         """Initialize styling with font directory path."""
         self.fonts_dir = fonts_dir
-        self.use_default_font = True
-        self.register_fonts()
+        self.theme = theme or DEFAULT_REPORT_THEME
+        self.fonts = fonts or register_report_fonts(fonts_dir)
+        self.use_default_font = self.fonts.regular == "Helvetica"
 
         # Initialize styles
         self.styles = getSampleStyleSheet()
@@ -31,38 +32,17 @@ class ReportStyles:
         self._setup_table_style()
 
     def register_fonts(self):
-        """Register custom fonts for the report."""
-        font_files = {
-            "FiraSans": "fira-sans-v16-latin-regular.ttf",
-            "FiraSans-Medium": "fira-sans-v16-latin-500.ttf",
-            "FiraSans-Bold": "fira-sans-v16-latin-700.ttf",
-            "FiraMono": "fira-mono-v14-latin-regular.ttf",
-        }
-
-        # Default to Helvetica if Fira Sans is not available
-        self.use_default_font = True
-
-        for font_name, font_file in font_files.items():
-            font_path = os.path.join(self.fonts_dir, font_file)
-            if os.path.exists(font_path):
-                try:
-                    pdfmetrics.registerFont(TTFont(font_name, font_path))
-                    if font_name == "FiraSans":
-                        self.use_default_font = False
-                except Exception as e:
-                    logger.warning(f"Could not register font {font_name}: {e}")
-            else:
-                logger.warning(f"Font file not found: {font_path}")
-
-        if self.use_default_font:
-            logger.info("Using Helvetica as fallback font")
+        """Register fonts and refresh the resolved font names."""
+        self.fonts = register_report_fonts(self.fonts_dir)
+        self.use_default_font = self.fonts.regular == "Helvetica"
 
     def _setup_colors(self):
         """Set up Material Design 3 color palette for consistent branding."""
+        theme = self.theme
         self.COLORS = {
             # Primary colors (ROBIN green theme)
-            "primary": HexColor("#4F9153"),  # ROBIN theme green (unchanged)
-            "primary_container": HexColor("#D1E7DD"),  # Light green container
+            "primary": HexColor(theme.brand),
+            "primary_container": HexColor(theme.surface_muted),
             "on_primary": HexColor("#FFFFFF"),  # White text on primary
             "on_primary_container": HexColor(
                 "#0D3B1E"
@@ -75,23 +55,24 @@ class ReportStyles:
                 "#21005D"
             ),  # Dark text on secondary container
             # Surface colors
-            "surface": HexColor("#FEFBFF"),  # M3 surface
-            "surface_variant": HexColor("#E7E0EC"),  # M3 surface variant
-            "on_surface": HexColor("#1C1B1F"),  # M3 on surface
-            "on_surface_variant": HexColor("#49454F"),  # M3 on surface variant
+            "surface": HexColor(theme.surface),
+            "surface_variant": HexColor(theme.surface_muted),
+            "surface_muted": HexColor(theme.surface_muted),
+            "on_surface": HexColor(theme.text),
+            "on_surface_variant": HexColor(theme.muted),
             # Outline colors
-            "outline": HexColor("#79747E"),  # M3 outline
-            "outline_variant": HexColor("#CAC4D0"),  # M3 outline variant
+            "outline": HexColor(theme.muted),
+            "outline_variant": HexColor(theme.border),
             # Semantic colors
-            "success": HexColor("#4CAF50"),  # M3 success green
-            "warning": HexColor("#FF9800"),  # M3 warning orange
-            "error": HexColor("#F44336"),  # M3 error red
-            "info": HexColor("#2196F3"),  # M3 info blue
+            "success": HexColor(theme.positive),
+            "warning": HexColor(theme.warning),
+            "error": HexColor(theme.negative),
+            "info": HexColor(theme.information),
             # Legacy colors (for backward compatibility)
-            "text": HexColor("#1C1B1F"),  # M3 on surface
-            "muted": HexColor("#49454F"),  # M3 on surface variant
-            "border": HexColor("#CAC4D0"),  # M3 outline variant
-            "background": HexColor("#FEFBFF"),  # M3 surface
+            "text": HexColor(theme.text),
+            "muted": HexColor(theme.muted),
+            "border": HexColor(theme.border),
+            "background": HexColor(theme.surface),
         }
 
     def _setup_styles(self):
@@ -101,20 +82,14 @@ class ReportStyles:
         for style_name in self.styles.byName:
             if "Italic" in style_name:
                 self.styles[style_name].fontName = (
-                    "FiraSans" if not self.use_default_font else "Helvetica"
+                    self.fonts.regular
                 )
 
         # Base fonts to use
-        if self.use_default_font:
-            base_font = "Helvetica"
-            bold_font = "Helvetica-Bold"
-            medium_font = "Helvetica-Bold"  # Helvetica doesn't have medium weight
-            mono_font = "Courier"
-        else:
-            base_font = "FiraSans"
-            bold_font = "FiraSans-Bold"
-            medium_font = "FiraSans-Medium"
-            mono_font = "FiraMono"
+        base_font = self.fonts.regular
+        bold_font = self.fonts.bold
+        medium_font = self.fonts.medium
+        mono_font = self.fonts.mono
 
         # Update base styles with enhanced M3 typography
         for style_name in ["Title", "Heading1", "Heading2", "Normal"]:
@@ -476,10 +451,37 @@ class ReportStyles:
                 del self.styles[style_name]
             self.styles.add(ParagraphStyle(name=style_name, **style_props))
 
+        self._setup_report_role_styles(
+            base_font=base_font, medium_font=medium_font, bold_font=bold_font, mono_font=mono_font
+        )
+
+    def _setup_report_role_styles(self, *, base_font, medium_font, bold_font, mono_font):
+        """Add the small, authoritative vocabulary used by new components."""
+        t = self.theme
+        c = self.COLORS
+        roles = {
+            "ReportTitle": dict(fontName=bold_font, fontSize=20, leading=26, textColor=c["text"], spaceAfter=12, keepWithNext=True),
+            "SectionHeading": dict(fontName=bold_font, fontSize=t.heading_size, leading=20, textColor=c["primary"], spaceBefore=12, spaceAfter=6, keepWithNext=True),
+            "SubsectionHeading": dict(fontName=medium_font, fontSize=t.subheading_size, leading=16, textColor=c["text"], spaceBefore=8, spaceAfter=4, keepWithNext=True),
+            "Body": dict(fontName=base_font, fontSize=t.body_size, leading=t.body_leading, textColor=c["text"], spaceBefore=3, spaceAfter=5),
+            "Small": dict(fontName=base_font, fontSize=t.small_size, leading=11, textColor=c["muted"], spaceBefore=2, spaceAfter=3),
+            "Caption": dict(fontName=base_font, fontSize=t.small_size, leading=11, textColor=c["muted"], spaceBefore=3, spaceAfter=7, alignment=1),
+            "TableHeader": dict(fontName=bold_font, fontSize=t.table_size, leading=11, textColor=c["text"], spaceBefore=0, spaceAfter=0),
+            "TableCell": dict(fontName=base_font, fontSize=t.table_size, leading=11, textColor=c["text"], spaceBefore=0, spaceAfter=0, wordWrap="LTR"),
+            "TableCellCompact": dict(fontName=base_font, fontSize=8, leading=9, textColor=c["text"], spaceBefore=0, spaceAfter=0, wordWrap="LTR"),
+            "Technical": dict(fontName=mono_font, fontSize=t.small_size, leading=11, textColor=c["text"], spaceBefore=2, spaceAfter=3, wordWrap="LTR"),
+            "Finding": dict(fontName=bold_font, fontSize=11, leading=15, textColor=c["text"], spaceBefore=4, spaceAfter=5, keepWithNext=True),
+            "Warning": dict(fontName=base_font, fontSize=t.body_size, leading=t.body_leading, textColor=c["warning"], backColor=c["surface_muted"], borderColor=c["warning"], borderWidth=0.75, borderPadding=6, spaceBefore=5, spaceAfter=7),
+        }
+        for name, props in roles.items():
+            if name in self.styles:
+                self.styles.byName.pop(name, None)
+            self.styles.add(ParagraphStyle(name=name, parent=self.styles["Normal"], **props))
+
     def _setup_table_style(self):
         """Set up Material Design 3 table styles."""
-        base_font = "FiraSans" if not self.use_default_font else "Helvetica"
-        bold_font = "FiraSans-Bold" if not self.use_default_font else "Helvetica-Bold"
+        base_font = self.fonts.regular
+        bold_font = self.fonts.bold
 
         # Enhanced main table style with advanced M3 design
         self.MODERN_TABLE_STYLE = TableStyle(
