@@ -1585,13 +1585,14 @@ def cnv_chromosome_fig_height_for_page(
     plots_per_page: int = CNV_CHROMOSOME_PLOTS_PER_PAGE,
     spacer_pt: float = CNV_CHROMOSOME_PLOT_SPACER_PT,
     frame_padding_pt: float = CNV_REPORT_FRAME_PADDING_PT,
+    reserved_height_inch: float = 0.0,
 ) -> float:
     """Matplotlib figure height so ``plots_per_page`` chromosome plots fit one PDF page.
 
     ``page_height_inch`` should be ``SimpleDocTemplate.height`` in inches. ReportLab
     frames reserve ``frame_padding_pt`` (default 12) of vertical space for padding.
     """
-    usable_inch = page_height_inch - frame_padding_pt / 72.0
+    usable_inch = page_height_inch - frame_padding_pt / 72.0 - reserved_height_inch
     spacer_inch = max(plots_per_page - 1, 0) * spacer_pt / 72.0
     return (usable_inch - spacer_inch) / plots_per_page
 

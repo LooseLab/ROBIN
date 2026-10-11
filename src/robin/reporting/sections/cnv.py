@@ -173,6 +173,7 @@ class CNVSection(ReportSection):
             plots_per_page=self.CHROMOSOME_PLOTS_PER_PAGE,
             spacer_pt=self.CHROMOSOME_PLOT_SPACER,
             frame_padding_pt=CNV_REPORT_FRAME_PADDING_PT,
+            reserved_height_inch=1.15,
         )
 
     def _chromosome_pdf_plot_width(self) -> float:
@@ -559,57 +560,6 @@ class CNVSection(ReportSection):
                 logger.info(f"Found {len(summary_arm_events)} arm events")
                 logger.info(f"Found {len(summary_whole_chr_events)} whole chromosome events")
 
-            self.summary_elements.append(
-                Paragraph(
-                    "Copy Number Variation Summary",
-                    ParagraphStyle(
-                        "SummaryHeader",
-                        parent=self.styles.styles["Heading3"],
-                        fontSize=12,
-                        fontName="Helvetica-Bold",
-                        textColor=self.styles.COLORS["primary"],
-                        spaceAfter=12,
-                    ),
-                )
-            )
-
-            # Add whole chromosome events to summary
-            if summary_whole_chr_events:
-                self.summary_elements.append(
-                    Paragraph(
-                        "Whole Chromosome Events:<br/> "
-                        + " <br/> ".join(summary_whole_chr_events),
-                        ParagraphStyle(
-                            "SummaryText",
-                            parent=self.styles.styles["Normal"],
-                            fontSize=10,
-                            fontName="Helvetica",
-                            textColor=self.styles.COLORS["text"],
-                            leading=14,
-                            spaceAfter=12,
-                        ),
-                    )
-                )
-
-            # Add arm events to summary
-            if summary_arm_events:
-                logger.debug(f"Found {len(summary_arm_events)} arm events to report")
-                self.summary_elements.append(
-                    Paragraph(
-                        "Chromosome Arm Events (requires visual inspection):<br/> "
-                        + " <br/> ".join(summary_arm_events),
-                        ParagraphStyle(
-                            "SummaryText",
-                            parent=self.styles.styles["Normal"],
-                            fontSize=10,
-                            fontName="Helvetica",
-                            textColor=self.styles.COLORS["text"],
-                            leading=14,
-                            spaceAfter=12,
-                        ),
-                    )
-                )
-
             # Generate genome-wide CNV plot
             logger.debug("Generating genome-wide CNV plot")
             from robin.gui.plotting_preferences import cnv_report_plot_caption
@@ -645,6 +595,12 @@ class CNVSection(ReportSection):
             self.summary_elements.append(NextPageTemplate("landscape"))
             self.summary_elements.append(PageBreak())
             self.summary_elements.append(
+                Paragraph(
+                    "Copy Number Variation Summary",
+                    self.styles.styles["Heading3"],
+                )
+            )
+            self.summary_elements.append(
                 Image(img_buf, width=plot_width, height=plot_height)
             )
             self.summary_elements.append(
@@ -664,6 +620,26 @@ class CNVSection(ReportSection):
             )
             self.summary_elements.append(NextPageTemplate("portrait"))
             self.summary_elements.append(PageBreak())
+
+            # Keep event findings with the overview rather than leaving an
+            # orphaned heading on the preceding portrait page.
+            if summary_whole_chr_events:
+                self.summary_elements.append(
+                    Paragraph(
+                        "Whole chromosome events: "
+                        + " · ".join(summary_whole_chr_events),
+                        self.styles.styles["Small"],
+                    )
+                )
+            if summary_arm_events:
+                logger.debug(f"Found {len(summary_arm_events)} arm events to report")
+                self.summary_elements.append(
+                    Paragraph(
+                        "Chromosome arm events (requires visual inspection): "
+                        + " · ".join(summary_arm_events),
+                        self.styles.styles["Small"],
+                    )
+                )
 
             # Create summary of CNV events using centralized detection
             logger.debug("Creating CNV summary using centralized events")

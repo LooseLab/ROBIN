@@ -7,7 +7,7 @@ including results from Sturgeon, Random Forest, CrossNN, and PanCrossNN classifi
 
 import os
 import pandas as pd
-from reportlab.platypus import PageBreak, Paragraph, Spacer, Table, Image
+from reportlab.platypus import Paragraph, Spacer, Table, Image
 from reportlab.lib.colors import HexColor
 from reportlab.lib.styles import ParagraphStyle
 from reportlab.lib.units import inch
@@ -442,8 +442,10 @@ class ClassificationSection(ReportSection):
 
         # Add classification time series plots in 2x2 grid (4 per page)
         if plot_buffers:
-            plot_width = 3.25 * inch
-            plot_height = 2.25 * inch
+            # Keep the overview plots readable while leaving room for the
+            # detailed classifier tables to flow onto the same page.
+            plot_width = 3.0 * inch
+            plot_height = 1.9 * inch
             plots_per_row = 2
             # Pad to complete last row
             while len(plot_buffers) % plots_per_row != 0:
@@ -538,8 +540,9 @@ class ClassificationSection(ReportSection):
         except Exception:
             pass
 
-        # Add detailed results for each classifier
-        self.elements.append(PageBreak())
+        # Add detailed results for each classifier. Do not force a new page:
+        # the compact overview plots and the first result rows can share the
+        # available frame, while long tables remain naturally splittable.
         self.elements.append(
             Paragraph(
                 "Detailed Classification Results", self.styles.styles["Heading2"]

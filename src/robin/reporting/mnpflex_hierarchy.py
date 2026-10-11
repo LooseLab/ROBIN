@@ -129,7 +129,7 @@ def append_mnpflex_classifier_prediction(
                     ("SPAN", (0, row_idx), (1, row_idx)),
                     ("LEFTPADDING", (0, row_idx), (0, row_idx), left_pad + 8),
                     ("TOPPADDING", (0, row_idx), (-1, row_idx), 0),
-                    ("BOTTOMPADDING", (0, row_idx), (-1, row_idx), 6),
+                    ("BOTTOMPADDING", (0, row_idx), (-1, row_idx), 3),
                 ]
             )
             row_idx += 1

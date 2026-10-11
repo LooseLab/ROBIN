@@ -92,7 +92,7 @@ class ReportStyles:
         mono_font = self.fonts.mono
 
         # Update base styles with enhanced M3 typography
-        for style_name in ["Title", "Heading1", "Heading2", "Normal"]:
+        for style_name in ["Title", "Heading1", "Heading2", "Heading3", "Normal"]:
             if style_name == "Title":
                 self.styles[style_name].fontName = bold_font
                 self.styles[style_name].fontSize = 20  # Enhanced from 18
@@ -106,27 +106,35 @@ class ReportStyles:
             elif style_name == "Heading1":
                 self.styles[style_name].fontName = bold_font
                 self.styles[style_name].fontSize = 16
-                self.styles[style_name].leading = 24
-                self.styles[style_name].spaceAfter = 6
-                self.styles[style_name].spaceBefore = 4
+                self.styles[style_name].leading = 20
+                self.styles[style_name].spaceAfter = 4
+                self.styles[style_name].spaceBefore = 2
                 self.styles[style_name].textColor = self.COLORS["primary"]
                 self.styles[style_name].allowWidows = 0
                 self.styles[style_name].allowOrphans = 0
             elif style_name == "Heading2":
                 self.styles[style_name].fontName = medium_font
-                self.styles[style_name].fontSize = 14
-                self.styles[style_name].leading = 20
-                self.styles[style_name].spaceAfter = 6
-                self.styles[style_name].spaceBefore = 4
-                self.styles[style_name].textColor = self.COLORS["secondary"]
+                self.styles[style_name].fontSize = 13
+                self.styles[style_name].leading = 17
+                self.styles[style_name].spaceAfter = 4
+                self.styles[style_name].spaceBefore = 3
+                self.styles[style_name].textColor = self.COLORS["on_surface"]
                 self.styles[style_name].allowWidows = 0
                 self.styles[style_name].allowOrphans = 0
+            elif style_name == "Heading3":
+                self.styles[style_name].fontName = medium_font
+                self.styles[style_name].fontSize = 11
+                self.styles[style_name].leading = 14
+                self.styles[style_name].spaceAfter = 3
+                self.styles[style_name].spaceBefore = 2
+                self.styles[style_name].textColor = self.COLORS["on_surface"]
+                self.styles[style_name].keepWithNext = True
             else:  # Normal - body text throughout report
                 self.styles[style_name].fontName = base_font
                 self.styles[style_name].fontSize = 10
                 self.styles[style_name].leading = 14
-                self.styles[style_name].spaceBefore = 3
-                self.styles[style_name].spaceAfter = 3
+                self.styles[style_name].spaceBefore = 1
+                self.styles[style_name].spaceAfter = 2
                 self.styles[style_name].textColor = self.COLORS["on_surface"]
                 # Enhanced typography settings
                 self.styles[style_name].allowWidows = 0
@@ -148,7 +156,7 @@ class ReportStyles:
                 "fontSize": 12,  # Enhanced from 10
                 "leading": 16,  # M3 leading ratio
                 "textColor": self.COLORS["primary"],
-                "fontName": bold_font,
+                "fontName": medium_font,
                 "spaceAfter": 4,
                 "spaceBefore": 2,
             },
@@ -460,18 +468,18 @@ class ReportStyles:
         t = self.theme
         c = self.COLORS
         roles = {
-            "ReportTitle": dict(fontName=bold_font, fontSize=20, leading=26, textColor=c["text"], spaceAfter=12, keepWithNext=True),
-            "SectionHeading": dict(fontName=bold_font, fontSize=t.heading_size, leading=20, textColor=c["primary"], spaceBefore=12, spaceAfter=6, keepWithNext=True),
-            "SubsectionHeading": dict(fontName=medium_font, fontSize=t.subheading_size, leading=16, textColor=c["text"], spaceBefore=8, spaceAfter=4, keepWithNext=True),
-            "Body": dict(fontName=base_font, fontSize=t.body_size, leading=t.body_leading, textColor=c["text"], spaceBefore=3, spaceAfter=5),
-            "Small": dict(fontName=base_font, fontSize=t.small_size, leading=11, textColor=c["muted"], spaceBefore=2, spaceAfter=3),
-            "Caption": dict(fontName=base_font, fontSize=t.small_size, leading=11, textColor=c["muted"], spaceBefore=3, spaceAfter=7, alignment=1),
-            "TableHeader": dict(fontName=bold_font, fontSize=t.table_size, leading=11, textColor=c["text"], spaceBefore=0, spaceAfter=0),
-            "TableCell": dict(fontName=base_font, fontSize=t.table_size, leading=11, textColor=c["text"], spaceBefore=0, spaceAfter=0, wordWrap="LTR"),
+            "ReportTitle": dict(fontName=bold_font, fontSize=20, leading=24, textColor=c["text"], spaceAfter=8, keepWithNext=True),
+            "SectionHeading": dict(fontName=bold_font, fontSize=t.heading_size, leading=18, textColor=c["primary"], spaceBefore=8, spaceAfter=4, keepWithNext=True),
+            "SubsectionHeading": dict(fontName=medium_font, fontSize=t.subheading_size, leading=15, textColor=c["text"], spaceBefore=5, spaceAfter=3, keepWithNext=True),
+            "Body": dict(fontName=base_font, fontSize=t.body_size, leading=t.body_leading, textColor=c["text"], spaceBefore=1, spaceAfter=3),
+            "Small": dict(fontName=base_font, fontSize=t.small_size, leading=10, textColor=c["muted"], spaceBefore=1, spaceAfter=2),
+            "Caption": dict(fontName=base_font, fontSize=t.small_size, leading=10, textColor=c["muted"], spaceBefore=2, spaceAfter=4, alignment=1),
+            "TableHeader": dict(fontName=medium_font, fontSize=t.table_size, leading=10, textColor=c["text"], spaceBefore=0, spaceAfter=0),
+            "TableCell": dict(fontName=base_font, fontSize=t.table_size, leading=10, textColor=c["text"], spaceBefore=0, spaceAfter=0, wordWrap="LTR"),
             "TableCellCompact": dict(fontName=base_font, fontSize=8, leading=9, textColor=c["text"], spaceBefore=0, spaceAfter=0, wordWrap="LTR"),
-            "Technical": dict(fontName=mono_font, fontSize=t.small_size, leading=11, textColor=c["text"], spaceBefore=2, spaceAfter=3, wordWrap="LTR"),
-            "Finding": dict(fontName=bold_font, fontSize=11, leading=15, textColor=c["text"], spaceBefore=4, spaceAfter=5, keepWithNext=True),
-            "Warning": dict(fontName=base_font, fontSize=t.body_size, leading=t.body_leading, textColor=c["warning"], backColor=c["surface_muted"], borderColor=c["warning"], borderWidth=0.75, borderPadding=6, spaceBefore=5, spaceAfter=7),
+            "Technical": dict(fontName=mono_font, fontSize=t.small_size, leading=10, textColor=c["text"], spaceBefore=1, spaceAfter=2, wordWrap="LTR"),
+            "Finding": dict(fontName=medium_font, fontSize=11, leading=14, textColor=c["text"], spaceBefore=2, spaceAfter=3, keepWithNext=True),
+            "Warning": dict(fontName=base_font, fontSize=t.body_size, leading=t.body_leading, textColor=c["warning"], backColor=c["surface_muted"], borderColor=c["warning"], borderWidth=0.75, borderPadding=5, spaceBefore=3, spaceAfter=5),
         }
         for name, props in roles.items():
             if name in self.styles:
@@ -491,19 +499,19 @@ class ReportStyles:
                 ("TEXTCOLOR", (0, 0), (-1, 0), self.COLORS["on_primary"]),
                 ("FONTNAME", (0, 0), (-1, 0), bold_font),
                 ("FONTSIZE", (0, 0), (-1, 0), 11),
-                ("TOPPADDING", (0, 0), (-1, 0), 8),
-                ("BOTTOMPADDING", (0, 0), (-1, 0), 8),
+                ("TOPPADDING", (0, 0), (-1, 0), 4),
+                ("BOTTOMPADDING", (0, 0), (-1, 0), 4),
                 ("LINEBELOW", (0, 0), (-1, 0), 3, self.COLORS["primary"]),
                 # Body styling with alternating row colors
                 ("BACKGROUND", (0, 1), (-1, -1), self.COLORS["surface"]),
                 ("TEXTCOLOR", (0, 1), (-1, -1), self.COLORS["on_surface"]),
                 ("FONTNAME", (0, 1), (-1, -1), base_font),
                 ("FONTSIZE", (0, 1), (-1, -1), 10),
-                ("TOPPADDING", (0, 1), (-1, -1), 6),
-                ("BOTTOMPADDING", (0, 1), (-1, -1), 6),
+                ("TOPPADDING", (0, 1), (-1, -1), 3),
+                ("BOTTOMPADDING", (0, 1), (-1, -1), 3),
                 # Padding and alignment
-                ("LEFTPADDING", (0, 0), (-1, -1), 12),
-                ("RIGHTPADDING", (0, 0), (-1, -1), 12),
+                ("LEFTPADDING", (0, 0), (-1, -1), 6),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 6),
                 ("ALIGN", (0, 0), (-1, -1), "LEFT"),
                 # Subtle alternating row backgrounds for better readability
                 (
@@ -525,19 +533,19 @@ class ReportStyles:
                 ("TEXTCOLOR", (0, 0), (-1, 0), self.COLORS["on_secondary"]),
                 ("FONTNAME", (0, 0), (-1, 0), bold_font),
                 ("FONTSIZE", (0, 0), (-1, 0), 10),
-                ("TOPPADDING", (0, 0), (-1, 0), 6),
-                ("BOTTOMPADDING", (0, 0), (-1, 0), 6),
+                ("TOPPADDING", (0, 0), (-1, 0), 3),
+                ("BOTTOMPADDING", (0, 0), (-1, 0), 3),
                 ("LINEBELOW", (0, 0), (-1, 0), 2, self.COLORS["secondary"]),
                 # Body styling with subtle alternating rows
                 ("BACKGROUND", (0, 1), (-1, -1), self.COLORS["surface"]),
                 ("TEXTCOLOR", (0, 1), (-1, -1), self.COLORS["on_surface"]),
                 ("FONTNAME", (0, 1), (-1, -1), base_font),
                 ("FONTSIZE", (0, 1), (-1, -1), 9),
-                ("TOPPADDING", (0, 1), (-1, -1), 5),
-                ("BOTTOMPADDING", (0, 1), (-1, -1), 5),
+                ("TOPPADDING", (0, 1), (-1, -1), 2),
+                ("BOTTOMPADDING", (0, 1), (-1, -1), 2),
                 # Padding and alignment
-                ("LEFTPADDING", (0, 0), (-1, -1), 10),
-                ("RIGHTPADDING", (0, 0), (-1, -1), 10),
+                ("LEFTPADDING", (0, 0), (-1, -1), 5),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 5),
                 ("ALIGN", (0, 0), (-1, -1), "LEFT"),
                 # Subtle alternating row backgrounds
                 (
@@ -559,18 +567,18 @@ class ReportStyles:
                 ("TEXTCOLOR", (0, 0), (-1, 0), self.COLORS["on_primary"]),
                 ("FONTNAME", (0, 0), (-1, 0), bold_font),
                 ("FONTSIZE", (0, 0), (-1, 0), 11),
-                ("TOPPADDING", (0, 0), (-1, 0), 8),
-                ("BOTTOMPADDING", (0, 0), (-1, 0), 8),
+                ("TOPPADDING", (0, 0), (-1, 0), 4),
+                ("BOTTOMPADDING", (0, 0), (-1, 0), 4),
                 # Body styling
                 ("BACKGROUND", (0, 1), (-1, -1), self.COLORS["surface"]),
                 ("TEXTCOLOR", (0, 1), (-1, -1), self.COLORS["on_surface"]),
                 ("FONTNAME", (0, 1), (-1, -1), base_font),
                 ("FONTSIZE", (0, 1), (-1, -1), 10),
-                ("TOPPADDING", (0, 1), (-1, -1), 6),
-                ("BOTTOMPADDING", (0, 1), (-1, -1), 6),
+                ("TOPPADDING", (0, 1), (-1, -1), 3),
+                ("BOTTOMPADDING", (0, 1), (-1, -1), 3),
                 # Padding and alignment
-                ("LEFTPADDING", (0, 0), (-1, -1), 12),
-                ("RIGHTPADDING", (0, 0), (-1, -1), 12),
+                ("LEFTPADDING", (0, 0), (-1, -1), 6),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 6),
                 ("ALIGN", (0, 0), (-1, -1), "LEFT"),
                 # Border
                 ("BOX", (0, 0), (-1, -1), 1, self.COLORS["outline"]),

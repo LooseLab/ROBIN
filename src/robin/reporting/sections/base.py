@@ -48,10 +48,10 @@ class ReportSection(ABC):
                     self.styles.COLORS["primary"],
                 ),  # Thicker header bottom line
                 # Spacing
-                ("TOPPADDING", (0, 0), (-1, -1), 4),  # Reduced padding
-                ("BOTTOMPADDING", (0, 0), (-1, -1), 4),  # Reduced padding
-                ("LEFTPADDING", (0, 0), (-1, -1), 4),  # Reduced padding
-                ("RIGHTPADDING", (0, 0), (-1, -1), 4),  # Reduced padding
+                ("TOPPADDING", (0, 0), (-1, -1), 2),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
+                ("LEFTPADDING", (0, 0), (-1, -1), 3),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 3),
                 # Alignment
                 (
                     "VALIGN",

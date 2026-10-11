@@ -57,10 +57,10 @@ def metadata_table(data: Sequence[tuple[str, object]], report_styles, *, title=N
     table = Table(rows, colWidths=[1.85 * inch, (width or 6.15 * inch) - 1.85 * inch], repeatRows=1 if title else 0)
     commands = [
         ("VALIGN", (0, 0), (-1, -1), "TOP"),
-        ("LEFTPADDING", (0, 0), (-1, -1), 7),
-        ("RIGHTPADDING", (0, 0), (-1, -1), 7),
-        ("TOPPADDING", (0, 0), (-1, -1), 5),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+        ("LEFTPADDING", (0, 0), (-1, -1), 5),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 5),
+        ("TOPPADDING", (0, 0), (-1, -1), 3),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
         ("GRID", (0, 0), (-1, -1), 0.35, _color(report_styles, "border", colors.lightgrey)),
         ("ROWBACKGROUNDS", (0, 1 if title else 0), (-1, -1), [_color(report_styles, "surface", colors.white), _color(report_styles, "surface_variant", colors.whitesmoke)]),
     ]
@@ -88,10 +88,10 @@ def metric_grid(metrics: Sequence[tuple[str, object]], report_styles, *, width=N
     table = Table(rows, colWidths=[(width or 8 * inch) * 0.18, (width or 8 * inch) * 0.32] * columns)
     table.setStyle(TableStyle([
         ("VALIGN", (0, 0), (-1, -1), "TOP"),
-        ("LEFTPADDING", (0, 0), (-1, -1), 6),
-        ("RIGHTPADDING", (0, 0), (-1, -1), 6),
-        ("TOPPADDING", (0, 0), (-1, -1), 4),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+        ("LEFTPADDING", (0, 0), (-1, -1), 4),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 4),
+        ("TOPPADDING", (0, 0), (-1, -1), 3),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
         ("LINEBELOW", (0, 0), (-1, -1), 0.35, _color(report_styles, "border", colors.lightgrey)),
     ]))
     return table
@@ -123,10 +123,10 @@ def results_table(columns: Sequence[str], rows: Iterable[Sequence[object]], repo
         ("VALIGN", (0, 0), (-1, -1), "TOP"),
         ("ALIGN", (0, 0), (-1, -1), "LEFT"),
         ("ALIGN", (0, 0), (-1, -1), "LEFT"),
-        ("LEFTPADDING", (0, 0), (-1, -1), 5),
-        ("RIGHTPADDING", (0, 0), (-1, -1), 5),
-        ("TOPPADDING", (0, 0), (-1, -1), 4 if compact else 5),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 4 if compact else 5),
+        ("LEFTPADDING", (0, 0), (-1, -1), 4),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 4),
+        ("TOPPADDING", (0, 0), (-1, -1), 3 if compact else 4),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 3 if compact else 4),
     ]
     for index in numeric_columns:
         commands.append(("ALIGN", (index, 1), (index, -1), "RIGHT"))
@@ -138,7 +138,7 @@ def figure_with_caption(figure, caption, report_styles, *, width=None, height=No
     """Return a figure and a consistently styled caption."""
     styles = _styles(report_styles)
     image = figure if hasattr(figure, "wrap") else Image(figure, width=width, height=height)
-    return [image, Paragraph(escape(str(caption)), _style(report_styles, "Caption")), Spacer(1, 4)]
+    return [image, Paragraph(escape(str(caption)), _style(report_styles, "Caption")), Spacer(1, 1)]
 
 
 def warning_box(message, report_styles, *, markup=False):
