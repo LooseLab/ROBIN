@@ -207,9 +207,9 @@
   color: var(--batman-page-ink) !important;
 }
 
-.batman-mode .q-page .q-btn--flat.text-primary,
-.batman-mode .q-page .q-btn--outline.text-primary {
-  color: var(--batman-yellow) !important;
+.batman-mode:not(.body--dark) .q-page .q-btn--flat.text-primary,
+.batman-mode:not(.body--dark) .q-page .q-btn--outline.text-primary {
+  color: var(--batman-page-ink) !important;
 }
 
 .batman-mode .q-page .q-btn--flat.text-primary:hover,
@@ -261,6 +261,32 @@
 .batman-mode:not(.body--dark) .target-coverage-panel {
   background: #fffdf2;
   background-image: none;
+}
+
+.batman-mode:not(.body--dark) .run-summary-cell {
+  background: #ffffff;
+  background-image: none;
+  border-color: #e5e7eb;
+}
+
+.batman-mode:not(.body--dark) .classification-insight-card {
+  background: #ffffff;
+  color: var(--batman-page-ink);
+  border-color: #d6d3b8;
+}
+
+.batman-mode:not(.body--dark) .classification-insight-card
+  .classification-insight-model,
+.batman-mode:not(.body--dark) .classification-insight-card
+  .classification-insight-meta,
+.batman-mode:not(.body--dark) .classification-insight-card
+  .classification-insight-foot {
+  color: var(--batman-page-muted);
+}
+
+.batman-mode:not(.body--dark) .classification-insight-card
+  .classification-insight-result {
+  color: var(--batman-page-ink);
 }
 
 .body--dark.batman-mode .run-summary-shell,
