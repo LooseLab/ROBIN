@@ -3053,28 +3053,28 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
         getattr(launcher, "plotting_preferences", None)
     )
 
-    with ui.card().classes("w-full").props("id=analysis-detail-coverage"):
-        ui.label("Coverage").classes("text-lg font-semibold mb-2")
+    with ui.card().classes("robin-card w-full").props("id=analysis-detail-coverage"):
+        ui.label("Coverage").classes("robin-card__title mb-2")
         # Summary row (quality + metrics)
         with ui.row().classes("w-full items-center justify-between mb-2"):
             with ui.column().classes("gap-1"):
                 ui.label("Coverage Analysis").classes("text-sm font-medium")
                 with ui.row().classes("items-center gap-2"):
                     cov_quality_label = ui.label("Quality: --").classes(
-                        "text-gray-600 font-medium"
+                        "robin-text-muted font-medium"
                     )
                     cov_quality_badge = ui.label("--x").classes(
-                        "px-2 py-1 rounded bg-gray-100 text-gray-600"
+                        "robin-status-badge bg-gray-100 text-gray-600"
                     )
             with ui.column().classes("gap-1 items-end"):
                 cov_global_lbl = ui.label("Global Estimated Coverage: --x").classes(
-                    "text-sm text-gray-600"
+                    "robin-text-muted text-sm"
                 )
                 cov_target_lbl = ui.label("Targets Estimated Coverage: --x").classes(
-                    "text-sm text-gray-600"
+                    "robin-text-muted text-sm"
                 )
                 cov_enrich_lbl = ui.label("Estimated enrichment: --x").classes(
-                    "text-sm text-gray-600"
+                    "robin-text-muted text-sm"
                 )
         read_length_metrics = ui.row().classes("w-full gap-4 flex-wrap mt-2")
         with read_length_metrics:
@@ -3094,7 +3094,7 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                 cov_off_n_lbl = ui.label("0 primary reads").classes(
                     "text-xs text-gray-500"
                 )
-        read_length_chart_card = ui.card().classes("w-full")
+        read_length_chart_card = ui.card().classes("robin-card w-full")
         read_length_zoom_state: Dict[str, Any] = {
             "n_bins": 0,
             "first_occupied": 0,
@@ -3208,7 +3208,7 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                     ).props("flat dense no-caps size=sm")
         read_length_metrics.set_visibility(False)
         read_length_chart_card.set_visibility(False)
-        with ui.card().classes("w-full"):
+        with ui.card().classes("robin-card w-full"):
             # Per Chromosome Target Coverage (grouped bar — design.md §9.5)
             _cp0 = _cov_chrome_palette()
             echart_target_cov = ui.echart(
@@ -3265,8 +3265,8 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                     }
                 ).classes("w-full h-64")
 
-        with ui.card().classes("w-full"):
-            ui.label("Coverage Over Time").classes("text-lg font-semibold mb-2")
+        with ui.card().classes("robin-card w-full"):
+            ui.label("Coverage Over Time").classes("robin-card__title mb-2")
             _cp1 = _cov_chrome_palette()
             _ln = _cov_line_primary()
             _fill = _cov_area_fill_primary()
@@ -3329,8 +3329,8 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
             ).classes("w-full h-72")
 
         # Target Coverage Over Time Analysis
-        with ui.card().classes("w-full mt-4"):
-            ui.label("Target Coverage Over Time Analysis").classes("text-lg font-semibold mb-2")
+        with ui.card().classes("robin-card w-full mt-4"):
+            ui.label("Target Coverage Over Time Analysis").classes("robin-card__title mb-2")
             ui.label(
                 "Signal-first view of target coverage over time: a population mean and ±2σ envelope, "
                 "ghosted in-range targets, and highlighted outliers. Outliers are points where a target’s "
