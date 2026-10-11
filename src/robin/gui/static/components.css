@@ -198,3 +198,13 @@
 .body--dark .q-dialog .robin-dialog-surface .text-red-500 {
   color: rgb(252 165 165) !important;
 }
+
+/* Keep authentication fields interactive when the login shell is layered
+   above the page background and chrome. */
+#login-page .q-field,
+#login-page .q-field__control,
+#login-page .q-field__native,
+#login-page input {
+  pointer-events: auto;
+  user-select: text;
+}
