@@ -259,8 +259,12 @@
 .batman-mode:not(.body--dark) .run-summary-shell,
 .batman-mode:not(.body--dark) .classification-insight-shell,
 .batman-mode:not(.body--dark) .target-coverage-panel {
-  background: #fffdf2;
+  background: #ffffff;
   background-image: none;
+}
+
+.batman-mode:not(.body--dark) .target-coverage-panel__expansion {
+  background-color: #ffffff;
 }
 
 .batman-mode:not(.body--dark) .run-summary-cell {
