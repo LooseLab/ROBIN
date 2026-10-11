@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import logging
+import sqlite3
 from typing import Any, Dict, Optional
 
 from robin.reference_contigs import (
@@ -11,6 +13,8 @@ from robin.reference_contigs import (
     REFERENCE_CONTIG_SCOPES,
     resolve_reference_contig_scope,
 )
+
+logger = logging.getLogger(__name__)
 
 PLOTTING_PREFERENCES_KEY = "plotting_preferences"
 PLOTTING_PREFERENCES_SCHEMA_VERSION = 4
@@ -249,12 +253,22 @@ def cnv_summary_normalized_from_scale(scale: Optional[str]) -> bool:
 
 def load_plotting_preferences(store=None) -> PlottingPreferencesConfig:
     """Load persisted admin plotting preferences from the security store."""
-    if store is None:
-        from robin.security import SecurityStore
+    try:
+        if store is None:
+            from robin.security import SecurityStore
 
-        store = SecurityStore()
-    raw = store.get_gui_setting(PLOTTING_PREFERENCES_KEY)
-    return PlottingPreferencesConfig.from_dict(raw)
+            store = SecurityStore()
+        raw = store.get_gui_setting(PLOTTING_PREFERENCES_KEY)
+        return PlottingPreferencesConfig.from_dict(raw)
+    except (OSError, sqlite3.Error) as exc:
+        # Plotting preferences are optional presentation settings. A locked or
+        # read-only settings database must not prevent scientific plots from
+        # being rendered; use the validated defaults for this process instead.
+        logger.warning(
+            "Could not read persisted plotting preferences; using defaults: %s",
+            exc,
+        )
+        return PlottingPreferencesConfig()
 
 
 def resolve_cnv_summary_normalized(

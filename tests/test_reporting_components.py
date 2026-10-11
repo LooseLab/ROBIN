@@ -1,4 +1,5 @@
 from pathlib import Path
+import sqlite3
 
 from reportlab.lib.pagesizes import A4
 from reportlab.platypus import SimpleDocTemplate
@@ -55,3 +56,19 @@ def test_metadata_and_results_tables_escape_values_and_use_repeat_rows(tmp_path)
     assert results.repeatRows == 1
     assert "sample &lt;long&gt;&amp;identifier" in metadata._cellvalues[1][1][0].text
     assert "A&lt;B" in results._cellvalues[1][0][0].text
+
+
+def test_plotting_preferences_fall_back_when_settings_database_is_read_only(monkeypatch):
+    import robin.security
+    from robin.gui.plotting_preferences import load_plotting_preferences
+
+    class ReadOnlyStore:
+        def __init__(self):
+            raise sqlite3.OperationalError("attempt to write a readonly database")
+
+    monkeypatch.setattr(robin.security, "SecurityStore", ReadOnlyStore)
+
+    preferences = load_plotting_preferences()
+
+    assert preferences.cnv_report_scale == "ploidy"
+    assert preferences.cnv_gene_label_font_size == 12
