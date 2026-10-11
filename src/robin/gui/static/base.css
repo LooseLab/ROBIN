@@ -41,3 +41,218 @@ textarea {
   overflow-x: auto;
   overscroll-behavior-x: contain;
 }
+
+
+html {
+  max-width: 100%;
+  overflow-x: hidden;
+}
+
+body {
+  max-width: 100%;
+  overflow-x: hidden;
+  min-height: 100%;
+  background: linear-gradient(180deg, var(--app-bg-top) 0%, var(--app-bg-bottom) 100%);
+  font-family: var(--font-primary);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  color: var(--md-on-surface);
+  line-height: 1.5;
+  position: relative;
+  margin: 0;
+  padding: 0;
+  color-scheme: light dark;
+}
+
+/* Subtle accent glow (design.md — focus / importance) */
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  background: radial-gradient(ellipse 120% 45% at 50% -15%, rgba(var(--md-primary-rgb), 0.07), transparent 55%);
+}
+
+body.body--dark::before {
+  background: radial-gradient(ellipse 100% 40% at 50% -10%, rgba(var(--md-primary-rgb), 0.12), transparent 50%);
+}
+
+/* Typography — Manrope anchors / Inter data labels */
+.text-display-large {
+  font-family: var(--font-display);
+  font-size: 48px;
+  line-height: 56px;
+  font-weight: 800;
+  letter-spacing: -0.03em;
+}
+
+.text-display-medium {
+  font-family: var(--font-display);
+  font-size: 36px;
+  line-height: 44px;
+  font-weight: 700;
+  letter-spacing: -0.03em;
+}
+
+.text-display-small {
+  font-family: var(--font-display);
+  font-size: 30px;
+  line-height: 38px;
+  font-weight: 700;
+  letter-spacing: -0.025em;
+}
+
+.text-headline-large {
+  font-family: var(--font-display);
+  font-size: 24px;
+  line-height: 32px;
+  font-weight: 700;
+  letter-spacing: -0.025em;
+}
+
+.text-headline-medium {
+  font-family: var(--font-display);
+  font-size: 20px;
+  line-height: 28px;
+  font-weight: 700;
+  letter-spacing: -0.025em;
+}
+
+.text-headline-small {
+  font-family: var(--font-display);
+  font-size: 18px;
+  line-height: 26px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+.text-title-large {
+  font-size: 16px;
+  line-height: 24px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+}
+
+.text-title-medium {
+  font-size: 16px;
+  line-height: 24px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+}
+
+.text-title-small {
+  font-size: 14px;
+  line-height: 20px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+}
+
+.text-body-large {
+  font-size: 16px;
+  line-height: 24px;
+  font-weight: 400;
+  letter-spacing: -0.01em;
+}
+
+.text-body-medium {
+  font-size: 14px;
+  line-height: 20px;
+  font-weight: 400;
+  letter-spacing: -0.01em;
+}
+
+.text-body-small {
+  font-size: 12px;
+  line-height: 16px;
+  font-weight: 400;
+  letter-spacing: 0;
+}
+
+.text-label-large {
+  font-size: 14px;
+  line-height: 20px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.text-label-medium {
+  font-size: 12px;
+  line-height: 16px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
+.text-label-small {
+  font-size: 11px;
+  line-height: 16px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.font-mono,
+code,
+pre,
+.text-mono {
+  font-family: var(--font-mono);
+}
+
+
+/* Apple HIG Legacy support */
+
+.bold-links a:link {
+  font-weight: 600;  /* Apple's link weight */
+}
+
+.arrow-links a:link:not(.auto-link)::after {
+  content: "north_east";
+  font-family: "Material Icons";
+  font-weight: 100;
+  vertical-align: -10%;
+}
+
+/* Apple HIG: Remove old paper texture styles */
+html::before,
+.paper-texture::before {
+  display: none;
+}
+
+.texture-lines,
+.texture-grid {
+  background: none;
+}
+
+/* Apple HIG: System appearance support */
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+  }
+}
+
+@media (prefers-color-scheme: light) {
+  :root {
+    color-scheme: light;
+  }
+}
+
+/* Apple HIG: Reduced motion support */
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* Apple HIG: High contrast support */
+@media (prefers-contrast: high) {
+  :root {
+    --md-outline: #000000;
+    --md-outline-variant: #000000;
+  }
+
+  .body--dark {
+    --md-outline: #ffffff;
+    --md-outline-variant: #ffffff;
+  }
+}

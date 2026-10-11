@@ -258,7 +258,7 @@ Within **each** grid cell, use this structure:
 
 7.6 Reference Implementation (ROBIN)
 
-The **Run Summary** on the sample detail page uses **dedicated CSS** in `styles.css` (classes `run-summary-shell`, `run-summary-grid`, `run-summary-cell`, etc.) so **layout and colors stay correct in dark mode** without relying on Tailwind `dark:`. The grid is **responsive** (1 → 2 → 4 columns by breakpoint), with **explicit `grid-column: span …`** rules for full-width rows. **Hints** are implemented as **tooltips / `title` on values** to keep row height compact.
+The **Run Summary** on the sample detail page uses **dedicated CSS** in `pages.css` (classes `run-summary-shell`, `run-summary-grid`, `run-summary-cell`, etc.) so **layout and colors stay correct in dark mode** without relying on Tailwind `dark:`. The grid is **responsive** (1 → 2 → 4 columns by breakpoint), with **explicit `grid-column: span …`** rules for full-width rows. **Hints** are implemented as **tooltips / `title` on values** to keep row height compact.
 
 
 
@@ -310,11 +310,11 @@ Pair the **numeric confidence** with a **thin horizontal bar** (height **~6–8p
 
 8.6 Implementation Note (NiceGUI)
 
-Use a **wrapper** (`ui.element('div')` or `ui.card`) with classes such as **`hover:shadow-md transition-all cursor-pointer`**, and **`on('click', …)`** to scroll. Prefer **dedicated CSS classes** in `styles.css` with **`.body--dark`** for dark tokens, consistent with §7.5.
+Use a **wrapper** (`ui.element('div')` or `ui.card`) with classes such as **`robin-card--interactive`** and **`on('click', …)`** to scroll. Prefer **dedicated CSS classes** in `pages.css` with **`.body--dark`** for dark tokens, consistent with §7.5.
 
 8.7 Reference Implementation (ROBIN)
 
-The sample **Classification details** strip uses **`classification-insight-*`** classes in `styles.css` and **`_create_classification_dashboard_card_with_data`** in `summary.py**. Expansion panels in `classification.py` expose **`id="classification-detail-{tool_step}"`** for scroll targets.
+The sample **Classification details** strip uses **`classification-insight-*`** classes in `pages.css` and **`_create_classification_dashboard_card_with_data`** in `summary.py**. Expansion panels in `classification.py` expose **`id="classification-detail-{tool_step}"`** for scroll targets.
 
 
 8.8 Classification Charts (ECharts — Sturgeon, NanoDX, PanNanoDX, Random Forest)
@@ -369,12 +369,12 @@ This strip sits below **Classification details** on the sample detail page. It s
 
 9.3 Threshold Pills (Coverage)
 
-The **≥30× / ≥20× / ≥10× / below 10×** legend uses **`analysis-insight-pill`** and **`analysis-insight-pill--emerald|sky|amber|rose`** in `styles.css` so light and **`.body--dark`** backgrounds stay readable.
+The **≥30× / ≥20× / ≥10× / below 10×** legend uses **`analysis-insight-pill`** and **`analysis-insight-pill--emerald|sky|amber|rose`** in `pages.css` so light and **`.body--dark`** backgrounds stay readable.
 
 9.4 Reference implementation (ROBIN)
 
 - **`summary.py`:** **`_analysis_section`** (shell + grid), **`_scroll_to_analysis_detail`**, **`_create_*_dashboard_card_with_data`** for each analysis card.
-- **`styles.css`:** Reuses **`classification-insight-*`**; adds **`analysis-insight-pill*`** for the coverage legend; scoped **`#analysis-detail-cnv`** / **`#analysis-detail-mgmt`** / **`#analysis-detail-fusion`** for dark-mode copy on detail sections.
+- **`pages.css`:** Reuses **`classification-insight-*`**; adds **`analysis-insight-pill*`** for the coverage legend; scoped **`#analysis-detail-cnv`** / **`#analysis-detail-mgmt`** / **`#analysis-detail-fusion`** for dark-mode copy on detail sections.
 - **Scroll targets:** Outer section cards set **`id=analysis-detail-coverage`**, **`id=analysis-detail-cnv`**, **`id=analysis-detail-mgmt`**, **`id=analysis-detail-fusion`** in **`coverage.py`**, **`cnv.py`**, **`mgmt.py`**, **`fusion.py`** respectively.
 
 **CNV detail UI & ECharts** — see **§9.6**. **Fusion detail** — see **§9.7**.
@@ -481,7 +481,7 @@ The **expandable CNV block** (`#analysis-detail-cnv` in **`cnv.py`**) follows th
 
 **Semantics:** Gains/losses and breakpoint overlays follow §5 where applicable; **breakpoint** **`markLine`** styling remains a high-visibility red on both themes.
 
-**CSS:** **`#analysis-detail-cnv`** scoped **`.body--dark`** text fixes in **`styles.css`** (table/label greys).
+**CSS:** **`#analysis-detail-cnv`** scoped **`.body--dark`** text fixes in **`pages.css`** (table/label greys).
 
 **Reference implementation:** **`cnv.py`** — **`_apply_cnv_echart_chrome`**, **`_sync_cnv_echarts_theme_if_needed`**, state key **`cnv_plot_theme_dark`**.
 
@@ -490,7 +490,7 @@ The **expandable CNV block** (`#analysis-detail-cnv` in **`cnv.py`**) follows th
 
 The **expandable Fusion block** (`#analysis-detail-fusion` in **`fusion.py`**) uses the same **insight shell** as §9.6: **`classification-insight-shell`**, **`classification-insight-heading`** (**“Fusion analysis”** — **no emoji** in the section title), a top **`classification-insight-card`** with **`merge`** icon (**`classification-insight-icon`**), **Candidate summary** / target and genome-wide pair–group counts (**`classification-insight-meta`**), and a short **`classification-insight-foot`**. **Target panel** and **Genome-wide** subsections use **`target-coverage-panel__meta-label`** and **`mgmt-detail-separator`** between them. Tables and plots fill the shell below (matplotlib / DNA Features Viewer as implemented).
 
-**CSS:** **`#analysis-detail-fusion`** scoped **`.body--dark`** text fixes in **`styles.css`** for legacy Tailwind greys on tables and status copy.
+**CSS:** **`#analysis-detail-fusion`** scoped **`.body--dark`** text fixes in **`pages.css`** for legacy Tailwind greys on tables and status copy.
 
 **Reference implementation:** **`fusion.py`** — **`add_fusion_section`**.
 
@@ -510,14 +510,14 @@ The **MNP-Flex results** block on the sample detail page follows the same **insi
 
 10.2 Badges (no Tailwind-only colours)
 
-- **Score badges** (hierarchy, aggregates, top path): **`mnpflex-score-badge`** tiers **`--neutral`** and **`--5`** … **`--1`** by numeric score bands (see `styles.css`).
+- **Score badges** (hierarchy, aggregates, top path): **`mnpflex-score-badge`** tiers **`--neutral`** and **`--5`** … **`--1`** by numeric score bands (see `pages.css`).
 - **QC / MGMT status:** **`mnpflex-status-badge--neutral|pass|warn|fail|meth|unmeth`**.
 - **Errors:** **`mnpflex-error-text`** for inline error lines.
 
 10.3 Reference implementation (ROBIN)
 
 - **`mnpflex.py`:** **`add_mnpflex_section`** builds the UI; **`_score_badge_classes`** / **`_status_badge_classes`** return semantic **`mnpflex-*`** classes.
-- **`styles.css`:** **`mnpflex-*`** and **`classification-insight-grid--2`** (two-column grid for QC/MGMT).
+- **`pages.css`:** **`mnpflex-*`** and **`classification-insight-grid--2`** (two-column grid for QC/MGMT).
 
 
 Version 1.16 | April 2026

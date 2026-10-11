@@ -10,3 +10,203 @@
   --robin-radius: var(--radius-lg);
   --robin-spacing-compact: var(--spacing-sm);
 }
+
+
+/**
+ * Editorial Bioinformatics — global theme (design.md)
+ * Surfaces: slate neutrals + subtle vertical gradients; semantic emerald / red / amber for viz.
+ */
+:root {
+  /* Editorial Bioinformatics — design.md (Professional Lab, light) */
+  --md-primary-rgb: 22, 163, 74; /* Emerald 600 — primary actions & positive signal */
+  --md-primary: #16A34A;
+  --md-primary-container: #DCFCE7;
+  --md-on-primary: #FFFFFF;
+  --md-on-primary-container: #14532D;
+
+  --md-secondary: #0F766E; /* Teal — secondary emphasis */
+  --md-secondary-container: #CCFBF1;
+  --md-on-secondary: #FFFFFF;
+  --md-on-secondary-container: #134E4A;
+
+  --md-tertiary: #475569;
+  --md-tertiary-container: #F1F5F9;
+  --md-on-tertiary: #FFFFFF;
+  --md-on-tertiary-container: #0F172A;
+
+  --md-error: #DC2626; /* Red 600 */
+  --md-error-rgb: 220, 38, 38;
+  --md-error-container: #FEE2E2;
+  --md-on-error: #FFFFFF;
+  --md-on-error-container: #7F1D1D;
+
+  /* Semantic visualization (design.md §4) */
+  --semantic-positive: #16A34A;
+  --semantic-negative: #DC2626;
+  --semantic-warning: #F59E0B;
+
+  /* Surfaces — white / slate-50 gradient via body */
+  --md-surface: #FFFFFF;
+  --md-surface-container: #F8FAFC;
+  --md-surface-container-high: #F1F5F9;
+  --md-surface-container-highest: #E2E8F0;
+  --md-surface-variant: #F1F5F9;
+  --md-on-surface: #0F172A; /* Slate 900 — headlines */
+  --md-on-surface-variant: #475569; /* Slate 600 — secondary */
+
+  --md-outline: #E2E8F0; /* Slate 200 — 1px card borders */
+  --md-outline-variant: rgba(226, 232, 240, 0.65);
+
+  --md-inverse-surface: #0F172A;
+  --md-inverse-on-surface: #F8FAFC;
+  --md-inverse-primary: #34D399;
+
+  --color-primary: var(--md-primary);
+  --color-primary-dark: var(--md-secondary);
+  --color-text: var(--md-on-surface);
+  --color-text-light: var(--md-on-surface-variant);
+  --color-background: var(--md-surface);
+  --color-background-dark: var(--md-inverse-surface);
+
+  --app-bg-top: #F8FAFC;
+  --app-bg-bottom: #FFFFFF;
+
+  /* Sample detail page — same subtle vertical gradient as Target Coverage panel */
+  --sample-card-gradient-light: linear-gradient(
+    to bottom,
+    rgb(248 250 252) 0%,
+    rgb(255 255 255) 40%,
+    rgb(255 255 255) 100%
+  );
+  --sample-card-gradient-dark: linear-gradient(
+    to bottom,
+    rgba(15, 23, 42, 0.65) 0%,
+    rgba(15, 23, 42, 0.4) 100%
+  );
+
+  /* App shell — emerald header/footer (continuous brand chrome) */
+  --shell-chrome-top: #15803D; /* emerald-700 */
+  --shell-chrome-bottom: #16A34A; /* emerald-600 */
+  --shell-chrome-edge: rgba(255, 255, 255, 0.14);
+
+  /* Typography — Manrope (anchors), Inter (labels/body), JetBrains Mono (technical) */
+  --font-display: "Manrope", "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-primary: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  --font-mono: "JetBrains Mono", "SF Mono", "Monaco", "Menlo", "Consolas", "Liberation Mono", "Courier New", monospace;
+
+  /* Spacing - Mosaic uses Tailwind spacing scale (compact) */
+  --spacing-xs: 4px;   /* 1 */
+  --spacing-sm: 6px;   /* 1.5 */
+  --spacing-md: 12px;  /* 3 */
+  --spacing-lg: 16px;  /* 4 */
+  --spacing-xl: 24px;  /* 6 */
+  --spacing-xxl: 32px; /* 8 */
+  --spacing-xxxl: 48px; /* 12 */
+
+  /* Elevation - Mosaic uses more pronounced shadows */
+  --elevation-1: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+  --elevation-2: 0 1px 3px 0 rgba(0, 0, 0, 0.1), 0 1px 2px 0 rgba(0, 0, 0, 0.06);
+  --elevation-3: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+  --elevation-4: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
+  --elevation-5: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
+
+  /* Transitions - Mosaic uses smooth transitions */
+  --transition-base: 150ms ease-in-out;
+  --transition-emphasized: 300ms ease-in-out;
+
+  /* Border radius - Mosaic uses consistent rounded corners */
+  --radius-sm: 4px;   /* Mosaic's small radius */
+  --radius-md: 8px;   /* Mosaic's medium radius */
+  --radius-lg: 12px;   /* Mosaic's large radius */
+  --radius-xl: 16px;  /* Mosaic's extra large radius */
+  --radius-2xl: 24px; /* Mosaic's 2xl radius */
+
+  /* Apple HIG specific colors */
+  --apple-blue: #007AFF;
+  --apple-green: #34C759;
+  --apple-indigo: #5856D6;
+  --apple-orange: #FF9500;
+  --apple-pink: #FF2D92;
+  --apple-purple: #AF52DE;
+  --apple-red: #FF3B30;
+  --apple-teal: #5AC8FA;
+  --apple-yellow: #FFCC00;
+
+  /* Apple HIG semantic colors */
+  --apple-label-primary: #1D1D1F;
+  --apple-label-secondary: #6E6E73;
+  --apple-label-tertiary: #8E8E93;
+  --apple-label-quaternary: #AEAEB2;
+  --apple-separator: #D2D2D7;
+  --apple-opaque-separator: #C6C6C8;
+  --apple-system-background: #FFFFFF;
+  --apple-secondary-system-background: #F2F2F7;
+  --apple-tertiary-system-background: #FFFFFF;
+  --apple-system-grouped-background: #F2F2F7;
+  --apple-secondary-system-grouped-background: #FFFFFF;
+  --apple-tertiary-system-grouped-background: #F2F2F7;
+}
+
+/* Midnight Analysis — design.md §5.2 */
+.body--dark {
+  --md-primary-rgb: 52, 211, 153; /* Emerald 400 */
+  --md-primary: #34D399;
+  --md-primary-container: #064E3B;
+  --md-on-primary: #FFFFFF;
+  --md-on-primary-container: #D1FAE5;
+
+  --md-secondary: #2DD4BF;
+  --md-secondary-container: #134E4A;
+  --md-on-secondary: #042F2E;
+  --md-on-secondary-container: #CCFBF1;
+
+  --md-tertiary: #94A3B8;
+  --md-tertiary-container: #1E293B;
+  --md-on-tertiary: #0F172A;
+  --md-on-tertiary-container: #F1F5F9;
+
+  --md-error: #FB7185; /* Rose 400 — negative / deviation */
+  --md-error-rgb: 251, 113, 133;
+  --md-error-container: #881337;
+  --md-on-error: #450A0A;
+  --md-on-error-container: #FFE4E6;
+
+  --semantic-positive: #34D399;
+  --semantic-negative: #FB7185;
+  --semantic-warning: #FCD34D;
+
+  --md-surface: #09090B;
+  --md-surface-container: #0F172A;
+  --md-surface-container-high: #1E293B;
+  --md-surface-container-highest: #334155;
+  --md-surface-variant: #1E293B;
+  --md-on-surface: #F8FAFC;
+  --md-on-surface-variant: #94A3B8;
+
+  --md-outline: #1E293B;
+  --md-outline-variant: rgba(30, 41, 59, 0.85);
+
+  --md-inverse-surface: #F8FAFC;
+  --md-inverse-on-surface: #020617;
+  --md-inverse-primary: #059669;
+
+  --app-bg-top: #020617;
+  --app-bg-bottom: #09090B;
+
+  --shell-chrome-top: #065f46; /* emerald-800 */
+  --shell-chrome-bottom: #047857; /* emerald-700 */
+  --shell-chrome-edge: rgba(255, 255, 255, 0.1);
+
+  --apple-label-primary: #F8FAFC;
+  --apple-label-secondary: #94A3B8;
+  --apple-label-tertiary: #64748B;
+  --apple-label-quaternary: #475569;
+  --apple-separator: #1E293B;
+  --apple-opaque-separator: #334155;
+  --apple-system-background: #09090B;
+  --apple-secondary-system-background: #0F172A;
+  --apple-tertiary-system-background: #1E293B;
+  --apple-system-grouped-background: #020617;
+  --apple-secondary-system-grouped-background: #0F172A;
+  --apple-tertiary-system-grouped-background: #1E293B;
+}

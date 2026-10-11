@@ -101,7 +101,7 @@ def _run_summary_cell(
     col_class: str = "",
     hint: str = "",
 ) -> None:
-    """One Run Summary grid cell; colors from styles.css (§7, .body--dark — not Tailwind dark:)."""
+    """One Run Summary grid cell; colors from pages.css (§7, .body--dark — not Tailwind dark:)."""
     cell = ("run-summary-cell min-w-0 " + col_class).strip()
     with ui.element("div").classes(cell):
         with ui.element("div").classes("run-summary-cell-inner"):
@@ -185,7 +185,7 @@ def _run_info_section(sample_dir: Path, sample_id: str):
         if val != "Not available":
             cells.append((icn, lab, val, ""))
 
-    # §7.2 / §7.3 — shell is flex column + full-width grid (see styles.css; avoid ui.column shrink)
+    # §7.2 / §7.3 — shell is flex column + full-width grid (see pages.css; avoid ui.column shrink)
     with ui.element("div").classes("run-summary-shell w-full min-w-0"):
         ui.label("Run summary").classes("run-summary-title text-headline-small")
         with ui.element("div").classes("run-summary-grid"):

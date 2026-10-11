@@ -209,3 +209,298 @@
   pointer-events: auto;
   user-select: text;
 }
+
+
+/* Cards — white + 1px slate border (design.md §5.1) */
+.q-card {
+  background-color: var(--md-surface);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--elevation-1);
+  border: 1px solid var(--md-outline);
+  transition: box-shadow var(--transition-base), border-color var(--transition-base);
+  backdrop-filter: blur(12px);
+}
+
+/* Allow cards containing tables to overflow horizontally */
+.q-card:has(.compact-table) {
+  overflow: visible;
+}
+
+/* Ensure any column containing a table allows overflow */
+.column:has(.compact-table) {
+  overflow: visible;
+}
+
+.q-button {
+  border-radius: var(--radius-md);
+  font-weight: 600;  /* Mosaic's button weight */
+  text-transform: none;
+  letter-spacing: -0.025em;
+  transition: all var(--transition-base);
+  /* Mosaic: Clean button states */
+  position: relative;
+  overflow: hidden;
+  font-size: 14px;
+  padding: var(--spacing-sm) var(--spacing-lg);
+  min-height: 40px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--spacing-xs);
+  cursor: pointer;
+  border: none;
+}
+
+.q-button::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: linear-gradient(45deg, transparent 30%, rgba(255, 255, 255, 0.1) 50%, transparent 70%);
+  transform: translateX(-100%);
+  transition: transform 0.6s;
+}
+
+.q-button:hover::before {
+  transform: translateX(100%);
+}
+
+.q-button--standard {
+  background-color: var(--md-primary);
+  color: var(--md-on-primary);
+  box-shadow: var(--elevation-1), 0 0 0 1px rgba(255, 255, 255, 0.08) inset;
+  position: relative;
+}
+
+.q-button--standard::after {
+  content: "";
+  position: absolute;
+  inset: -2px;
+  border-radius: inherit;
+  background: radial-gradient(ellipse at 50% 30%, rgba(var(--md-primary-rgb), 0.35), transparent 65%);
+  opacity: 0;
+  transition: opacity var(--transition-base);
+  z-index: -1;
+  pointer-events: none;
+}
+
+.q-button--standard:hover {
+  background-color: #15803D;
+  box-shadow: var(--elevation-2);
+  transform: translateY(-1px);
+}
+
+.body--dark .q-button--standard:hover {
+  background-color: #10B981;
+}
+
+.q-button--standard:hover::after {
+  opacity: 1;
+}
+
+.q-button--outline {
+  border: 1px solid var(--md-outline);
+  color: var(--md-primary);
+  background-color: transparent;
+}
+
+.q-button--outline:hover {
+  background-color: var(--md-primary-container);
+  border-color: var(--md-primary);
+  transform: translateY(-1px);
+}
+
+
+/* Mosaic Image and plot containers - Clean modern depth */
+.image-container,
+.plot-container,
+.chart-container,
+.visualization-container {
+  background-color: var(--md-surface);
+  border-radius: var(--radius-lg);
+  padding: var(--spacing-lg);
+  box-shadow: var(--elevation-2);
+  border: 1px solid var(--md-outline);
+  /* Mosaic: Clean modern styling */
+  transition: all var(--transition-base);
+}
+
+.image-container:hover,
+.plot-container:hover,
+.chart-container:hover,
+.visualization-container:hover {
+  box-shadow: var(--elevation-3);
+}
+
+/* Apple HIG Form elements */
+.q-input {
+  border-radius: var(--radius-md);
+  transition: all var(--transition-base);
+  background-color: var(--md-surface);
+  border: 1px solid var(--md-outline);
+  /* Apple HIG: Subtle focus states */
+}
+
+.q-input:focus-within {
+  border-color: var(--md-primary);
+  box-shadow: 0 0 0 3px rgba(var(--md-primary-rgb), 0.15);
+}
+
+.q-select {
+  border-radius: var(--radius-md);
+  background-color: var(--md-surface);
+}
+
+.q-checkbox {
+  color: var(--md-primary);
+}
+
+.q-radio {
+  color: var(--md-primary);
+}
+
+/* Apple HIG Switch styling */
+.q-switch {
+  color: var(--md-primary);
+}
+
+.q-switch__track {
+  background-color: var(--md-outline-variant);
+}
+
+.q-switch__thumb {
+  background-color: var(--md-primary);
+}
+
+/* Apple HIG Menu styling */
+.q-menu {
+  background-color: var(--md-surface);
+  border: 1px solid var(--md-outline-variant);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--elevation-3);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+}
+
+.q-menu-item {
+  padding: var(--spacing-md);
+  transition: background-color var(--transition-base);
+  border-radius: var(--radius-sm);
+  margin: 2px var(--spacing-sm);
+}
+
+.q-menu-item:hover {
+  background-color: var(--md-surface-container-high);
+}
+
+/* Apple HIG Progress indicators */
+.q-circular-progress {
+  color: var(--md-primary);
+}
+
+/* CPU / RAM meters — white on emerald chrome */
+.q-circular-progress .q-circular-progress__text,
+.q-circular-progress .q-circular-progress__value {
+  color: var(--md-on-primary) !important;
+  font-weight: 600;
+  font-size: 13px;
+  text-shadow: 0 1px 1px rgba(0, 0, 0, 0.2);
+}
+
+.body--dark .q-circular-progress .q-circular-progress__text,
+.body--dark .q-circular-progress .q-circular-progress__value {
+  color: var(--md-on-primary) !important;
+}
+
+/* Override any default positioning that might interfere */
+.q-circular-progress .q-circular-progress__text,
+.q-circular-progress .q-circular-progress__value,
+.q-circular-progress .q-circular-progress__percentage {
+  margin: 0 !important;
+  padding: 0 !important;
+}
+
+.q-spinner {
+  color: var(--md-primary);
+}
+
+/* Apple HIG Links */
+a:link:not(.browser-window *),
+a:visited:not(.browser-window *) {
+  color: var(--md-primary);
+  text-decoration: none;
+  transition: color var(--transition-base);
+  border-radius: var(--radius-sm);
+  padding: var(--spacing-xs) var(--spacing-sm);
+}
+
+a:hover:not(.browser-window *),
+a:active:not(.browser-window *) {
+  color: var(--md-primary-container);
+  background-color: var(--md-primary-container);
+  text-decoration: none;
+}
+
+/* Apple HIG Elevation utility classes */
+.elevation-1 { box-shadow: var(--elevation-1); }
+.elevation-2 { box-shadow: var(--elevation-2); }
+.elevation-3 { box-shadow: var(--elevation-3); }
+.elevation-4 { box-shadow: var(--elevation-4); }
+
+/* Apple HIG Scrollbar styling */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--md-surface-container);
+  border-radius: var(--radius-sm);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--md-outline-variant);
+  border-radius: var(--radius-sm);
+  border: 2px solid var(--md-surface-container);
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--md-outline);
+}
+
+/* Focus — emerald ring */
+*:focus {
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(var(--md-primary-rgb), 0.28);
+  border-radius: var(--radius-sm);
+}
+
+/* Apple HIG Animation keyframes */
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes slideIn {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(0); }
+}
+
+@keyframes scaleIn {
+  from { transform: scale(0.95); opacity: 0; }
+  to { transform: scale(1); opacity: 1; }
+}
+
+.fade-in {
+  animation: fadeIn 0.4s cubic-bezier(0.25, 0.46, 0.45, 0.94);
+}
+
+.slide-in {
+  animation: slideIn 0.4s cubic-bezier(0.25, 0.46, 0.45, 0.94);
+}
+
+.scale-in {
+  animation: scaleIn 0.3s cubic-bezier(0.25, 0.46, 0.45, 0.94);
+}

@@ -15,3 +15,1493 @@
 .robin-analysis-grid > * {
   min-width: 0;
 }
+
+
+/* Apple HIG Responsive design */
+@media (max-width: 768px) {
+  .q-header {
+    height: 56px;
+  }
+
+  .q-footer {
+    height: 56px;
+  }
+
+  .text-display-large {
+    font-size: 45px;
+    line-height: 52px;
+  }
+
+  .text-headline-large {
+    font-size: 28px;
+    line-height: 36px;
+  }
+}
+
+/* Apple HIG Dark mode specific adjustments */
+.body--dark {
+  color-scheme: dark;
+}
+
+.body--dark .q-card {
+  background-color: rgba(15, 23, 42, 0.5);
+  border: 1px solid #1E293B;
+  backdrop-filter: blur(12px);
+}
+
+.body--dark .q-input {
+  background-color: var(--md-surface-container);
+  color: var(--md-on-surface);
+}
+
+/*
+ * Run Summary — design.md §7
+ * Quasar toggles .body--dark; theme.py keeps `html.dark` in sync for Tailwind `dark:*` utilities.
+ * These rules mirror §7.2 (light) and §7.3 (dark) with explicit .body--dark selectors.
+ */
+.run-summary-shell {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  border-radius: 0.75rem;
+  overflow: hidden;
+  border: 1px solid rgb(226 232 240); /* slate-200 */
+  background: var(--sample-card-gradient-light);
+  box-shadow: 0 1px 2px 0 rgb(0 0 0 / 0.05);
+  /* Horizontal padding here so inner grid can be width:100% without margin overflow */
+  padding: 0 0.75rem 0.75rem;
+}
+
+.body--dark .run-summary-shell {
+  border-color: rgb(51 65 85); /* slate-700 */
+  background: var(--sample-card-gradient-dark);
+}
+
+.run-summary-shell .run-summary-title.q-label,
+.run-summary-shell .run-summary-title {
+  color: rgb(15 23 42);
+  flex: 0 0 auto;
+  width: 100%;
+  box-sizing: border-box;
+  margin: 0 -0.75rem;
+  padding: 0.75rem 0.75rem 0.5rem;
+  border-bottom: 1px solid rgb(241 245 249); /* slate-100 */
+}
+
+.body--dark .run-summary-shell .run-summary-title.q-label,
+.body--dark .run-summary-shell .run-summary-title {
+  color: rgb(248 250 252); /* slate-50 — legible on dark surface */
+  border-bottom-color: rgba(51, 65, 85, 0.5);
+}
+
+.run-summary-grid {
+  display: grid;
+  flex: 1 1 auto;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 1px;
+  margin: 0.75rem 0 0;
+  border-radius: 0.5rem;
+  overflow: hidden;
+  background-color: rgb(241 245 249); /* slate-100 — hairline dividers */
+}
+
+.body--dark .run-summary-grid {
+  background-color: rgba(51, 65, 85, 0.5); /* divide-slate-700/50 §7.3 */
+}
+
+@media (min-width: 640px) {
+  .run-summary-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (min-width: 1280px) {
+  .run-summary-grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+
+/* Full-width rows (explicit — do not rely on Tailwind col-span in NiceGUI) */
+@media (min-width: 640px) {
+  .run-summary-cell--basecall {
+    grid-column: span 2;
+  }
+  .run-summary-cell--sample {
+    grid-column: span 2;
+  }
+}
+
+@media (min-width: 1280px) {
+  .run-summary-cell--basecall {
+    grid-column: span 4;
+  }
+  .run-summary-cell--sample {
+    grid-column: span 2;
+  }
+}
+
+.run-summary-cell {
+  min-width: 0;
+  box-sizing: border-box;
+  /* Symmetric horizontal padding so right column matches left (design.md §7.1 min 16px) */
+  padding: 0.75rem 1rem;
+  background: var(--sample-card-gradient-light);
+}
+
+.body--dark .run-summary-cell {
+  background: var(--sample-card-gradient-dark);
+}
+
+.run-summary-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+/* Avoid Quasar .row/.column gutters; keep icon + text aligned with even inset */
+.run-summary-cell-inner {
+  display: flex;
+  flex-direction: row;
+  align-items: flex-start;
+  gap: 0.75rem; /* 12px — design.md §7.4 */
+  width: 100%;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+}
+
+.run-summary-shell .run-summary-label.q-label,
+.run-summary-shell .run-summary-label {
+  font-size: 0.6875rem; /* 11px — legibility */
+  line-height: 1rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-weight: 600;
+  color: rgb(100 116 139); /* slate-500 */
+}
+
+.body--dark .run-summary-shell .run-summary-label.q-label,
+.body--dark .run-summary-shell .run-summary-label {
+  color: rgb(148 163 184); /* slate-400 §7.3 */
+}
+
+.run-summary-shell .run-summary-value.q-label,
+.run-summary-shell .run-summary-value {
+  font-size: 1rem; /* slightly larger for scanability */
+  line-height: 1.375rem;
+  font-weight: 500;
+  font-family: var(--font-mono);
+  word-break: break-word;
+  color: rgb(15 23 42); /* slate-900 */
+}
+
+.body--dark .run-summary-shell .run-summary-value.q-label,
+.body--dark .run-summary-shell .run-summary-value {
+  color: #ffffff; /* §7.3 — override body color inheritance */
+}
+
+.run-summary-icon.q-icon,
+.run-summary-icon {
+  width: 1.5rem;
+  height: 1.5rem;
+  flex-shrink: 0;
+  font-size: 1.5rem; /* 24px §7.2 / §7.3 */
+  color: #10b981; /* Solid Emerald §7.2 */
+}
+
+.body--dark .run-summary-icon.q-icon,
+.body--dark .run-summary-icon {
+  color: #22c55e; /* Neon green §7.3 */
+  filter: drop-shadow(0 0 5px rgba(34, 197, 94, 0.3));
+}
+
+/*
+ * Classification Insight Cards — design.md §8 (Diagnostic Pulse)
+ * Uses .body--dark like Run Summary; not Tailwind dark: alone.
+ */
+.classification-insight-shell {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  border-radius: 0.75rem;
+  overflow: hidden;
+  border: 1px solid var(--robin-border);
+  background: var(--sample-card-gradient-light);
+  box-shadow: var(--elevation-1);
+  padding: 0 0.75rem 0.75rem;
+}
+
+.body--dark .classification-insight-shell {
+  border-color: rgb(51 65 85);
+  background: var(--sample-card-gradient-dark);
+}
+
+.classification-insight-shell .classification-insight-heading.q-label,
+.classification-insight-shell .classification-insight-heading {
+  color: var(--robin-text);
+  flex: 0 0 auto;
+  width: 100%;
+  box-sizing: border-box;
+  margin: 0 -0.75rem;
+  padding: 0.75rem 0.75rem 0.5rem;
+  border-bottom: 1px solid var(--robin-border);
+}
+
+.body--dark .classification-insight-shell .classification-insight-heading.q-label,
+.body--dark .classification-insight-shell .classification-insight-heading {
+  color: rgb(248 250 252);
+  border-bottom-color: rgba(51, 65, 85, 0.5);
+}
+
+.classification-insight-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0.75rem;
+  margin-top: 0.5rem;
+  width: 100%;
+  min-width: 0;
+}
+
+@media (min-width: 640px) {
+  .classification-insight-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (min-width: 1280px) {
+  .classification-insight-grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+
+.classification-insight-card {
+  border-radius: 0.75rem;
+  border: 1px solid var(--robin-border);
+  background: var(--sample-card-gradient-light);
+  box-shadow: var(--elevation-1);
+}
+
+.body--dark .classification-insight-card {
+  background: var(--sample-card-gradient-dark);
+  border-color: rgba(51, 65, 85, 0.5);
+}
+
+.classification-insight-icon.q-icon,
+.classification-insight-icon {
+  width: 1.25rem;
+  height: 1.25rem;
+  font-size: 1.25rem;
+  flex-shrink: 0;
+  color: #10b981;
+}
+
+.body--dark .classification-insight-icon.q-icon,
+.body--dark .classification-insight-icon {
+  color: #22c55e;
+}
+
+.classification-insight-model.q-label,
+.classification-insight-model {
+  font-size: 0.625rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  font-weight: 700;
+  color: var(--robin-text-muted);
+  margin-bottom: 0.25rem;
+}
+
+.body--dark .classification-insight-model.q-label,
+.body--dark .classification-insight-model {
+  color: rgb(148 163 184);
+}
+
+.classification-insight-result.q-label,
+.classification-insight-result {
+  font-size: 1rem;
+  line-height: 1.375rem;
+  font-weight: 600;
+  color: var(--robin-text);
+  width: 100%;
+  min-width: 0;
+}
+
+.body--dark .classification-insight-result.q-label,
+.body--dark .classification-insight-result {
+  color: #ffffff;
+}
+
+@media (max-width: 639px) {
+  .classification-insight-result.q-label,
+  .classification-insight-result {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}
+
+@media (min-width: 640px) {
+  .classification-insight-result.q-label,
+  .classification-insight-result {
+    white-space: normal;
+    overflow: visible;
+    text-overflow: unset;
+  }
+}
+
+.classification-insight-track {
+  width: 100%;
+  height: 0.5rem;
+  border-radius: 9999px;
+  background-color: rgb(241 245 249);
+  overflow: hidden;
+}
+
+.body--dark .classification-insight-track {
+  background-color: rgb(51 65 85);
+}
+
+.classification-insight-bar {
+  height: 100%;
+  min-width: 0;
+  border-radius: 9999px;
+  transition: width 0.35s ease;
+}
+
+.classification-insight-bar--high {
+  background-color: #10b981;
+}
+
+.body--dark .classification-insight-bar--high {
+  background-color: #22c55e;
+}
+
+.classification-insight-bar--medium {
+  background-color: #f59e0b;
+}
+
+.classification-insight-bar--low {
+  background-color: #f43f5e;
+}
+
+.classification-insight-meta.q-label,
+.classification-insight-meta {
+  font-size: 0.75rem;
+  line-height: 1rem;
+  color: var(--robin-text-muted);
+}
+
+.body--dark .classification-insight-meta.q-label,
+.body--dark .classification-insight-meta {
+  color: rgb(148 163 184);
+}
+
+.classification-insight-level.q-label,
+.classification-insight-level {
+  font-size: 0.6875rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--robin-text-muted);
+}
+
+.classification-insight-level--high {
+  color: #059669;
+}
+
+.body--dark .classification-insight-level--high {
+  color: #34d399;
+}
+
+.classification-insight-level--medium {
+  color: #d97706;
+}
+
+.classification-insight-level--low {
+  color: #e11d48;
+}
+
+.classification-insight-foot.q-label,
+.classification-insight-foot {
+  font-size: 0.75rem;
+  line-height: 1rem;
+  color: rgb(100 116 139);
+}
+
+.body--dark .classification-insight-foot.q-label,
+.body--dark .classification-insight-foot {
+  color: rgb(148 163 184);
+}
+
+/*
+ * Analysis details strip — design.md §9 (threshold / badge pills)
+ * Same .body--dark approach as §7 / §8; not Tailwind dark: alone.
+ */
+.analysis-insight-pill {
+  font-size: 0.6875rem;
+  font-weight: 600;
+  padding: 0.125rem 0.375rem;
+  border-radius: 0.25rem;
+  line-height: 1.25;
+}
+
+.analysis-insight-pill--emerald {
+  background-color: #ecfdf5;
+  color: #065f46;
+}
+
+.body--dark .analysis-insight-pill--emerald {
+  background-color: rgba(16, 185, 129, 0.2);
+  color: #6ee7b7;
+}
+
+.analysis-insight-pill--sky {
+  background-color: #e0f2fe;
+  color: #075985;
+}
+
+.body--dark .analysis-insight-pill--sky {
+  background-color: rgba(14, 165, 233, 0.2);
+  color: #7dd3fc;
+}
+
+.analysis-insight-pill--amber {
+  background-color: #fffbeb;
+  color: #92400e;
+}
+
+.body--dark .analysis-insight-pill--amber {
+  background-color: rgba(245, 158, 11, 0.2);
+  color: #fcd34d;
+}
+
+.analysis-insight-pill--rose {
+  background-color: #fff1f2;
+  color: #9f1239;
+}
+
+.body--dark .analysis-insight-pill--rose {
+  background-color: rgba(244, 63, 94, 0.2);
+  color: #fda4af;
+}
+
+.analysis-insight-pill--violet {
+  background-color: #f3e8ff;
+  color: #6b21a8;
+}
+
+.body--dark .analysis-insight-pill--violet {
+  background-color: rgba(167, 139, 250, 0.2);
+  color: #d8b4fe;
+}
+
+/*
+ * Target Coverage panel + plot — design.md §3, §6, §9.5 (Digital Curator / analysis strip)
+ * Explicit .body--dark; not Tailwind dark: alone.
+ */
+.target-coverage-panel {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  border-radius: 0.75rem;
+  overflow: hidden;
+  border: 1px solid rgb(226 232 240);
+  background: var(--sample-card-gradient-light);
+  box-shadow: 0 1px 2px 0 rgb(0 0 0 / 0.05);
+  padding: 0.75rem 0.75rem 1rem;
+}
+
+.body--dark .target-coverage-panel {
+  border-color: rgb(51 65 85);
+  background: var(--sample-card-gradient-dark);
+  box-shadow: 0 1px 2px 0 rgb(0 0 0 / 0.25);
+}
+
+.target-coverage-panel__header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 0.75rem;
+}
+
+.target-coverage-panel__title {
+  color: rgb(15 23 42);
+  font-weight: 600;
+  letter-spacing: -0.02em;
+}
+
+.body--dark .target-coverage-panel__title {
+  color: rgb(248 250 252);
+}
+
+.target-coverage-panel__icon {
+  color: #10b981;
+}
+
+.body--dark .target-coverage-panel__icon {
+  color: #22c55e;
+}
+
+.target-coverage-panel__lede {
+  color: rgb(71 85 105);
+  max-width: 42rem;
+  line-height: 1.45;
+}
+
+.body--dark .target-coverage-panel__lede {
+  color: rgb(148 163 184);
+}
+
+.target-coverage-panel__meta-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 0.75rem;
+  margin-bottom: 0.5rem;
+}
+
+.target-coverage-panel__meta-label {
+  font-size: 0.6875rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: rgb(100 116 139);
+}
+
+.body--dark .target-coverage-panel__meta-label {
+  color: rgb(148 163 184);
+}
+
+.target-coverage-panel__meta-sep {
+  color: rgb(148 163 184);
+  opacity: 0.75;
+}
+
+.body--dark .target-coverage-panel__meta-sep {
+  color: rgb(100 116 139);
+}
+
+.target-coverage-panel__hint {
+  color: rgb(71 85 105);
+}
+
+.body--dark .target-coverage-panel__hint {
+  color: rgb(148 163 184);
+}
+
+.target-coverage-panel__expansion {
+  border-radius: 0.5rem;
+  border: 1px solid rgb(241 245 249);
+  background-color: rgba(248 250 252, 0.6);
+}
+
+.body--dark .target-coverage-panel__expansion {
+  border-color: rgba(51, 65, 85, 0.5);
+  background-color: rgba(15, 23, 42, 0.35);
+}
+
+.target-coverage-panel__plot-wrap {
+  border-radius: 0.5rem;
+  border: 1px solid rgb(226 232 240);
+  background-color: rgb(255 255 255);
+  padding: 0.25rem;
+  margin-top: 0.25rem;
+  box-sizing: border-box;
+}
+
+.body--dark .target-coverage-panel__plot-wrap {
+  border-color: rgba(51, 65, 85, 0.55);
+  background-color: rgba(0, 0, 0, 0.12);
+}
+
+.target-coverage-targets-block {
+  margin-top: 0.75rem;
+}
+
+.body--dark .target-coverage-targets-block.q-card {
+  border-color: rgba(51, 65, 85, 0.5);
+}
+
+/*
+ * Coverage analysis detail (#analysis-detail-coverage) — design.md §9.5
+ * Secondary copy + tinted rows use Tailwind grays / bg-*-50; Quasar uses .body--dark
+ * (Tailwind dark: does not run). Scope fixes to this section only.
+ */
+.body--dark #analysis-detail-coverage {
+  color: rgb(241 245 249); /* default label copy — slate-100 */
+}
+
+.body--dark #analysis-detail-coverage .text-gray-400,
+.body--dark #analysis-detail-coverage .text-gray-500,
+.body--dark #analysis-detail-coverage .text-gray-600 {
+  color: rgb(203 213 225) !important; /* slate-300 */
+}
+
+.body--dark #analysis-detail-coverage .text-gray-700 {
+  color: rgb(226 232 240) !important; /* slate-200 */
+}
+
+.body--dark #analysis-detail-coverage .text-gray-800 {
+  color: rgb(241 245 249) !important; /* slate-100 */
+}
+
+.body--dark #analysis-detail-coverage .text-blue-600,
+.body--dark #analysis-detail-coverage .text-blue-800 {
+  color: rgb(147 197 253) !important; /* blue-300 */
+}
+
+.body--dark #analysis-detail-coverage .text-green-500,
+.body--dark #analysis-detail-coverage .text-green-600,
+.body--dark #analysis-detail-coverage .text-green-800 {
+  color: rgb(134 239 172) !important; /* green-300 / readable on dark */
+}
+
+.body--dark #analysis-detail-coverage .text-orange-800 {
+  color: rgb(253 186 116) !important;
+}
+
+.body--dark #analysis-detail-coverage .text-red-600,
+.body--dark #analysis-detail-coverage .text-red-800 {
+  color: rgb(252 165 165) !important;
+}
+
+/* Muted row backgrounds (light theme tints) */
+.body--dark #analysis-detail-coverage .bg-gray-100 {
+  background-color: rgba(51, 65, 85, 0.5) !important;
+  border: 1px solid rgba(71, 85, 105, 0.55);
+}
+
+.body--dark #analysis-detail-coverage .bg-blue-50 {
+  background-color: rgba(30, 58, 138, 0.38) !important;
+}
+
+.body--dark #analysis-detail-coverage .bg-green-50 {
+  background-color: rgba(22, 101, 52, 0.38) !important;
+}
+
+.body--dark #analysis-detail-coverage .bg-orange-50 {
+  background-color: rgba(154, 52, 18, 0.38) !important;
+}
+
+.body--dark #analysis-detail-coverage .bg-red-50 {
+  background-color: rgba(127, 29, 29, 0.38) !important;
+}
+
+/* Panel / status chips (bg-*-100 + text-*-800) */
+.body--dark #analysis-detail-coverage .bg-blue-100 {
+  background-color: rgba(30, 58, 138, 0.42) !important;
+}
+
+.body--dark #analysis-detail-coverage .bg-green-100 {
+  background-color: rgba(22, 101, 52, 0.42) !important;
+}
+
+.body--dark #analysis-detail-coverage .bg-orange-100 {
+  background-color: rgba(154, 52, 18, 0.42) !important;
+}
+
+.body--dark #analysis-detail-coverage .bg-red-100 {
+  background-color: rgba(127, 29, 29, 0.42) !important;
+}
+
+/*
+ * MGMT analysis detail (#analysis-detail-mgmt) — design.md §5, §6, §9.2
+ * Insight shell + cards; methylation tiers on average line; tables readable in .body--dark
+ */
+.mgmt-detail-separator {
+  border-color: rgb(241 245 249);
+  margin: 1rem 0;
+}
+
+.body--dark .mgmt-detail-separator {
+  border-color: rgba(51, 65, 85, 0.5);
+}
+
+.body--dark #analysis-detail-mgmt {
+  color: rgb(241 245 249);
+}
+
+.body--dark #analysis-detail-mgmt .text-gray-600,
+.body--dark #analysis-detail-mgmt .text-gray-700 {
+  color: rgb(203 213 225) !important;
+}
+
+/* §5.1 warning / negative on dark — methylation tier lines in this section only */
+.body--dark #analysis-detail-mgmt .classification-insight-level--medium {
+  color: #fcd34d;
+}
+
+.body--dark #analysis-detail-mgmt .classification-insight-level--low {
+  color: #fb7185;
+}
+
+/*
+ * CNV analysis detail (#analysis-detail-cnv) — design.md §9.6
+ */
+.body--dark #analysis-detail-cnv {
+  color: rgb(241 245 249);
+}
+
+.body--dark #analysis-detail-cnv .text-gray-600,
+.body--dark #analysis-detail-cnv .text-gray-700 {
+  color: rgb(203 213 225) !important;
+}
+
+/*
+ * Fusion analysis detail (#analysis-detail-fusion) — design.md §9.7
+ */
+.body--dark #analysis-detail-fusion {
+  color: rgb(241 245 249);
+}
+
+.body--dark #analysis-detail-fusion .text-gray-600,
+.body--dark #analysis-detail-fusion .text-gray-700 {
+  color: rgb(203 213 225) !important;
+}
+
+/*
+ * BED coverage (master BED viz) — design.md §9 (analysis strip vocabulary)
+ */
+.body--dark #analysis-detail-bed-coverage {
+  color: rgb(241 245 249);
+}
+
+.body--dark #analysis-detail-bed-coverage .text-gray-600,
+.body--dark #analysis-detail-bed-coverage .text-gray-700 {
+  color: rgb(203 213 225) !important;
+}
+
+.body--dark #analysis-detail-bed-coverage .text-red-600 {
+  color: rgb(252 165 165) !important;
+}
+
+/*
+ * Output files listing — design.md §9 (analysis strip vocabulary)
+ */
+.body--dark #analysis-detail-output-files {
+  color: rgb(241 245 249);
+}
+
+.body--dark #analysis-detail-output-files .text-gray-600,
+.body--dark #analysis-detail-output-files .text-gray-700 {
+  color: rgb(203 213 225) !important;
+}
+
+/*
+ * Sample ID generator (/sample_id_generator) — design.md insight shell + hash preview
+ */
+#sample-id-generator-page .sample-id-gen-hash-preview {
+  background: rgb(248 250 252);
+  border: 1px solid rgb(226 232 240);
+  color: rgb(30 41 59);
+}
+
+.body--dark #sample-id-generator-page {
+  color: rgb(241 245 249);
+}
+
+.body--dark #sample-id-generator-page .sample-id-gen-hash-preview {
+  background: rgba(15, 23, 42, 0.55);
+  border-color: rgba(51, 65, 85, 0.65);
+  color: rgb(226 232 240);
+}
+
+.body--dark #sample-id-generator-page .text-gray-600,
+.body--dark #sample-id-generator-page .text-gray-700 {
+  color: rgb(203 213 225) !important;
+}
+
+/*
+ * Login (/login) — design.md insight shell; explicit .body--dark for legacy greys
+ */
+.body--dark #login-page {
+  color: rgb(241 245 249);
+}
+
+.body--dark #login-page .text-gray-600,
+.body--dark #login-page .text-gray-700 {
+  color: rgb(203 213 225) !important;
+}
+
+/*
+ * Watched folders (/watched_folders) — design.md insight shell + path rows
+ */
+#watched-folders-page .watched-folders-path-row {
+  background: rgb(248 250 252);
+  border: 1px solid rgb(226 232 240);
+}
+
+#watched-folders-page .watched-folders-work-dir {
+  color: rgb(51 65 85);
+}
+
+.body--dark #watched-folders-page {
+  color: rgb(241 245 249);
+}
+
+.body--dark #watched-folders-page .watched-folders-path-row {
+  background: rgba(15, 23, 42, 0.55);
+  border-color: rgba(51, 65, 85, 0.65);
+}
+
+.body--dark #watched-folders-page .watched-folders-work-dir {
+  color: rgb(203 213 225);
+}
+
+.body--dark #watched-folders-page .text-gray-600,
+.body--dark #watched-folders-page .text-gray-700 {
+  color: rgb(203 213 225) !important;
+}
+
+.body--dark #watched-folders-page .text-gray-500 {
+  color: rgb(148 163 184) !important;
+}
+
+/*
+ * Workflow monitor (/robin) — design.md insight cards + queue tiles
+ */
+#workflow-monitor-page {
+  color: rgb(30 41 59);
+}
+
+#workflow-monitor-page .workflow-monitor-meta {
+  color: rgb(71 85 105);
+}
+
+#workflow-monitor-page .workflow-monitor-num {
+  color: rgb(15 23 42);
+}
+
+#workflow-monitor-page .workflow-monitor-status-icon--running {
+  color: rgb(22 163 74);
+}
+
+#workflow-monitor-page .workflow-monitor-status-text--running {
+  color: rgb(21 128 61);
+}
+
+#workflow-monitor-page .workflow-monitor-status-icon--stopped {
+  color: rgb(220 38 38);
+}
+
+#workflow-monitor-page .workflow-monitor-status-text--stopped {
+  color: rgb(185 28 28);
+}
+
+#workflow-monitor-page .workflow-monitor-queue-tile {
+  border: 1px solid rgb(226 232 240);
+  border-radius: 0.5rem;
+  padding: 0.75rem;
+  min-width: 0;
+  background: rgb(255 255 255);
+}
+
+#workflow-monitor-page .workflow-monitor-queue-icon {
+  color: rgb(100 116 139);
+  opacity: 0.95;
+}
+
+#workflow-monitor-page .workflow-monitor-queue-num--prep {
+  color: rgb(22 101 52);
+}
+
+#workflow-monitor-page .workflow-monitor-queue-num--analysis {
+  color: rgb(29 78 216);
+}
+
+#workflow-monitor-page .workflow-monitor-queue-num--class {
+  color: rgb(107 33 168);
+}
+
+#workflow-monitor-page .workflow-monitor-queue-num--other {
+  color: rgb(71 85 105);
+}
+
+#workflow-monitor-page .workflow-monitor-log-area {
+  font-family: ui-monospace, "JetBrains Mono", monospace;
+  font-size: 0.75rem;
+  line-height: 1.45;
+}
+
+#workflow-monitor-page .workflow-monitor-config-value {
+  color: rgb(51 65 85);
+}
+
+#workflow-monitor-page .workflow-monitor-sample-id {
+  color: rgb(51 65 85);
+}
+
+#workflow-monitor-page .workflow-monitor-file-count {
+  color: rgb(71 85 105);
+}
+
+#workflow-monitor-page .workflow-monitor-error-num {
+  color: rgb(220 38 38);
+}
+
+#workflow-monitor-page .workflow-monitor-error-summary {
+  color: rgb(71 85 105);
+}
+
+.body--dark #workflow-monitor-page {
+  color: rgb(241 245 249);
+}
+
+.body--dark #workflow-monitor-page .workflow-monitor-meta {
+  color: rgb(148 163 184);
+}
+
+.body--dark #workflow-monitor-page .workflow-monitor-num {
+  color: rgb(241 245 249);
+}
+
+.body--dark #workflow-monitor-page .workflow-monitor-status-icon--running {
+  color: rgb(52 211 153);
+}
+
+.body--dark #workflow-monitor-page .workflow-monitor-status-text--running {
+  color: rgb(167 243 208);
+}
+
+.body--dark #workflow-monitor-page .workflow-monitor-status-icon--stopped {
+  color: rgb(248 113 113);
+}
+
+.body--dark #workflow-monitor-page .workflow-monitor-status-text--stopped {
+  color: rgb(254 202 202);
+}
+
+.body--dark #workflow-monitor-page .workflow-monitor-queue-tile {
+  background: rgba(15, 23, 42, 0.45);
+  border-color: rgba(51, 65, 85, 0.65);
+}
+
+.body--dark #workflow-monitor-page .workflow-monitor-queue-icon {
+  color: rgb(148 163 184);
+}
+
+.body--dark #workflow-monitor-page .workflow-monitor-queue-num--prep {
+  color: rgb(52 211 153);
+}
+
+.body--dark #workflow-monitor-page .workflow-monitor-queue-num--analysis {
+  color: rgb(96 165 250);
+}
+
+.body--dark #workflow-monitor-page .workflow-monitor-queue-num--class {
+  color: rgb(192 132 252);
+}
+
+.body--dark #workflow-monitor-page .workflow-monitor-queue-num--other {
+  color: rgb(203 213 225);
+}
+
+.body--dark #workflow-monitor-page .workflow-monitor-config-value {
+  color: rgb(203 213 225);
+}
+
+.body--dark #workflow-monitor-page .workflow-monitor-sample-id {
+  color: rgb(226 232 240);
+}
+
+.body--dark #workflow-monitor-page .workflow-monitor-file-count {
+  color: rgb(148 163 184);
+}
+
+.body--dark #workflow-monitor-page .workflow-monitor-error-num {
+  color: rgb(252 165 165);
+}
+
+.body--dark #workflow-monitor-page .workflow-monitor-error-summary {
+  color: rgb(203 213 225);
+}
+
+.body--dark #workflow-monitor-page .text-gray-500,
+.body--dark #workflow-monitor-page .text-gray-600,
+.body--dark #workflow-monitor-page .text-gray-700 {
+  color: rgb(203 213 225) !important;
+}
+
+/* Folder picker (local_folder_picker dialog) */
+.workflow-folder-picker-help,
+.workflow-folder-picker-status--muted,
+.workflow-folder-picker-muted {
+  color: rgb(71 85 105);
+}
+
+.workflow-folder-picker-status {
+  min-height: 1.25rem;
+}
+
+.workflow-folder-picker-status--error {
+  color: rgb(185 28 28);
+}
+
+.workflow-folder-picker-selection {
+  color: rgb(51 65 85);
+}
+
+.workflow-folder-picker-list {
+  min-height: 12rem;
+  border: 1px solid rgb(226 232 240);
+  border-radius: 0.625rem;
+  background: rgb(255 255 255);
+}
+
+.workflow-folder-picker-row {
+  border-bottom: 1px solid rgb(241 245 249);
+  transition: background-color 120ms ease;
+}
+
+.workflow-folder-picker-row:last-child {
+  border-bottom: 0;
+}
+
+.workflow-folder-picker-folder-icon {
+  color: rgb(14 116 144);
+}
+
+.workflow-folder-picker-selected-list {
+  max-height: 9rem;
+  overflow-y: auto;
+}
+
+.workflow-folder-picker-selected-row {
+  border: 1px solid rgb(226 232 240);
+  border-radius: 0.5rem;
+  background: rgb(248 250 252);
+}
+
+.body--dark .workflow-folder-picker-help,
+.body--dark .workflow-folder-picker-status--muted,
+.body--dark .workflow-folder-picker-muted,
+.body--dark .workflow-folder-picker-selection {
+  color: rgb(148 163 184);
+}
+
+.workflow-folder-picker-row:hover {
+  background: rgb(241 245 249);
+}
+
+.body--dark .workflow-folder-picker-list {
+  background: rgba(15, 23, 42, 0.45);
+  border-color: rgba(71, 85, 105, 0.7);
+}
+
+.body--dark .workflow-folder-picker-row {
+  border-bottom-color: rgba(51, 65, 85, 0.65);
+}
+
+.body--dark .workflow-folder-picker-selected-row {
+  background: rgba(15, 23, 42, 0.55);
+  border-color: rgba(71, 85, 105, 0.7);
+}
+
+.body--dark .workflow-folder-picker-row:hover {
+  background: rgba(51, 65, 85, 0.4);
+}
+
+.body--dark .workflow-folder-picker-folder-icon {
+  color: rgb(103 232 249);
+}
+
+.body--dark .workflow-folder-picker-status--error {
+  color: rgb(252 165 165);
+}
+
+/*
+ * Workflow diagram (/workflow) — design.md insight shell + Mermaid
+ */
+#workflow-diagram-page .workflow-diagram-scroll {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+#workflow-diagram-page .workflow-diagram-mermaid {
+  min-width: 0;
+}
+
+.body--dark #workflow-diagram-page {
+  color: rgb(241 245 249);
+}
+
+.body--dark #workflow-diagram-page .text-gray-600,
+.body--dark #workflow-diagram-page .text-gray-700 {
+  color: rgb(203 213 225) !important;
+}
+
+/*
+ * Sample details page (“More details” — /live_data/{id}/details) — design.md §6–§9
+ */
+.body--dark #sample-details-page {
+  color: rgb(241 245 249);
+}
+
+.body--dark #sample-details-page .text-gray-600,
+.body--dark #sample-details-page .text-gray-700 {
+  color: rgb(203 213 225) !important;
+}
+
+.body--dark #sample-details-igv {
+  color: rgb(241 245 249);
+}
+
+.body--dark #sample-details-igv .text-gray-600,
+.body--dark #sample-details-igv .text-gray-500 {
+  color: rgb(148 163 184) !important;
+}
+
+/*
+ * IGV light island policy: keep IGV panel in light mode for readability.
+ */
+.igv-light-island {
+  background: linear-gradient(180deg, #f8fafc 0%, #ffffff 100%);
+  border: 1px solid rgb(203 213 225);
+  border-radius: 0.75rem;
+  color: #0f172a;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.06);
+}
+
+.igv-light-island__viewer {
+  background: #ffffff;
+  border: 1px solid rgb(203 213 225);
+}
+
+.igv-light-island .classification-insight-meta,
+.igv-light-island .classification-insight-foot,
+.igv-light-island .igv-light-island-note {
+  color: #475569 !important;
+}
+
+.body--dark #sample-details-igv .igv-light-island {
+  background: linear-gradient(180deg, #f8fafc 0%, #ffffff 100%);
+  border-color: rgb(148 163 184);
+  color: #0f172a;
+  box-shadow: 0 2px 10px rgba(2, 6, 23, 0.35);
+}
+
+.body--dark #sample-details-igv .igv-light-island__viewer {
+  background: #ffffff;
+  border-color: rgb(148 163 184);
+}
+
+.body--dark #sample-details-igv .igv-light-island .classification-insight-meta,
+.body--dark #sample-details-igv .igv-light-island .classification-insight-foot,
+.body--dark #sample-details-igv .igv-light-island .igv-light-island-note {
+  color: #334155 !important;
+}
+
+/*
+ * MNP-Flex results — design.md §10
+ * Badges / notices: explicit .body--dark (not Tailwind dark: alone).
+ */
+.classification-insight-grid--2 {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0.75rem;
+  margin-top: 0.5rem;
+  width: 100%;
+  min-width: 0;
+}
+
+@media (min-width: 1024px) {
+  .classification-insight-grid--2 {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+.mnpflex-hierarchy-tree {
+  width: 100%;
+  min-width: 0;
+  border: 1px solid rgb(226 232 240);
+  border-radius: 0.5rem;
+  background-color: rgb(255 255 255);
+  padding: 0.875rem 1rem;
+}
+
+.body--dark .mnpflex-hierarchy-tree {
+  border-color: rgba(71, 85, 105, 0.6);
+  background-color: rgba(30, 41, 59, 0.35);
+}
+
+.mnpflex-hierarchy-node {
+  width: 100%;
+  min-width: 0;
+}
+
+.mnpflex-hierarchy-node + .mnpflex-hierarchy-node {
+  margin-top: 0.5rem;
+}
+
+.mnpflex-hierarchy-node__row {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.mnpflex-hierarchy-node__label {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 0.9375rem;
+  font-weight: 500;
+  line-height: 1.45;
+  color: rgb(30 41 59);
+  word-break: break-word;
+}
+
+.body--dark .mnpflex-hierarchy-node__label {
+  color: rgb(226 232 240);
+}
+
+.mnpflex-hierarchy-node--depth-0 .mnpflex-hierarchy-node__label {
+  font-weight: 600;
+}
+
+.mnpflex-hierarchy-node__description {
+  margin-top: 0.375rem;
+  font-size: 0.8125rem;
+  line-height: 1.55;
+  color: rgb(100 116 139);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.body--dark .mnpflex-hierarchy-node__description {
+  color: rgb(148 163 184);
+}
+
+.mnpflex-score-badge {
+  font-size: 0.75rem;
+  font-weight: 600;
+  padding: 0.125rem 0.5rem;
+  border-radius: 9999px;
+  line-height: 1.25;
+}
+
+.mnpflex-score-badge--neutral {
+  background-color: rgb(241 245 249);
+  color: rgb(71 85 105);
+}
+
+.body--dark .mnpflex-score-badge--neutral {
+  background-color: rgba(51, 65, 85, 0.6);
+  color: rgb(203 213 225);
+}
+
+.mnpflex-score-badge--5 {
+  background-color: #d1fae5;
+  color: #065f46;
+}
+
+.body--dark .mnpflex-score-badge--5 {
+  background-color: rgba(16, 185, 129, 0.25);
+  color: #6ee7b7;
+}
+
+.mnpflex-score-badge--4 {
+  background-color: #ccfbf1;
+  color: #115e59;
+}
+
+.body--dark .mnpflex-score-badge--4 {
+  background-color: rgba(20, 184, 166, 0.25);
+  color: #5eead4;
+}
+
+.mnpflex-score-badge--3 {
+  background-color: #fef3c7;
+  color: #92400e;
+}
+
+.body--dark .mnpflex-score-badge--3 {
+  background-color: rgba(245, 158, 11, 0.25);
+  color: #fcd34d;
+}
+
+.mnpflex-score-badge--2 {
+  background-color: #ffedd5;
+  color: #9a3412;
+}
+
+.body--dark .mnpflex-score-badge--2 {
+  background-color: rgba(249, 115, 22, 0.25);
+  color: #fdba74;
+}
+
+.mnpflex-score-badge--1 {
+  background-color: #ffe4e6;
+  color: #9f1239;
+}
+
+.body--dark .mnpflex-score-badge--1 {
+  background-color: rgba(244, 63, 94, 0.25);
+  color: #fda4af;
+}
+
+.mnpflex-status-badge {
+  font-size: 0.75rem;
+  font-weight: 600;
+  padding: 0.125rem 0.5rem;
+  border-radius: 9999px;
+  line-height: 1.25;
+}
+
+.mnpflex-status-badge--neutral {
+  background-color: rgb(241 245 249);
+  color: rgb(71 85 105);
+}
+
+.body--dark .mnpflex-status-badge--neutral {
+  background-color: rgba(51, 65, 85, 0.6);
+  color: rgb(203 213 225);
+}
+
+.mnpflex-status-badge--pass {
+  background-color: #d1fae5;
+  color: #065f46;
+}
+
+.body--dark .mnpflex-status-badge--pass {
+  background-color: rgba(16, 185, 129, 0.25);
+  color: #6ee7b7;
+}
+
+.mnpflex-status-badge--warn {
+  background-color: #fef3c7;
+  color: #92400e;
+}
+
+.body--dark .mnpflex-status-badge--warn {
+  background-color: rgba(245, 158, 11, 0.25);
+  color: #fcd34d;
+}
+
+.mnpflex-status-badge--fail {
+  background-color: #ffe4e6;
+  color: #9f1239;
+}
+
+.body--dark .mnpflex-status-badge--fail {
+  background-color: rgba(244, 63, 94, 0.25);
+  color: #fda4af;
+}
+
+.mnpflex-status-badge--meth {
+  background-color: #ccfbf1;
+  color: #115e59;
+}
+
+.body--dark .mnpflex-status-badge--meth {
+  background-color: rgba(20, 184, 166, 0.25);
+  color: #5eead4;
+}
+
+.mnpflex-status-badge--unmeth {
+  background-color: rgb(226 232 240);
+  color: rgb(51 65 85);
+}
+
+.body--dark .mnpflex-status-badge--unmeth {
+  background-color: rgba(71, 85, 105, 0.5);
+  color: rgb(203 213 225);
+}
+
+.mnpflex-toolbar-badge {
+  font-size: 0.75rem;
+  font-weight: 600;
+  padding: 0.125rem 0.5rem;
+  border-radius: 9999px;
+  line-height: 1.25;
+}
+
+.mnpflex-toolbar-badge--idle {
+  background-color: rgb(241 245 249);
+  color: rgb(71 85 105);
+}
+
+.body--dark .mnpflex-toolbar-badge--idle {
+  background-color: rgba(51, 65, 85, 0.6);
+  color: rgb(203 213 225);
+}
+
+.mnpflex-toolbar-badge--running {
+  background-color: #dbeafe;
+  color: #1e40af;
+}
+
+.body--dark .mnpflex-toolbar-badge--running {
+  background-color: rgba(59, 130, 246, 0.25);
+  color: #93c5fd;
+}
+
+.mnpflex-toolbar-badge--busy {
+  background-color: #e0e7ff;
+  color: #3730a3;
+}
+
+.body--dark .mnpflex-toolbar-badge--busy {
+  background-color: rgba(99, 102, 241, 0.25);
+  color: #a5b4fc;
+}
+
+.mnpflex-error-text {
+  font-size: 0.75rem;
+  line-height: 1rem;
+  color: #b91c1c;
+}
+
+.body--dark .mnpflex-error-text {
+  color: #fca5a5;
+}
+
+.mnpflex-notice {
+  display: flex;
+  flex-direction: row;
+  align-items: flex-start;
+  width: 100%;
+  margin-top: 0.75rem;
+  padding: 0.75rem;
+  border-radius: 0.5rem;
+  border: 1px solid rgb(253 230 138);
+  background-color: rgb(255 251 235);
+  gap: 0.5rem;
+}
+
+.body--dark .mnpflex-notice {
+  border-color: rgba(245, 158, 11, 0.4);
+  background-color: rgba(120, 53, 15, 0.35);
+}
+
+.mnpflex-notice .q-icon,
+.mnpflex-notice-icon {
+  color: #d97706;
+  flex-shrink: 0;
+}
+
+.body--dark .mnpflex-notice .q-icon,
+.body--dark .mnpflex-notice-icon {
+  color: #fbbf24;
+}
+
+.mnpflex-notice-text {
+  font-size: 0.875rem;
+  line-height: 1.25rem;
+  color: #92400e;
+}
+
+.body--dark .mnpflex-notice-text {
+  color: rgb(254 243 199);
+}

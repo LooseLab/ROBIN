@@ -1039,10 +1039,6 @@ def frame(
             .mobile-dashboard-card {
                 padding: 0.75rem !important;
             }
-            .mobile-dashboard-card .mosaic-card__content {
-                font-size: 0.875rem !important;
-                line-height: 1.2 !important;
-            }
         }
 
         /* Ultra-compact header and footer on mobile */
