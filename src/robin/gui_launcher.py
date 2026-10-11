@@ -5791,7 +5791,8 @@ class GUILauncher:
                                     sample_dir, sample_id
                                 ),
                             ).classes(
-                                "mt-1 w-full sm:w-auto self-stretch sm:self-start"
+                                "sample-action-button mt-1 w-full sm:w-auto "
+                                "self-stretch sm:self-start"
                             ).props(
                                 "flat dense color=primary no-caps"
                             )
@@ -5817,15 +5818,16 @@ class GUILauncher:
                                             f"/live_data/{sample_id}/details"
                                         ),
                                     ).classes(
-                                        "rounded-lg border border-slate-300 dark:border-slate-600 "
-                                        "text-title-medium w-full md:w-auto md:min-w-[10rem]"
+                                        "sample-action-button rounded-lg border "
+                                        "border-slate-300 dark:border-slate-600 text-title-medium "
+                                        "w-full md:w-auto md:min-w-[10rem]"
                                     ).props("flat no-caps")
                             if self._current_user_can_export():
                                 ui.button(
                                     "Generate report",
                                     on_click=confirm_report_generation,
                                 ).props("color=primary no-caps").classes(
-                                    "rounded-lg px-4 py-2 text-title-medium "
+                                    "sample-primary-action rounded-lg px-4 py-2 text-title-medium "
                                     "w-full md:w-auto md:min-w-[10rem]"
                                 )
                             ui.button(
@@ -5833,7 +5835,8 @@ class GUILauncher:
                                 on_click=lambda: self._open_sample_audit_dialog(sample_id),
                                 icon="history",
                             ).props("flat no-caps outline").classes(
-                                "rounded-lg w-full md:w-auto md:min-w-[10rem]"
+                                "sample-action-button rounded-lg w-full md:w-auto "
+                                "md:min-w-[10rem]"
                             )
                 # Main content area with conditional loading state
                 with ui.column().classes("w-full p-2 md:p-3 gap-2"):

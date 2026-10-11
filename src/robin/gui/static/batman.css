@@ -296,6 +296,16 @@
   background-image: none;
 }
 
+.body--dark.batman-mode .run-summary-cell {
+  background: #20252b;
+  background-image: none;
+  border-color: rgba(148, 163, 184, 0.16);
+}
+
+.body--dark.batman-mode .run-summary-grid {
+  background-color: rgba(148, 163, 184, 0.22);
+}
+
 .batman-mode .q-page .q-btn:focus-visible,
 .batman-mode .q-footer .q-btn:focus-visible {
   outline: 2px solid var(--batman-yellow);
@@ -331,8 +341,8 @@
 }
 
 /* The hamburger is navigation chrome, not a primary action. */
-.batman-mode .q-header .q-btn,
-.q-header.batphone .q-btn {
+.batman-mode .q-header .robin-nav-menu,
+.q-header.batphone .robin-nav-menu {
   width: 44px;
   min-height: 44px;
   padding: 0 !important;
@@ -342,12 +352,27 @@
   box-shadow: none !important;
 }
 
-.batman-mode .q-header .q-btn:hover,
-.batman-mode .q-header .q-btn:focus-visible,
-.q-header.batphone .q-btn:hover,
-.q-header.batphone .q-btn:focus-visible {
+.batman-mode .q-header .robin-nav-menu:hover,
+.batman-mode .q-header .robin-nav-menu:focus-visible,
+.q-header.batphone .robin-nav-menu:hover,
+.q-header.batphone .robin-nav-menu:focus-visible {
   background: var(--batman-yellow) !important;
   color: var(--batman-black) !important;
+}
+
+/* Sample actions must remain visible without hover in both themes. */
+.batman-mode:not(.body--dark) .q-page .sample-action-button {
+  color: var(--batman-page-ink) !important;
+}
+
+.body--dark.batman-mode .q-page .sample-action-button {
+  color: var(--batman-yellow) !important;
+}
+
+.batman-mode .q-page .sample-action-button:hover,
+.batman-mode .q-page .sample-action-button:focus-visible {
+  color: var(--batman-black) !important;
+  background: var(--batman-yellow) !important;
 }
 
 /* Coverage is a data surface; it should not inherit the black BATMAN card in

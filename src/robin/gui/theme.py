@@ -1326,7 +1326,9 @@ def frame(
         with ui.row().classes("w-full items-center justify-between px-1 py-0.5 sm:px-3 sm:py-1.5"):
             # Left: Hamburger, then title (responsive)
             with ui.row().classes("items-center gap-1 sm:gap-2 min-w-0 flex-1"):
-                with ui.button(icon="menu").classes("rounded-md flex-shrink-0"):
+                with ui.button(icon="menu").props(
+                    "aria-label=Open navigation"
+                ).classes("robin-nav-menu rounded-md flex-shrink-0"):
                     with ui.menu() as menu:
                         ui.menu_item("Home", lambda: ui.navigate.to("/")).classes(
                             "text-body-medium"
