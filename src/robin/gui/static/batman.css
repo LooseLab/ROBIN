@@ -117,6 +117,10 @@
   --batman-black: #000000;
   --batman-on-yellow: #000000;
   --batman-on-black: #FDE311;
+  --batman-page-ink: #171717;
+  --batman-page-muted: #525252;
+  --batman-surface-border: rgba(23, 23, 23, 0.22);
+  --batman-card-border: rgba(23, 23, 23, 0.28);
   --md-primary-rgb: 0, 0, 0;
   --md-primary: #000000;
   --md-primary-container: #FFF9C4;
@@ -139,6 +143,10 @@
 
 .body--dark.batman-mode,
 .batman-mode.body--dark {
+  --batman-page-ink: #fafafa;
+  --batman-page-muted: #d4d4d4;
+  --batman-surface-border: rgba(253, 227, 17, 0.34);
+  --batman-card-border: rgba(255, 255, 255, 0.16);
   --shell-page-top: #0a0a0a;
   --shell-page-bottom: #141414;
   --md-primary: #000000;
@@ -191,23 +199,41 @@
   border: 1px solid var(--batman-yellow) !important;
 }
 
-/* Page content: no yellow type on pale surfaces */
-.batman-mode .q-page .text-primary,
+/* Page content: keep ordinary text dark in light mode, but preserve yellow
+   action affordances on BATMAN's dark sample header in dark mode. */
+.batman-mode:not(.body--dark) .q-page .text-primary,
+.batman-mode:not(.body--dark) .q-card .text-primary,
+.batman-mode:not(.body--dark) .classification-insight-shell .text-primary {
+  color: var(--batman-page-ink) !important;
+}
+
 .batman-mode .q-page .q-btn--flat.text-primary,
-.batman-mode .q-page .q-btn--outline.text-primary,
-.batman-mode .q-card .text-primary,
-.batman-mode .classification-insight-shell .text-primary {
+.batman-mode .q-page .q-btn--outline.text-primary {
+  color: var(--batman-yellow) !important;
+}
+
+.batman-mode .q-page .q-btn--flat.text-primary:hover,
+.batman-mode .q-page .q-btn--flat.text-primary:focus-visible,
+.batman-mode .q-page .q-btn--outline.text-primary:hover,
+.batman-mode .q-page .q-btn--outline.text-primary:focus-visible {
   color: var(--batman-black) !important;
+  background: var(--batman-yellow) !important;
 }
 
 .body--dark.batman-mode .q-page .text-primary,
-.body--dark.batman-mode .q-card .text-primary {
-  color: var(--batman-on-black) !important;
+.body--dark.batman-mode .q-card .text-primary,
+.body--dark.batman-mode .classification-insight-shell .text-primary {
+  color: var(--batman-page-ink) !important;
+}
+
+.body--dark.batman-mode .q-page .q-btn--flat.text-primary,
+.body--dark.batman-mode .q-page .q-btn--outline.text-primary {
+  color: var(--batman-yellow) !important;
 }
 
 .batman-mode .classification-insight-shell {
-  border-color: rgba(253, 227, 17, 0.55);
-  box-shadow: 0 1px 0 rgba(253, 227, 17, 0.15);
+  border-color: var(--batman-surface-border);
+  box-shadow: 0 1px 0 rgba(0, 0, 0, 0.12);
 }
 
 .batman-mode .classification-insight-heading {
@@ -219,7 +245,41 @@
 }
 
 .batman-mode .classification-insight-card {
-  border: 1px solid rgba(253, 227, 17, 0.35);
+  border: 1px solid var(--batman-card-border);
+  box-shadow: none;
+}
+
+.batman-mode .classification-insight-card:hover,
+.batman-mode .classification-insight-card:focus-within {
+  border-color: rgba(253, 227, 17, 0.72);
+  box-shadow: 0 0 0 1px rgba(253, 227, 17, 0.16);
+}
+
+/* Use restrained surfaces so the yellow brand accent remains meaningful. */
+.batman-mode:not(.body--dark) .run-summary-shell,
+.batman-mode:not(.body--dark) .classification-insight-shell,
+.batman-mode:not(.body--dark) .target-coverage-panel {
+  background: #fffdf2;
+  background-image: none;
+}
+
+.body--dark.batman-mode .run-summary-shell,
+.body--dark.batman-mode .classification-insight-shell,
+.body--dark.batman-mode .target-coverage-panel {
+  background: #151515;
+  background-image: none;
+}
+
+.batman-mode .q-page .q-btn:focus-visible,
+.batman-mode .q-footer .q-btn:focus-visible {
+  outline: 2px solid var(--batman-yellow);
+  outline-offset: 3px;
+}
+
+.batman-mode .q-footer .q-btn--flat:hover,
+.batman-mode .q-footer .q-btn--flat:focus-visible {
+  background: var(--batman-yellow) !important;
+  color: var(--batman-black) !important;
 }
 
 .batman-mode .classification-insight-icon.q-icon,
@@ -245,16 +305,8 @@
   color: var(--batman-on-black) !important;
 }
 
-.batman-mode .text-primary {
-  color: var(--batman-black) !important;
-}
-
-.body--dark.batman-mode .text-primary {
-  color: var(--batman-on-black) !important;
-}
-
 .batman-mode .run-summary-shell {
-  border-color: rgba(253, 227, 17, 0.5);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
 }
 
 .batman-mode .run-summary-shell .run-summary-title.q-label,
@@ -264,7 +316,7 @@
 
 .batman-mode .run-summary-icon.q-icon,
 .batman-mode .run-summary-icon {
-  color: var(--batman-black) !important;
+  color: var(--batman-page-ink) !important;
 }
 
 .body--dark.batman-mode .run-summary-icon.q-icon,
