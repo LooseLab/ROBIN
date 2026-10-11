@@ -442,6 +442,34 @@
   color: #94a3b8 !important;
 }
 
+/* CNV controls sit on a light data surface in light mode; do not let their
+   inherited muted utility colours make labels look disabled. */
+.batman-mode:not(.body--dark) #analysis-detail-cnv .q-field__label,
+.batman-mode:not(.body--dark) #analysis-detail-cnv .q-field__native,
+.batman-mode:not(.body--dark) #analysis-detail-cnv .q-field__input,
+.batman-mode:not(.body--dark) #analysis-detail-cnv .q-toggle__label,
+.batman-mode:not(.body--dark) #analysis-detail-cnv .text-gray-500,
+.batman-mode:not(.body--dark) #analysis-detail-cnv .text-gray-600,
+.batman-mode:not(.body--dark) #analysis-detail-cnv .text-gray-700 {
+  color: #475569 !important;
+}
+
+.batman-mode:not(.body--dark) #analysis-detail-cnv .q-field__control {
+  background: #ffffff;
+  border-color: #cbd5e1;
+}
+
+.body--dark.batman-mode #analysis-detail-cnv .q-field__label,
+.body--dark.batman-mode #analysis-detail-cnv .q-field__native,
+.body--dark.batman-mode #analysis-detail-cnv .q-field__input,
+.body--dark.batman-mode #analysis-detail-cnv .q-toggle__label,
+.body--dark.batman-mode #analysis-detail-cnv .text-gray-400,
+.body--dark.batman-mode #analysis-detail-cnv .text-gray-500,
+.body--dark.batman-mode #analysis-detail-cnv .text-gray-600,
+.body--dark.batman-mode #analysis-detail-cnv .text-gray-700 {
+  color: #cbd5e1 !important;
+}
+
 .batman-mode .classification-insight-icon.q-icon,
 .batman-mode .classification-insight-icon {
   color: var(--batman-black) !important;

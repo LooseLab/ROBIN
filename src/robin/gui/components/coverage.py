@@ -297,7 +297,7 @@ def _cov_outlier_line_color(idx: int) -> str:
 
 
 def _echart_target_cov_time_media(palette_axis: str) -> List[Dict[str, Any]]:
-    """Narrow viewports: legend under chart; wide uses right-hand legend (design.md §9.5.C)."""
+    """Keep the target legend below the plot so it cannot cover data lines."""
     return [
         {
             "query": {"maxWidth": 920},
@@ -3734,26 +3734,28 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                             "legendHoverLink": True,
                             "legend": {
                                 "type": "scroll",
-                                "orient": "vertical",
-                                "right": 6,
-                                "top": "middle",
-                                "width": 168,
-                                "height": "72%",
+                                "orient": "horizontal",
+                                "left": "center",
+                                "right": "auto",
+                                "top": "auto",
+                                "bottom": 4,
+                                "width": "92%",
+                                "height": 42,
                                 "itemGap": 8,
                                 "itemWidth": 10,
                                 "itemHeight": 10,
                                 "pageIconColor": _cp_t["title"],
                                 "pageTextStyle": {"color": _cp_t["axis"]},
                                 "textStyle": {
-                                    "fontSize": 11,
+                                    "fontSize": 10,
                                     "color": _cp_t["legend"],
                                 },
                             },
                             "grid": {
                                 "left": "10%",
-                                "right": "20%",
+                                "right": "6%",
                                 "top": "16%",
-                                "bottom": "10%",
+                                "bottom": "22%",
                                 "containLabel": True,
                             },
                             "media": _echart_target_cov_time_media(_cp_t["axis"]),
