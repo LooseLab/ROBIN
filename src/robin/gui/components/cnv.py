@@ -1858,26 +1858,27 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
                 "classification-insight-meta mb-2"
             )
         
-        # CNV Events Table
-        cnv_events_columns = [
-            {"name": "chromosome", "label": "Chr", "field": "chromosome", "sortable": True},
-            {"name": "event_type", "label": "Event Type", "field": "event_type", "sortable": True},
-            {"name": "arm", "label": "Arm", "field": "arm", "sortable": True},
-            {"name": "start_mb", "label": "Start (Mb)", "field": "start_mb", "sortable": True, "align": "right"},
-            {"name": "end_mb", "label": "End (Mb)", "field": "end_mb", "sortable": True, "align": "right"},
-            {"name": "length_mb", "label": "Length (Mb)", "field": "length_mb", "sortable": True, "align": "right"},
-            {"name": "mean_cnv_str", "label": "Mean CNV", "field": "mean_cnv_str", "sortable": True, "align": "right"},
-            {"name": "confidence", "label": "Confidence", "field": "confidence", "sortable": True, "align": "center"},
-            {"name": "proportion_affected", "label": "% Affected", "field": "proportion_affected", "sortable": True, "align": "right"},
-            {"name": "genes_str", "label": "Genes", "field": "genes_str"},
-        ]
-        _, cnv_events_table = styled_table(
-            columns=cnv_events_columns, rows=[], pagination=20, class_size="table-xs"
-        )
-        try:
-            cnv_events_table.props('multi-sort rows-per-page-options="[10,20,50,0]"')
-        except Exception:
-            pass
+            # CNV Events Table stays inside the same insight card as its heading
+            # and summary, so the table cannot visually detach from its context.
+            cnv_events_columns = [
+                {"name": "chromosome", "label": "Chr", "field": "chromosome", "sortable": True},
+                {"name": "event_type", "label": "Event Type", "field": "event_type", "sortable": True},
+                {"name": "arm", "label": "Arm", "field": "arm", "sortable": True},
+                {"name": "start_mb", "label": "Start (Mb)", "field": "start_mb", "sortable": True, "align": "right"},
+                {"name": "end_mb", "label": "End (Mb)", "field": "end_mb", "sortable": True, "align": "right"},
+                {"name": "length_mb", "label": "Length (Mb)", "field": "length_mb", "sortable": True, "align": "right"},
+                {"name": "mean_cnv_str", "label": "Mean CNV", "field": "mean_cnv_str", "sortable": True, "align": "right"},
+                {"name": "confidence", "label": "Confidence", "field": "confidence", "sortable": True, "align": "center"},
+                {"name": "proportion_affected", "label": "% Affected", "field": "proportion_affected", "sortable": True, "align": "right"},
+                {"name": "genes_str", "label": "Genes", "field": "genes_str"},
+            ]
+            _, cnv_events_table = styled_table(
+                columns=cnv_events_columns, rows=[], pagination=20, class_size="table-xs"
+            )
+            try:
+                cnv_events_table.props('multi-sort rows-per-page-options="[10,20,50,0]"')
+            except Exception:
+                pass
 
     # Adaptive thinning helpers
     MAX_POINTS_PER_CHART = 10000

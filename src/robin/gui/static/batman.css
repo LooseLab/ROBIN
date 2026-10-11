@@ -396,6 +396,52 @@
   color: #475569 !important;
 }
 
+/* Login fields need their own contrast treatment because the authentication
+   card is visible before any page-specific content exists. */
+.batman-mode:not(.body--dark) #login-page .classification-insight-card {
+  background: #ffffff;
+  color: var(--batman-page-ink);
+  border-color: #d6d3b8;
+}
+
+.body--dark.batman-mode #login-page .classification-insight-card {
+  background: #20252b;
+  color: var(--batman-page-ink);
+  border-color: rgba(253, 227, 17, 0.34);
+}
+
+.batman-mode #login-page .classification-insight-foot,
+.batman-mode #login-page .classification-insight-model {
+  color: var(--batman-page-muted) !important;
+}
+
+.batman-mode:not(.body--dark) #login-page .q-field__control {
+  background: #ffffff;
+  color: var(--batman-page-ink);
+  border-color: #cbd5e1;
+}
+
+.body--dark.batman-mode #login-page .q-field__control {
+  background: #0f172a;
+  color: #f8fafc;
+  border-color: #475569;
+}
+
+.batman-mode #login-page .q-field__native,
+.batman-mode #login-page .q-field__input,
+.batman-mode #login-page .q-field__label {
+  color: inherit !important;
+}
+
+.batman-mode #login-page input::placeholder {
+  color: #64748b !important;
+  opacity: 1;
+}
+
+.body--dark.batman-mode #login-page input::placeholder {
+  color: #94a3b8 !important;
+}
+
 .batman-mode .classification-insight-icon.q-icon,
 .batman-mode .classification-insight-icon {
   color: var(--batman-black) !important;
