@@ -28,11 +28,17 @@ try:
 except Exception:
     _RICH_AVAILABLE = False
 from robin.logging_config import get_job_logger
-from robin.analysis.target_analysis import (
-    igv_bam_handler,
-    snp_analysis_handler,
-    target_bam_finalize_handler,
-)
+
+
+def _load_target_workflow_handlers():
+    """Load target-analysis handlers only when a workflow is actually started."""
+    from robin.analysis.target_analysis import (
+        igv_bam_handler,
+        snp_analysis_handler,
+        target_bam_finalize_handler,
+    )
+
+    return igv_bam_handler, snp_analysis_handler, target_bam_finalize_handler
 
 # ---------- Batch Configuration ----------
 # See workflow_ray.py for the full description. Two timeouts are honoured:
@@ -2171,6 +2177,12 @@ class WorkflowRunner:
         self.center = center
         self.target_panel = target_panel
         self.detect_barcodes = detect_barcodes
+
+        (
+            igv_bam_handler,
+            snp_analysis_handler,
+            target_bam_finalize_handler,
+        ) = _load_target_workflow_handlers()
 
         # Log reference genome status
 

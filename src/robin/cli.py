@@ -37,6 +37,7 @@ warnings.filterwarnings(
 import os
 import sys
 import csv
+import importlib
 import shutil
 import tempfile
 from pathlib import Path
@@ -50,43 +51,60 @@ is_development_mode = os.environ.get("ROBIN_DEV_MODE", "").lower() in ("1", "tru
 
 from robin.workflow_simple import default_file_classifier, Job
 
-# Many analysis handlers have optional third-party dependencies. Import them lazily
-# so lightweight commands (e.g. `robin utils update-models`) still work.
-_analysis_import_error: Optional[BaseException] = None
-try:
-    from robin.analysis.bam_preprocessor import bam_preprocessing_handler
-    from robin.analysis.mgmt_analysis import mgmt_handler
-    from robin.analysis.cnv_analysis import cnv_handler
-    from robin.analysis.bed_conversion import bed_conversion_handler
-    from robin.analysis.sturgeon_analysis import sturgeon_handler
-    from robin.analysis.nanodx_analysis import nanodx_handler, pannanodx_handler
-    from robin.analysis.random_forest_analysis import random_forest_handler
-    from robin.analysis.marlin_analysis import marlin_handler
-    from robin.analysis.lamprey_analysis import lamprey_handler
-    from robin.analysis.tucan_analysis import tucan_handler
-    from robin.analysis.target_analysis import target_handler
-    from robin.analysis.fusion_analysis import fusion_handler
-    from robin.analysis.itd_analysis import itd_handler
-    from robin.analysis.utilities.matkit import run_matkit
-    from robin.analysis.mgmt_analysis import extract_mgmt_site_rows_from_bed
-except Exception as e:
-    _analysis_import_error = e
-    bam_preprocessing_handler = None  # type: ignore[assignment]
-    mgmt_handler = None  # type: ignore[assignment]
-    cnv_handler = None  # type: ignore[assignment]
-    bed_conversion_handler = None  # type: ignore[assignment]
-    sturgeon_handler = None  # type: ignore[assignment]
-    nanodx_handler = None  # type: ignore[assignment]
-    pannanodx_handler = None  # type: ignore[assignment]
-    random_forest_handler = None  # type: ignore[assignment]
-    marlin_handler = None  # type: ignore[assignment]
-    lamprey_handler = None  # type: ignore[assignment]
-    tucan_handler = None  # type: ignore[assignment]
-    target_handler = None  # type: ignore[assignment]
-    fusion_handler = None  # type: ignore[assignment]
-    itd_handler = None  # type: ignore[assignment]
-    run_matkit = None  # type: ignore[assignment]
-    extract_mgmt_site_rows_from_bed = None  # type: ignore[assignment]
+
+def _configure_runtime_caches() -> None:
+    """Prepare persistent writable caches before optional plotting imports.
+
+    Matplotlib and Fontconfig otherwise fall back to rebuilding caches in a
+    temporary directory when the user's standard cache locations are not
+    writable. This is intentionally called from the CLI entry point, after
+    the lightweight CLI module has loaded but before workflow handlers import
+    plotting libraries.
+    """
+    cache_root = Path(
+        os.environ.get("XDG_CACHE_HOME", str(Path.home() / ".cache"))
+    ) / "robin"
+    try:
+        cache_root.mkdir(parents=True, exist_ok=True)
+        matplotlib_cache = cache_root / "matplotlib"
+        fontconfig_cache = cache_root / "fontconfig"
+        matplotlib_cache.mkdir(parents=True, exist_ok=True)
+        fontconfig_cache.mkdir(parents=True, exist_ok=True)
+        os.environ.setdefault("MPLCONFIGDIR", str(matplotlib_cache))
+        os.environ.setdefault("XDG_CACHE_HOME", str(cache_root.parent))
+    except OSError:
+        # Cache setup must never prevent a workflow from starting. Matplotlib
+        # will use its normal fallback behaviour if the user cache is locked.
+        return
+
+
+_HANDLER_IMPORTS = {
+    "preprocessing": ("robin.analysis.bam_preprocessor", "bam_preprocessing_handler"),
+    "bed_conversion": ("robin.analysis.bed_conversion", "bed_conversion_handler"),
+    "mgmt": ("robin.analysis.mgmt_analysis", "mgmt_handler"),
+    "cnv": ("robin.analysis.cnv_analysis", "cnv_handler"),
+    "target": ("robin.analysis.target_analysis", "target_handler"),
+    "fusion": ("robin.analysis.fusion_analysis", "fusion_handler"),
+    "itd": ("robin.analysis.itd_analysis", "itd_handler"),
+    "sturgeon": ("robin.analysis.sturgeon_analysis", "sturgeon_handler"),
+    "nanodx": ("robin.analysis.nanodx_analysis", "nanodx_handler"),
+    "pannanodx": ("robin.analysis.nanodx_analysis", "pannanodx_handler"),
+    "random_forest": ("robin.analysis.random_forest_analysis", "random_forest_handler"),
+    "marlin": ("robin.analysis.marlin_analysis", "marlin_handler"),
+    "lamprey": ("robin.analysis.lamprey_analysis", "lamprey_handler"),
+    "tucan": ("robin.analysis.tucan_analysis", "tucan_handler"),
+}
+
+
+def _load_analysis_handler(handler_name: str):
+    """Import one analysis handler only when a workflow registers it."""
+    module_name, attribute = _HANDLER_IMPORTS[handler_name]
+    try:
+        return getattr(importlib.import_module(module_name), attribute)
+    except Exception as exc:
+        raise click.ClickException(
+            f"Could not load analysis handler '{handler_name}': {exc}"
+        ) from exc
 from robin.logging_config import (
     configure_logging,
 )
@@ -340,21 +358,21 @@ DISCLAIMER_TEXT = EXTENDED_DISCLAIMER_TEXT
 
 # Handler configurations
 HANDLER_CONFIGS = [
-    # (queue_type, job_type, handler_func, legacy_queue_type, needs_work_dir)
-    ("preprocessing", "preprocessing", bam_preprocessing_handler, None, False),
-    ("bed_conversion", "bed_conversion", bed_conversion_handler, None, True),
-    ("mgmt", "mgmt", mgmt_handler, "analysis", True),
-    ("cnv", "cnv", cnv_handler, "analysis", True),
-    ("target", "target", target_handler, "analysis", True),
-    ("fusion", "fusion", fusion_handler, "analysis", True),
-    ("fusion", "itd", itd_handler, "analysis", True),
-    ("classification", "sturgeon", sturgeon_handler, None, True),
-    ("classification", "nanodx", nanodx_handler, None, True),
-    ("classification", "pannanodx", pannanodx_handler, None, True),
-    ("slow", "random_forest", random_forest_handler, None, True),
-    ("slow", "marlin", marlin_handler, None, True),
-    ("slow", "lamprey", lamprey_handler, None, True),
-    ("slow", "tucan", tucan_handler, None, True),
+    # (queue_type, job_type, handler_name, legacy_queue_type, needs_work_dir)
+    ("preprocessing", "preprocessing", "preprocessing", None, False),
+    ("bed_conversion", "bed_conversion", "bed_conversion", None, True),
+    ("mgmt", "mgmt", "mgmt", "analysis", True),
+    ("cnv", "cnv", "cnv", "analysis", True),
+    ("target", "target", "target", "analysis", True),
+    ("fusion", "fusion", "fusion", "analysis", True),
+    ("fusion", "itd", "itd", "analysis", True),
+    ("classification", "sturgeon", "sturgeon", None, True),
+    ("classification", "nanodx", "nanodx", None, True),
+    ("classification", "pannanodx", "pannanodx", None, True),
+    ("slow", "random_forest", "random_forest", None, True),
+    ("slow", "marlin", "marlin", None, True),
+    ("slow", "lamprey", "lamprey", None, True),
+    ("slow", "tucan", "tucan", None, True),
 ]
 
 
@@ -432,6 +450,7 @@ def _warn_if_process_large_bams() -> None:
 @click.version_option()
 def main() -> None:
     """Robin now uses Little John - his second in command who kept the merry men in line."""
+    _configure_runtime_caches()
     pass
 
 
@@ -1168,6 +1187,9 @@ main.add_command(minknow_cli)
 )
 def mgmt(output_dir: Path, recursive: bool, out_path: Path) -> None:
     """Summarize MGMT CpG site methylation counts from mgmt_sorted.bam files."""
+    from robin.analysis.mgmt_analysis import extract_mgmt_site_rows_from_bed
+    from robin.analysis.utilities.matkit import run_matkit
+
     if not output_dir.exists():
         click.echo(f"Error: output_dir not found: {output_dir}", err=True)
         sys.exit(1)
@@ -2811,10 +2833,11 @@ def _register_handlers(
     for (
         queue_type,
         job_type,
-        handler_func,
+        handler_name,
         legacy_queue_type,
         needs_work_dir,
     ) in HANDLER_CONFIGS:
+        handler_func = _load_analysis_handler(handler_name)
         # Determine the actual queue type based on legacy mode
         actual_queue_type = (
             legacy_queue_type

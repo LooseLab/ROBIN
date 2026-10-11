@@ -14,17 +14,16 @@ __version__ = "0.6.0"
 __author__ = "Matt Loose"
 __email__ = "matt.loose@nottingham.ac.uk"
 
-#
-# Import analysis modules via consolidated analysis package.
-#
-# Some analysis dependencies are optional and may not be installed in minimal
-# environments (e.g. when only utility modules are imported).
-try:
-    from . import analysis  # noqa: F401
-except ModuleNotFoundError:
-    analysis = None  # type: ignore[assignment]
+# Keep the analysis namespace lazy. Importing ``robin`` is part of every CLI
+# invocation, while importing ``robin.analysis`` pulls in plotting libraries
+# and other optional dependencies. Loading those modules here makes even
+# ``robin --help`` build Matplotlib's font cache.
+def __getattr__(name):
+    if name == "analysis":
+        import importlib
 
-# Export key modules
-__all__ = [
-    "analysis",
-]
+        return importlib.import_module("robin.analysis")
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+__all__ = ["analysis"]
