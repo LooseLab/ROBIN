@@ -308,6 +308,69 @@
   color: var(--batman-black) !important;
 }
 
+/* Primary page actions: one clear yellow surface instead of nested black and
+   yellow frames. This keeps the report action prominent in both modes. */
+.batman-mode .q-page .q-btn.bg-primary,
+.batman-mode .q-page .q-btn.bg-primary .q-btn__content,
+.batman-mode .q-page .q-btn.bg-primary .q-icon,
+.batman-mode .q-page .q-btn.bg-primary .block {
+  background: var(--batman-yellow) !important;
+  color: var(--batman-black) !important;
+}
+
+.batman-mode .q-page .q-btn.bg-primary {
+  border: 1px solid var(--batman-black) !important;
+  box-shadow: 0 2px 0 rgba(0, 0, 0, 0.28);
+}
+
+.batman-mode .q-page .q-btn.bg-primary:hover,
+.batman-mode .q-page .q-btn.bg-primary:focus-visible {
+  background: var(--batman-black) !important;
+  color: var(--batman-yellow) !important;
+  box-shadow: 0 0 0 2px var(--batman-yellow);
+}
+
+/* The hamburger is navigation chrome, not a primary action. */
+.batman-mode .q-header .q-btn,
+.q-header.batphone .q-btn {
+  width: 44px;
+  min-height: 44px;
+  padding: 0 !important;
+  border: 1px solid var(--batman-yellow) !important;
+  border-radius: 0.625rem;
+  background: rgba(23, 23, 23, 0.9) !important;
+  box-shadow: none !important;
+}
+
+.batman-mode .q-header .q-btn:hover,
+.batman-mode .q-header .q-btn:focus-visible,
+.q-header.batphone .q-btn:hover,
+.q-header.batphone .q-btn:focus-visible {
+  background: var(--batman-yellow) !important;
+  color: var(--batman-black) !important;
+}
+
+/* Coverage is a data surface; it should not inherit the black BATMAN card in
+   light mode. Keep nested chart cards and metric blocks on readable surfaces. */
+.batman-mode:not(.body--dark) #analysis-detail-coverage,
+.batman-mode:not(.body--dark) #analysis-detail-coverage .robin-card {
+  background: #fffdf2;
+  background-image: none;
+  color: var(--batman-page-ink);
+  border-color: #d6d3b8;
+}
+
+.batman-mode:not(.body--dark) #analysis-detail-coverage .robin-card {
+  background: #ffffff;
+}
+
+.batman-mode:not(.body--dark) #analysis-detail-coverage .robin-text-muted,
+.batman-mode:not(.body--dark) #analysis-detail-coverage .text-gray-500,
+.batman-mode:not(.body--dark) #analysis-detail-coverage .text-gray-600,
+.batman-mode:not(.body--dark) #analysis-detail-coverage .text-gray-700 {
+  color: #475569 !important;
+}
+
 .batman-mode .classification-insight-icon.q-icon,
 .batman-mode .classification-insight-icon {
   color: var(--batman-black) !important;
