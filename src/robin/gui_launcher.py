@@ -2550,7 +2550,7 @@ class GUILauncher:
                                             on_click=try_login,
                                             icon="login",
                                         ).props("color=primary no-caps").classes(
-                                            "w-full"
+                                            "robin-button robin-button--primary w-full"
                                         )
 
             @ui.page("/change-password")
@@ -3027,15 +3027,12 @@ class GUILauncher:
                         )
 
                         _cta_primary = (
-                            "bg-primary text-white rounded-lg px-6 py-4 text-title-medium "
-                            "text-center transition-opacity hover:opacity-90 no-underline"
+                            "robin-button robin-button--primary rounded-lg px-6 py-4 "
+                            "text-title-medium text-center no-underline"
                         )
                         _cta_secondary = (
-                            "border border-primary text-primary rounded-lg px-6 py-4 "
-                            "text-title-medium text-center bg-transparent "
-                            "hover:bg-[var(--md-primary-container)] "
-                            "hover:text-[var(--md-on-primary-container)] "
-                            "transition-colors no-underline"
+                            "robin-button robin-button--secondary rounded-lg px-6 py-4 "
+                            "text-title-medium text-center no-underline"
                         )
 
                         with ui.grid(columns=2).classes("w-full gap-3"):
@@ -5803,8 +5800,8 @@ class GUILauncher:
                                 target_bam.exists() and target_bam.is_file()
                             )
                         with ui.column().classes(
-                            "w-full shrink-0 flex flex-col gap-2 "
-                            "md:w-auto md:min-w-[12rem] md:items-end"
+                            "sample-action-panel w-full shrink-0 flex flex-col gap-2 p-2 "
+                            "md:w-auto md:min-w-[12rem] md:items-stretch"
                         ):
                             if target_bam_exists:
                                 from robin.gui.config import (
@@ -5818,8 +5815,7 @@ class GUILauncher:
                                             f"/live_data/{sample_id}/details"
                                         ),
                                     ).classes(
-                                        "sample-action-button rounded-lg border "
-                                        "border-slate-300 dark:border-slate-600 text-title-medium "
+                                        "sample-action-button text-title-medium "
                                         "w-full md:w-auto md:min-w-[10rem]"
                                     ).props("flat no-caps")
                             if self._current_user_can_export():
@@ -5827,7 +5823,7 @@ class GUILauncher:
                                     "Generate report",
                                     on_click=confirm_report_generation,
                                 ).props("color=primary no-caps").classes(
-                                    "sample-primary-action rounded-lg px-4 py-2 text-title-medium "
+                                    "sample-primary-action px-4 py-2 text-title-medium "
                                     "w-full md:w-auto md:min-w-[10rem]"
                                 )
                             ui.button(
@@ -5835,7 +5831,7 @@ class GUILauncher:
                                 on_click=lambda: self._open_sample_audit_dialog(sample_id),
                                 icon="history",
                             ).props("flat no-caps outline").classes(
-                                "sample-action-button rounded-lg w-full md:w-auto "
+                                "sample-action-button w-full md:w-auto "
                                 "md:min-w-[10rem]"
                             )
                 # Main content area with conditional loading state
@@ -6575,29 +6571,56 @@ class GUILauncher:
                                 ui.label(
                                     "No analysis sections are enabled for this page."
                                 ).classes("classification-insight-foot")
+                            with ui.row().classes(
+                                "w-full flex-wrap items-center gap-x-4 gap-y-1 mt-1"
+                            ):
+                                if sample_dir:
+                                    with ui.row().classes("items-center gap-1 min-w-0"):
+                                        ui.icon("folder_open", size="xs").classes(
+                                            "text-emerald-600 dark:text-emerald-400"
+                                        )
+                                        ui.label("Output").classes(
+                                            "text-label-small text-slate-500 dark:text-slate-400"
+                                        )
+                                        ui.label(str(sample_dir)).classes(
+                                            "text-body-small text-mono text-slate-700 "
+                                            "dark:text-slate-300 break-all"
+                                        )
+                                if self.center:
+                                    with ui.row().classes("items-center gap-1"):
+                                        ui.icon("hub", size="xs").classes(
+                                            "text-emerald-600 dark:text-emerald-400"
+                                        )
+                                        ui.label("Center").classes(
+                                            "text-label-small text-slate-500 dark:text-slate-400"
+                                        )
+                                        ui.label(str(self.center)).classes(
+                                            "text-body-small text-slate-700 dark:text-slate-300"
+                                        )
                             ui.button(
                                 "View sample identifiers",
                                 on_click=lambda: self._open_view_identifiers_modal(
                                     sample_dir, sample_id
                                 ),
-                            ).classes("mt-1 self-start").props(
+                            ).classes("sample-action-button mt-1 self-start").props(
                                 "flat dense color=primary no-caps"
                             )
                         with ui.column().classes(
-                            "shrink-0 self-stretch md:self-start w-full md:w-auto gap-2"
+                            "sample-action-panel shrink-0 self-stretch md:self-start "
+                            "w-full md:w-auto gap-2 p-2"
                         ):
                             ui.button(
                                 "View audit",
                                 on_click=lambda: self._open_sample_audit_dialog(sample_id),
                                 icon="history",
                             ).props("flat no-caps outline").classes(
-                                "rounded-lg w-full md:min-w-[10rem]"
+                                "sample-action-button w-full md:min-w-[10rem]"
                             )
                             ui.button(
                                 "Back to sample",
                                 on_click=lambda: ui.navigate.to(f"/live_data/{sample_id}"),
                             ).props("color=primary no-caps").classes(
-                                "rounded-lg w-full md:min-w-[10rem]"
+                                "sample-primary-action w-full md:min-w-[10rem]"
                             )
 
                 with ui.column().classes("w-full gap-3 p-2 md:p-3"):

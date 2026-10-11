@@ -231,6 +231,67 @@
   overflow: visible;
 }
 
+/* Shared button primitives. Use these for page, dialog and form actions;
+   compact table/pagination controls should keep their dense Quasar treatment. */
+.robin-button.q-btn,
+a.robin-button {
+  min-height: 2.5rem;
+  padding-inline: 1rem;
+  border-radius: var(--radius-md);
+  font-weight: 650;
+  letter-spacing: 0.01em;
+  text-transform: none;
+  transition: background-color 160ms ease, border-color 160ms ease,
+    box-shadow 160ms ease, transform 160ms ease;
+}
+
+.robin-button--primary.q-btn,
+a.robin-button--primary {
+  background: var(--md-primary) !important;
+  color: var(--md-on-primary) !important;
+  box-shadow: var(--elevation-1);
+}
+
+.robin-button--primary.q-btn:hover,
+.robin-button--primary.q-btn:focus-visible,
+a.robin-button--primary:hover,
+a.robin-button--primary:focus-visible {
+  background: var(--md-secondary) !important;
+  box-shadow: var(--elevation-2);
+  transform: translateY(-1px);
+}
+
+.robin-button--secondary.q-btn,
+a.robin-button--secondary {
+  color: var(--md-primary) !important;
+  border: 1px solid var(--md-outline) !important;
+  background: transparent !important;
+}
+
+.robin-button--secondary.q-btn:hover,
+.robin-button--secondary.q-btn:focus-visible,
+a.robin-button--secondary:hover,
+a.robin-button--secondary:focus-visible {
+  background: var(--md-primary-container) !important;
+  border-color: var(--md-primary) !important;
+  box-shadow: var(--elevation-1);
+  transform: translateY(-1px);
+}
+
+.robin-button--text.q-btn,
+a.robin-button--text {
+  min-height: 2.25rem;
+  color: var(--md-primary) !important;
+  font-weight: 600;
+}
+
+.robin-button--text.q-btn:hover,
+.robin-button--text.q-btn:focus-visible,
+a.robin-button--text:hover,
+a.robin-button--text:focus-visible {
+  background: var(--md-primary-container) !important;
+}
+
 .q-button {
   border-radius: var(--radius-md);
   font-weight: 600;  /* Mosaic's button weight */

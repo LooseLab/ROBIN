@@ -126,9 +126,13 @@ def create_change_password_page(
                                 "Update password",
                                 on_click=_submit,
                                 icon="lock",
-                            ).props("color=primary no-caps").classes("w-full")
+                            ).props("color=primary no-caps").classes(
+                                "robin-button robin-button--primary w-full"
+                            )
                             if not forced:
                                 ui.button(
                                     "Cancel",
                                     on_click=lambda: ui.navigate.to(safe_target),
-                                ).props("flat no-caps outline").classes("w-full")
+                                ).props("flat no-caps outline").classes(
+                                    "robin-button robin-button--secondary w-full"
+                                )

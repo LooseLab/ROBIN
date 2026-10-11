@@ -124,12 +124,14 @@ def open_sample_audit_dialog(launcher: "GUILauncher", sample_id: str) -> None:
         with ui.row().classes("w-full justify-end gap-2 flex-wrap mt-3"):
             ui.button("Refresh", icon="refresh", on_click=_refresh).props(
                 "flat no-caps outline"
-            )
+            ).classes("robin-button robin-button--secondary")
             if launcher._current_user_can_export():
                 ui.button("Export CSV", icon="download", on_click=_export).props(
                     "flat no-caps outline"
-                )
-            ui.button("Close", on_click=dialog.close).props("color=primary no-caps")
+                ).classes("robin-button robin-button--secondary")
+            ui.button("Close", on_click=dialog.close).props(
+                "color=primary no-caps"
+            ).classes("robin-button robin-button--primary")
 
     launcher._audit_log(
         event_type="sample.audit.viewed",

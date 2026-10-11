@@ -16,6 +16,73 @@
   min-width: 0;
 }
 
+/* Shared sample-page action treatment. Keep the sample and details pages
+ * visually identical, including their dark-mode contrast and focus states. */
+.sample-action-panel {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  border: 1px solid var(--robin-border);
+  border-radius: 0.875rem;
+  background: color-mix(in srgb, var(--robin-surface-muted) 72%, transparent);
+}
+
+.sample-action-button.q-btn,
+.sample-primary-action.q-btn {
+  min-height: 2.625rem;
+  border-radius: 0.75rem;
+  font-weight: 650;
+  letter-spacing: 0.01em;
+  transition: background-color 160ms ease, border-color 160ms ease,
+    box-shadow 160ms ease, transform 160ms ease;
+}
+
+.sample-action-button.q-btn {
+  border: 1px solid var(--robin-border) !important;
+}
+
+.sample-action-button.q-btn {
+  color: var(--robin-brand) !important;
+  border-color: var(--robin-border) !important;
+  background: transparent !important;
+}
+
+.sample-action-button.q-btn:hover,
+.sample-action-button.q-btn:focus-visible {
+  background: var(--md-primary-container) !important;
+  border-color: var(--robin-brand) !important;
+  box-shadow: 0 2px 8px rgb(15 23 42 / 0.1);
+}
+
+.sample-primary-action.q-btn {
+  background: var(--robin-brand) !important;
+  color: var(--md-on-primary) !important;
+  box-shadow: 0 2px 8px rgb(15 23 42 / 0.12);
+}
+
+.sample-primary-action.q-btn:hover,
+.sample-primary-action.q-btn:focus-visible {
+  background: var(--md-secondary) !important;
+  box-shadow: 0 4px 12px rgb(15 23 42 / 0.18);
+  transform: translateY(-1px);
+}
+
+.body--dark .sample-action-panel {
+  background: color-mix(in srgb, var(--robin-surface-muted) 78%, transparent);
+  border-color: var(--robin-border);
+}
+
+.body--dark .sample-action-button.q-btn {
+  color: var(--md-inverse-primary) !important;
+  border-color: var(--robin-border) !important;
+}
+
+.body--dark .sample-action-button.q-btn:hover,
+.body--dark .sample-action-button.q-btn:focus-visible {
+  background: rgb(52 211 153 / 0.14) !important;
+  border-color: var(--md-inverse-primary) !important;
+}
+
 
 /* Apple HIG Responsive design */
 @media (max-width: 768px) {
