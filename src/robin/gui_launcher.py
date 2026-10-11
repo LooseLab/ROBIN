@@ -7737,6 +7737,7 @@ class GUILauncher:
                     "arm_count",
                 ],
                 "cnv_broad": [
+                    "status",
                     "whole_chromosome_events",
                     "arm_events",
                     "broad_gain_events",
@@ -7955,48 +7956,90 @@ class GUILauncher:
                             ex,
                         )
 
-                    # Broad CNV events extraction (whole-chromosome / arm-level)
+                    # Broad CNV events are derived from the canonical CNV.npy
+                    # outputs, matching the GUI summary. cnv_results.csv is a
+                    # legacy/optional artifact and is retained only as a
+                    # fallback for older result directories.
                     try:
-                        cnv_results_csv = sample_dir / "cnv_results.csv"
-                        if cnv_results_csv.exists():
-                            whole_chr_events = 0
-                            arm_events = 0
-                            broad_gain_events = 0
-                            broad_loss_events = 0
-                            with open(cnv_results_csv, "r", newline="", encoding="utf-8", errors="ignore") as f:
-                                reader = csv.DictReader(f)
-                                for event_row in reader:
-                                    region = str(
-                                        event_row.get("Region")
-                                        or event_row.get("region")
-                                        or ""
-                                    ).lower()
-                                    state = str(
-                                        event_row.get("State")
-                                        or event_row.get("state")
-                                        or event_row.get("event_type")
-                                        or ""
-                                    ).upper()
-                                    if "whole chromosome" in region:
-                                        whole_chr_events += 1
-                                    if "arm" in region:
-                                        arm_events += 1
-                                    if any(k in state for k in ("GAIN", "HIGH_GAIN")):
-                                        broad_gain_events += 1
-                                    if any(k in state for k in ("LOSS", "DEEP_LOSS")):
-                                        broad_loss_events += 1
+                        cnv_inputs_present = all(
+                            (sample_dir / filename).exists()
+                            for filename in ("CNV.npy", "CNV_dict.npy")
+                        )
+                        if cnv_inputs_present:
+                            from robin.analysis.cnv_classification import (
+                                detect_cnv_events_for_sample,
+                            )
+
+                            events = detect_cnv_events_for_sample(sample_dir)
+                            event_types = [str(event.event_type).upper() for event in events]
                             cnv_broad_data = {
-                                "whole_chromosome_events": whole_chr_events,
-                                "arm_events": arm_events,
-                                "broad_gain_events": broad_gain_events,
-                                "broad_loss_events": broad_loss_events,
+                                "status": "analysed",
+                                "whole_chromosome_events": sum(
+                                    event_type.startswith("WHOLE_CHR_")
+                                    for event_type in event_types
+                                ),
+                                "arm_events": sum(
+                                    not event_type.startswith("WHOLE_CHR_")
+                                    for event_type in event_types
+                                ),
+                                "broad_gain_events": sum(
+                                    "GAIN" in event_type for event_type in event_types
+                                ),
+                                "broad_loss_events": sum(
+                                    "LOSS" in event_type for event_type in event_types
+                                ),
                             }
+                        else:
+                            cnv_results_csv = sample_dir / "cnv_results.csv"
+                            if cnv_results_csv.exists():
+                                whole_chr_events = 0
+                                arm_events = 0
+                                broad_gain_events = 0
+                                broad_loss_events = 0
+                                with open(
+                                    cnv_results_csv,
+                                    "r",
+                                    newline="",
+                                    encoding="utf-8",
+                                    errors="ignore",
+                                ) as f:
+                                    reader = csv.DictReader(f)
+                                    for event_row in reader:
+                                        region = str(
+                                            event_row.get("Region")
+                                            or event_row.get("region")
+                                            or ""
+                                        ).lower()
+                                        state = str(
+                                            event_row.get("State")
+                                            or event_row.get("state")
+                                            or event_row.get("event_type")
+                                            or ""
+                                        ).upper()
+                                        if "whole chromosome" in region:
+                                            whole_chr_events += 1
+                                        if "arm" in region:
+                                            arm_events += 1
+                                        if "GAIN" in state:
+                                            broad_gain_events += 1
+                                        if "LOSS" in state:
+                                            broad_loss_events += 1
+                                cnv_broad_data = {
+                                    "status": "analysed",
+                                    "whole_chromosome_events": whole_chr_events,
+                                    "arm_events": arm_events,
+                                    "broad_gain_events": broad_gain_events,
+                                    "broad_loss_events": broad_loss_events,
+                                }
+                            else:
+                                cnv_broad_data = {"status": "not_analyzed"}
                     except Exception as ex:
                         logging.debug(
                             "Could not extract broad CNV TSV fields for %s: %s",
                             sample_id,
                             ex,
                         )
+                        cnv_broad_data = {"status": "analysis_failed"}
 
                     try:
                         results_dir = self._mnpflex_results_dir_for_sample(sample_dir, sample_id)
