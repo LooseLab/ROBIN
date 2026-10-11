@@ -371,10 +371,6 @@ pre,
   overflow: visible;
 }
 
-.q-card:hover {
-  box-shadow: var(--elevation-2);
-}
-
 .q-button {
   border-radius: var(--radius-md);
   font-weight: 600;  /* Mosaic's button weight */

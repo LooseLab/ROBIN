@@ -595,8 +595,8 @@ def _create_classification_dashboard_card_with_data(
     with (
         ui.element("div")
         .classes(
-            "robin-card robin-card--informational classification-insight-card w-full min-w-0 "
-            "cursor-pointer transition-all duration-200 select-none"
+            "robin-card robin-card--informational robin-card--interactive "
+            "classification-insight-card w-full min-w-0 select-none"
         )
         .on("click", _on_card_click)
     ):
@@ -723,8 +723,8 @@ def _create_coverage_dashboard_card_with_data(
     with (
         ui.element("div")
         .classes(
-            "robin-card robin-card--informational classification-insight-card w-full min-w-0 "
-            "cursor-pointer transition-all duration-200 select-none"
+            "robin-card robin-card--informational robin-card--interactive "
+            "classification-insight-card w-full min-w-0 select-none"
         )
         .on("click", _on_click)
     ):
@@ -828,8 +828,8 @@ def _create_cnv_dashboard_card_with_data(
     with (
         ui.element("div")
         .classes(
-            "robin-card robin-card--informational classification-insight-card w-full min-w-0 "
-            "cursor-pointer transition-all duration-200 select-none"
+            "robin-card robin-card--informational robin-card--interactive "
+            "classification-insight-card w-full min-w-0 select-none"
         )
         .on("click", _on_click)
     ):
@@ -930,8 +930,8 @@ def _create_mgmt_dashboard_card_with_data(
     with (
         ui.element("div")
         .classes(
-            "robin-card robin-card--informational classification-insight-card w-full min-w-0 "
-            "cursor-pointer transition-all duration-200 select-none"
+            "robin-card robin-card--informational robin-card--interactive "
+            "classification-insight-card w-full min-w-0 select-none"
         )
         .on("click", _on_click)
     ):
@@ -1027,8 +1027,8 @@ def _create_fusion_dashboard_card_with_data(
     with (
         ui.element("div")
         .classes(
-            "robin-card robin-card--informational classification-insight-card w-full min-w-0 "
-            "cursor-pointer transition-all duration-200 select-none"
+            "robin-card robin-card--informational robin-card--interactive "
+            "classification-insight-card w-full min-w-0 select-none"
         )
         .on("click", _on_click)
     ):

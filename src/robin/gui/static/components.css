@@ -29,6 +29,7 @@
 }
 
 .robin-card--interactive {
+  cursor: pointer;
   transition: transform 150ms ease, box-shadow 150ms ease;
 }
 
