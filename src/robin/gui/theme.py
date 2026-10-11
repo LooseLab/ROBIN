@@ -822,8 +822,8 @@ global_metrics = GlobalSystemMetrics()
 # Read the HTML content for the header
 HEADER_HTML = (Path(__file__).parent / "static" / "header.html").read_text()
 
-# Shared stylesheet load order. The three legacy files remain at the end of
-# the bundle while page families migrate to the responsibility-based files.
+# Shared stylesheet load order. legacy.css remains last while page families
+# migrate to the responsibility-based files.
 STATIC_DIR = Path(__file__).parent / "static"
 CSS_FILES = (
     "tokens.css",
@@ -834,10 +834,9 @@ CSS_FILES = (
     "batman.css",
     "legacy.css",
 )
-LEGACY_SOURCE_FILES = ("styles.css", "m3-components.css", "mosaic-components.css")
 STYLE_CSS = "\n".join(
     (STATIC_DIR / filename).read_text(encoding="utf-8")
-    for filename in (*CSS_FILES, *LEGACY_SOURCE_FILES)
+    for filename in CSS_FILES
 )
 
 # Google Fonts: Manrope (headlines), Inter (UI/data labels), JetBrains Mono (technical strings)
