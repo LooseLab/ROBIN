@@ -608,6 +608,15 @@ async def check_version():
     Check the current version against the remote version on GitHub.
     Shows a notification or dialog to the user about their version status.
     """
+    # The login page uses the shared frame, but an unauthenticated session
+    # must remain fully interactive.  A modal version check here can capture
+    # keyboard focus before the user has entered credentials.
+    try:
+        if not app.storage.user.get("authenticated", False):
+            return
+    except RuntimeError:
+        return
+
     # Skip version check in development mode
     if is_development_mode:
         return
