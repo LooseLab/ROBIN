@@ -1,0 +1,17 @@
+/* Page-level analytical layouts. */
+.robin-analysis-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 1rem;
+  width: 100%;
+}
+
+@media (min-width: 1024px) {
+  .robin-analysis-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+.robin-analysis-grid > * {
+  min-width: 0;
+}

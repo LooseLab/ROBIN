@@ -1,0 +1,20 @@
+/* Shared ROBIN chrome and page-container primitives. */
+.robin-shell {
+  min-width: 0;
+  width: 100%;
+}
+
+.robin-page-container {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+}
+
+.robin-shell__chrome {
+  background: linear-gradient(135deg, var(--shell-chrome-top), var(--shell-chrome-bottom));
+  color: var(--md-on-primary);
+}
+
+.robin-shell__footer {
+  border-top: 1px solid var(--shell-chrome-edge);
+}

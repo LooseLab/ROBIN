@@ -1,0 +1,12 @@
+/* ROBIN design-token aliases. Keep the existing --md-* tokens as the source
+   of truth while the component styles migrate to names that describe usage. */
+:root {
+  --robin-surface: var(--md-surface);
+  --robin-surface-muted: var(--md-surface-container);
+  --robin-text: var(--md-on-surface);
+  --robin-text-muted: var(--md-on-surface-variant);
+  --robin-border: var(--md-outline);
+  --robin-brand: var(--md-primary);
+  --robin-radius: var(--radius-lg);
+  --robin-spacing-compact: var(--spacing-sm);
+}

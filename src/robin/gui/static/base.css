@@ -1,0 +1,43 @@
+/* Shared document defaults. Component-specific rules stay in components.css. */
+html,
+body {
+  font-family: var(--font-primary);
+  color: var(--robin-text);
+  background: var(--app-bg-bottom);
+}
+
+body {
+  min-width: 320px;
+}
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+  font-family: var(--font-display);
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+
+:focus-visible {
+  outline: 2px solid var(--robin-brand);
+  outline-offset: 2px;
+}
+
+.robin-technical {
+  font-family: var(--font-mono);
+  overflow-wrap: anywhere;
+}
+
+.robin-scroll-x {
+  max-width: 100%;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+}

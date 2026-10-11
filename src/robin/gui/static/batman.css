@@ -1,0 +1,23 @@
+/* BATMAN changes the brand chrome, not scientific status semantics. */
+.batman-mode {
+  --robin-brand: #fde311;
+  --robin-surface: #0a0a0a;
+  --robin-surface-muted: #171717;
+  --robin-text: #fafafa;
+  --robin-text-muted: #d4d4d4;
+  --robin-border: #404040;
+  --shell-chrome-top: #000000;
+  --shell-chrome-bottom: #171717;
+}
+
+.batman-mode .robin-card {
+  background: var(--robin-surface);
+  color: var(--robin-text);
+  border-color: var(--robin-border);
+}
+
+.batman-mode .robin-card__title,
+.batman-mode .robin-text-muted,
+.batman-mode .robin-card__description {
+  color: inherit;
+}

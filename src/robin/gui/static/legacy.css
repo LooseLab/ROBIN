@@ -1,0 +1,5 @@
+/*
+ * Migration boundary for styles.css, m3-components.css and
+ * mosaic-components.css. Existing selectors remain loaded after the new
+ * primitives until their page families are migrated and visually checked.
+ */

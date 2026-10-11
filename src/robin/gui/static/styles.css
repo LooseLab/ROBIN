@@ -1090,32 +1090,11 @@ a:active:not(.browser-window *) {
   text-decoration: none;
 }
 
-/* Apple HIG Utility classes */
-.m-0 { margin: 0; }
-.m-1 { margin: var(--spacing-xs); }
-.m-2 { margin: var(--spacing-sm); }
-.m-3 { margin: var(--spacing-md); }
-.m-4 { margin: var(--spacing-lg); }
-.m-5 { margin: var(--spacing-xl); }
-
-.p-0 { padding: 0; }
-.p-1 { padding: var(--spacing-xs); }
-.p-2 { padding: var(--spacing-sm); }
-.p-3 { padding: var(--spacing-md); }
-.p-4 { padding: var(--spacing-lg); }
-.p-5 { padding: var(--spacing-xl); }
-
 /* Apple HIG Elevation utility classes */
 .elevation-1 { box-shadow: var(--elevation-1); }
 .elevation-2 { box-shadow: var(--elevation-2); }
 .elevation-3 { box-shadow: var(--elevation-3); }
 .elevation-4 { box-shadow: var(--elevation-4); }
-
-/* Apple HIG Border radius utility classes */
-.rounded-sm { border-radius: var(--radius-sm); }
-.rounded-md { border-radius: var(--radius-md); }
-.rounded-lg { border-radius: var(--radius-lg); }
-.rounded-xl { border-radius: var(--radius-xl); }
 
 /* Apple HIG Scrollbar styling */
 ::-webkit-scrollbar {

@@ -22,7 +22,7 @@ Constants:
 
 - IMAGEFILE: Path to the image file used in the header and footer.
 - HEADER_HTML: HTML content for the header.
-- STYLE_CSS, M3_COMPONENTS_CSS, MOSAIC_COMPONENTS_CSS: CSS bundles for the app shell.
+- STYLE_CSS: CSS bundle for the app shell.
 - EDITORIAL_FONTS_HTML: Google Fonts link block (Manrope, Inter, JetBrains Mono).
 
 External Dependencies:
@@ -813,10 +813,23 @@ global_metrics = GlobalSystemMetrics()
 # Read the HTML content for the header
 HEADER_HTML = (Path(__file__).parent / "static" / "header.html").read_text()
 
-# Read the CSS styles for the application
-STYLE_CSS = (Path(__file__).parent / "static" / "styles.css").read_text()
-M3_COMPONENTS_CSS = (Path(__file__).parent / "static" / "m3-components.css").read_text()
-MOSAIC_COMPONENTS_CSS = (Path(__file__).parent / "static" / "mosaic-components.css").read_text()
+# Shared stylesheet load order. The three legacy files remain at the end of
+# the bundle while page families migrate to the responsibility-based files.
+STATIC_DIR = Path(__file__).parent / "static"
+CSS_FILES = (
+    "tokens.css",
+    "base.css",
+    "shell.css",
+    "components.css",
+    "pages.css",
+    "batman.css",
+    "legacy.css",
+)
+LEGACY_SOURCE_FILES = ("styles.css", "m3-components.css", "mosaic-components.css")
+STYLE_CSS = "\n".join(
+    (STATIC_DIR / filename).read_text(encoding="utf-8")
+    for filename in (*CSS_FILES, *LEGACY_SOURCE_FILES)
+)
 
 # Google Fonts: Manrope (headlines), Inter (UI/data labels), JetBrains Mono (technical strings)
 EDITORIAL_FONTS_HTML = """
@@ -824,6 +837,12 @@ EDITORIAL_FONTS_HTML = """
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Manrope:wght@600;700;800&display=swap" rel="stylesheet">
 """
+
+
+def add_theme_assets() -> None:
+    """Add ROBIN's shared fonts and styles to the current page."""
+    ui.add_head_html(EDITORIAL_FONTS_HTML)
+    ui.add_css(STYLE_CSS)
 
 
 @contextmanager
@@ -884,10 +903,8 @@ def frame(
     ui.add_head_html(
         '<script src="https://cdn.jsdelivr.net/npm/igv@3.7.0/dist/igv.min.js"></script>'
     )
-    ui.add_head_html(EDITORIAL_FONTS_HTML)
-    ui.add_head_html(
-        HEADER_HTML + f"<style>{STYLE_CSS}</style><style>{M3_COMPONENTS_CSS}</style><style>{MOSAIC_COMPONENTS_CSS}</style>"
-    )
+    add_theme_assets()
+    ui.add_head_html(HEADER_HTML)
     # Add mobile-specific responsive CSS
     ui.add_head_html("""
         <style>
@@ -1696,10 +1713,8 @@ def create_standalone_page():
     ui.add_head_html(
         '<script src="https://cdn.jsdelivr.net/npm/igv@3.7.0/dist/igv.min.js"></script>'
     )
-    ui.add_head_html(EDITORIAL_FONTS_HTML)
-    ui.add_head_html(
-        HEADER_HTML + f"<style>{STYLE_CSS}</style><style>{M3_COMPONENTS_CSS}</style><style>{MOSAIC_COMPONENTS_CSS}</style>"
-    )
+    add_theme_assets()
+    ui.add_head_html(HEADER_HTML)
 
     # Create a simple header (same shell padding pattern as frame())
     with ui.header(elevated=True).classes("items-center duration-200 p-0 px-2 no-wrap elevation-1"):

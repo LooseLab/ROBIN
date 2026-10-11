@@ -629,10 +629,10 @@ def _create_classification_dashboard_card_with_data(
 
 def _create_classification_dashboard_card(title: str, classification: str, icon: str, description: str) -> Dict[str, Any]:
     """Create a compact classification dashboard card with detailed information. Returns labels for updating."""
-    with ui.card().classes("flex-1 bg-white rounded-lg shadow-sm border border-gray-200 p-4"):
+    with ui.card().classes("robin-card flex-1"):
         with ui.row().classes("flex items-center justify-between mb-2"):
             # Title
-            ui.label(title).classes("text-sm font-medium text-gray-600")
+            ui.label(title).classes("robin-card__title")
             
             # Icon in circular background
             with ui.row().classes("w-7 h-7 bg-blue-100 rounded-full flex items-center justify-center"):
@@ -650,7 +650,7 @@ def _create_classification_dashboard_card(title: str, classification: str, icon:
             features_label = ui.label("Features: Loading...").classes("text-xs text-gray-500")
         
         # Description
-        ui.label(description).classes("text-xs text-gray-500")
+        ui.label(description).classes("robin-card__description")
         
         return {
             "classification": classification_label,
@@ -771,10 +771,10 @@ def _create_coverage_dashboard_card_with_data(
 
 def _create_coverage_dashboard_card() -> Dict[str, Any]:
     """Create a compact coverage analysis dashboard card. Returns labels for updating."""
-    with ui.card().classes("flex-1 bg-white rounded-lg shadow-sm border border-gray-200 p-4"):
+    with ui.card().classes("robin-card flex-1"):
         with ui.row().classes("flex items-center justify-between mb-2"):
             # Title
-            ui.label("Coverage Analysis").classes("text-sm font-medium text-gray-600")
+            ui.label("Coverage Analysis").classes("robin-card__title")
             
             # Icon in circular background
             with ui.row().classes("w-7 h-7 bg-blue-100 rounded-full flex items-center justify-center"):
@@ -865,10 +865,10 @@ def _create_cnv_dashboard_card_with_data(
 
 def _create_cnv_dashboard_card() -> Dict[str, Any]:
     """Create a compact CNV analysis dashboard card. Returns labels for updating."""
-    with ui.card().classes("flex-1 bg-white rounded-lg shadow-sm border border-gray-200 p-4"):
+    with ui.card().classes("robin-card flex-1"):
         with ui.row().classes("flex items-center justify-between mb-2"):
             # Title
-            ui.label("Copy Number Analysis").classes("text-sm font-medium text-gray-600")
+            ui.label("Copy Number Analysis").classes("robin-card__title")
             
             # Icon in circular background
             with ui.row().classes("w-7 h-7 bg-purple-100 rounded-full flex items-center justify-center"):
@@ -888,7 +888,7 @@ def _create_cnv_dashboard_card() -> Dict[str, Any]:
             lost_badge = ui.label("Lost: --").classes("px-2 py-1 text-xs font-medium rounded-full bg-red-100 text-red-800")
         
         # Description
-        ui.label("Copy number analysis across genome with breakpoint detection").classes("text-xs text-gray-500")
+        ui.label("Copy number analysis across genome with breakpoint detection").classes("robin-card__description")
         
         return {
             "genetic_sex": genetic_sex_label,
@@ -965,10 +965,10 @@ def _create_mgmt_dashboard_card_with_data(
 
 def _create_mgmt_dashboard_card() -> Dict[str, Any]:
     """Create a compact MGMT analysis dashboard card. Returns labels for updating."""
-    with ui.card().classes("flex-1 bg-white rounded-lg shadow-sm border border-gray-200 p-4"):
+    with ui.card().classes("robin-card flex-1"):
         with ui.row().classes("flex items-center justify-between mb-2"):
             # Title
-            ui.label("MGMT Analysis").classes("text-sm font-medium text-gray-600")
+            ui.label("MGMT Analysis").classes("robin-card__title")
             
             # Icon in circular background
             with ui.row().classes("w-7 h-7 bg-orange-100 rounded-full flex items-center justify-center"):
@@ -986,7 +986,7 @@ def _create_mgmt_dashboard_card() -> Dict[str, Any]:
             prediction_score_label = ui.label("Score: Loading...").classes("text-xs text-gray-600")
         
         # Description
-        cpg_sites_label = ui.label("MGMT status determined from methylation analysis of -- CpG sites").classes("text-xs text-gray-500")
+        cpg_sites_label = ui.label("MGMT status determined from methylation analysis of -- CpG sites").classes("robin-card__description")
         
         return {
             "status": status_label,
@@ -1056,10 +1056,10 @@ def _create_fusion_dashboard_card_with_data(
 
 def _create_fusion_dashboard_card() -> Dict[str, Any]:
     """Create a compact fusion analysis dashboard card. Returns labels for updating."""
-    with ui.card().classes("flex-1 bg-white rounded-lg shadow-sm border border-gray-200 p-4"):
+    with ui.card().classes("robin-card flex-1"):
         with ui.row().classes("flex items-center justify-between mb-2"):
             # Title
-            ui.label("Fusion Analysis").classes("text-sm font-medium text-gray-600")
+            ui.label("Fusion Analysis").classes("robin-card__title")
             
             # Icon in circular background
             with ui.row().classes("w-7 h-7 bg-green-100 rounded-full flex items-center justify-center"):
@@ -1075,7 +1075,7 @@ def _create_fusion_dashboard_card() -> Dict[str, Any]:
             genome_fusions_label = ui.label("-- genome wide fusions").classes("text-xs text-gray-600")
         
         # Description
-        ui.label("Fusion candidates identified from reads with supplementary alignments").classes("text-xs text-gray-500")
+        ui.label("Fusion candidates identified from reads with supplementary alignments").classes("robin-card__description")
         
         return {
             "panel": panel_label,
