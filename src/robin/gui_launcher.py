@@ -7760,6 +7760,14 @@ class GUILauncher:
                     "target_pair_list",
                     "genome_pair_list",
                 ],
+                "itd": [
+                    "status",
+                    "event_count",
+                    "called_genes",
+                    "genes",
+                    "event_list",
+                    "read_qc_available",
+                ],
                 "mnpflex": [
                     "qc_status",
                     "qc_avg_coverage",
@@ -7784,6 +7792,35 @@ class GUILauncher:
                 ],
             }
 
+            unit_headers = {
+                ("coverage", "global_coverage"): "global_coverage_x",
+                ("coverage", "target_coverage"): "target_coverage_x",
+                ("coverage", "enrichment"): "enrichment_x",
+                ("mgmt", "methylation_percent"): "methylation_percent",
+                ("mgmt", "average_methylation"): "average_methylation_percent",
+                ("mgmt", "prediction_score"): "prediction_score_percent",
+            }
+
+            def _analysis_tsv_header(section: str, key: str) -> str:
+                return f"analysis_{section}_{unit_headers.get((section, key), key)}"
+
+            def _analysis_tsv_value(section: str, key: str, value: Any) -> Any:
+                """Return machine-readable values while retaining clear units in headers."""
+                if value is None or value == "":
+                    return value
+                if (section, key) not in unit_headers:
+                    return value
+                text = str(value).strip()
+                if text in {"Not available", "Classifier not used"}:
+                    return text
+                suffix = "x" if section == "coverage" else "%"
+                if text.endswith(suffix):
+                    text = text[: -len(suffix)].strip()
+                try:
+                    return float(text)
+                except (TypeError, ValueError):
+                    return value
+
             headers = list(table_fields)
             headers.extend([f"run_summary_{k}" for k in run_info_fields])
             for model_name in classification_models:
@@ -7796,7 +7833,7 @@ class GUILauncher:
                     ]
                 )
             for section, keys in analysis_fields.items():
-                headers.extend([f"analysis_{section}_{k}" for k in keys])
+                headers.extend([_analysis_tsv_header(section, k) for k in keys])
 
             rows_by_id = {
                 str(r.get("sample_id")): r
@@ -8161,7 +8198,9 @@ class GUILauncher:
                     for section, keys in analysis_fields.items():
                         section_data = analysis.get(section, {}) or {}
                         for key in keys:
-                            export_row[f"analysis_{section}_{key}"] = section_data.get(key, "")
+                            export_row[_analysis_tsv_header(section, key)] = _analysis_tsv_value(
+                                section, key, section_data.get(key, "")
+                            )
                     writer.writerow({k: _clean_tsv_value(v) for k, v in export_row.items()})
 
             return out_path

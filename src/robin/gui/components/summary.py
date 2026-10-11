@@ -31,6 +31,7 @@ from robin.analysis.bam_preprocessor import (
 from robin.gui.config import (
     get_confidence_level as get_classifier_confidence_level,
     is_section_visible,
+    get_enabled_classification_steps,
     get_visible_classification_steps,
     any_classification_visible,
     launcher_visibility_context,
@@ -41,6 +42,8 @@ from robin.gui.coverage_metrics import (
     coverage_read_length_export_fields,
     read_length_summary_line,
 )
+from robin.coverage_metrics import calculate_coverage_metrics
+from robin.gui.plotting_preferences import resolve_plotting_reference_contig_scope
 from robin.analysis.bam_preprocessor import load_on_off_target_length_stats
 
 
@@ -528,7 +531,10 @@ def _refresh_summary_cache_sync(
     workflow_steps, display_config, viewer_role = launcher_visibility_context(launcher)
     data: Dict[str, Any] = {
         "run_info": _extract_run_information(sample_dir, sample_id),
-        "classification_data": _extract_classification_data(sample_dir),
+        "classification_data": _extract_classification_data(
+            sample_dir,
+            active_classifiers=get_enabled_classification_steps(workflow_steps),
+        ),
         "analysis_data": {},
     }
 
@@ -542,6 +548,8 @@ def _refresh_summary_cache_sync(
         analysis_data["mgmt"] = _extract_mgmt_data(sample_dir)
     if is_section_visible("fusion", workflow_steps=workflow_steps, display_config=display_config, viewer_role=viewer_role):
         analysis_data["fusion"] = _extract_fusion_data(sample_dir)
+    if is_section_visible("itd", workflow_steps=workflow_steps, display_config=display_config, viewer_role=viewer_role):
+        analysis_data["itd"] = _extract_itd_data(sample_dir)
 
     data["analysis_data"] = analysis_data
     return data
@@ -1331,20 +1339,20 @@ def _extract_coverage_data(sample_dir: Path) -> Dict[str, Any]:
 
                 cov_df = pd.read_csv(
                     cov_main,
-                    usecols=lambda c: c in {"covbases", "endpos"},
+                    usecols=lambda c: c in {"#rname", "covbases", "endpos"},
                     dtype={"covbases": "float64", "endpos": "float64"},
                 )
 
                 # Calculate global coverage using the same formula as coverage component
-                if (
-                    "covbases" in cov_df.columns
-                    and "endpos" in cov_df.columns
-                    and cov_df["endpos"].sum() > 0
-                ):
-                    global_cov = float(cov_df["covbases"].sum()) / float(
-                        cov_df["endpos"].sum()
-                    )
-                    coverage_data["global_coverage"] = f"{global_cov:.2f}x"
+                if "covbases" in cov_df.columns and "endpos" in cov_df.columns:
+                    global_cov = calculate_coverage_metrics(
+                        cov_df,
+                        pd.DataFrame(columns=["bases", "length"]),
+                        resolve_plotting_reference_contig_scope(),
+                    )["global_coverage"]
+                    if global_cov is not None:
+                        global_cov = float(global_cov)
+                        coverage_data["global_coverage"] = f"{global_cov:.2f}x"
             except Exception as e:
                 logging.debug(f"   MGMT: <access denied>: {e}")
                 pass
@@ -1356,7 +1364,7 @@ def _extract_coverage_data(sample_dir: Path) -> Dict[str, Any]:
 
                 bed_df = pd.read_csv(
                     bed_cov,
-                    usecols=lambda c: c in {"bases", "length", "endpos", "startpos"},
+                    usecols=lambda c: c in {"chrom", "bases", "length", "endpos", "startpos"},
                     dtype={
                         "bases": "float64",
                         "length": "float64",
@@ -1367,18 +1375,14 @@ def _extract_coverage_data(sample_dir: Path) -> Dict[str, Any]:
 
                 # Calculate target coverage using the same formula as coverage component
                 if "bases" in bed_df.columns:
-                    # Calculate length if not present (same as coverage component)
-                    if "length" not in bed_df.columns:
-                        bed_df["length"] = (
-                            bed_df["endpos"] - bed_df["startpos"] + 1
-                        ).astype(float)
-
-                    if bed_df["length"].sum() > 0:
-                        target_cov_v = float(bed_df["bases"].sum()) / float(
-                            bed_df["length"].sum()
-                        )
+                    target_cov_v = calculate_coverage_metrics(
+                        pd.DataFrame(columns=["covbases", "endpos"]),
+                        bed_df,
+                        resolve_plotting_reference_contig_scope(),
+                    )["target_coverage"]
+                    if target_cov_v is not None:
+                        target_cov_v = float(target_cov_v)
                         coverage_data["target_coverage"] = f"{target_cov_v:.2f}x"
-
                         coverage_data["quality"] = coverage_quality_name(target_cov_v)
             except Exception as e:
                 logging.debug(f"   MGMT: <access denied>: {e}")
@@ -1479,6 +1483,7 @@ def _extract_mgmt_data(sample_dir: Path) -> Dict[str, Any]:
         # Use the same file discovery logic as the MGMT component
         # First check for final_mgmt.csv files (highest priority)
         final_files = list(sample_dir.glob("final_mgmt.csv"))
+        current_count: Optional[int] = None
         if final_files:
             latest_csv = final_files[0]
         else:
@@ -1496,6 +1501,7 @@ def _extract_mgmt_data(sample_dir: Path) -> Dict[str, Any]:
                     return -1
 
             latest_csv = max(csv_files, key=_count_from_name)
+            current_count = _count_from_name(latest_csv)
 
         # Read the latest MGMT CSV file
         try:
@@ -1543,15 +1549,21 @@ def _extract_mgmt_data(sample_dir: Path) -> Dict[str, Any]:
                     pass
 
             # Count CPG sites from the BED file if available
-            current_count = _count_from_name(latest_csv)
-            bed_path = sample_dir / f"{current_count}_mgmt.bed"
-            if not bed_path.exists():
-                alt_bed = sample_dir / f"{current_count}_mgmt_mgmt.bed"
-                bed_path = alt_bed if alt_bed.exists() else bed_path
+            if current_count is None:
+                bed_candidates = [
+                    sample_dir / "final_mgmt.bed",
+                    sample_dir / "final_mgmt_mgmt.bed",
+                ]
+            else:
+                bed_candidates = [
+                    sample_dir / f"{current_count}_mgmt.bed",
+                    sample_dir / f"{current_count}_mgmt_mgmt.bed",
+                ]
+            bed_path = next((path for path in bed_candidates if path.exists()), None)
 
-            if bed_path.exists():
+            if bed_path is not None:
                 try:
-                    # Count lines in BED file to estimate CPG sites
+                    # Count lines in BED file to estimate CpG sites.
                     with open(bed_path, "r") as f:
                         line_count = sum(1 for line in f if line.strip())
                     mgmt_data["cpg_sites"] = line_count
@@ -1570,8 +1582,24 @@ def _extract_mgmt_data(sample_dir: Path) -> Dict[str, Any]:
     return mgmt_data
 
 
-def _extract_classification_data(sample_dir: Path) -> Dict[str, Any]:
-    """Extract classification data from various score files."""
+def _extract_classification_data(
+    sample_dir: Path, active_classifiers: Optional[set[str]] = None
+) -> Dict[str, Any]:
+    """Extract classification data and mark classifiers absent from the workflow.
+
+    ``None`` preserves the historical behaviour for direct callers that do not
+    have workflow metadata. The summary/TSV path always passes the active
+    workflow classifiers so an unused model is not confused with a failed or
+    incomplete result.
+    """
+    classifier_names = set(CLASSIFICATION_STEPS)
+    active = classifier_names if active_classifiers is None else set(active_classifiers)
+    not_used = {
+        "classification": "Classifier not used",
+        "confidence": "Classifier not used",
+        "confidence_level": "Classifier not used",
+        "features": "Classifier not used",
+    }
     classification_data = {
         "sturgeon": {
             "classification": "Not available",
@@ -1616,6 +1644,8 @@ def _extract_classification_data(sample_dir: Path) -> Dict[str, Any]:
             "features": 0,
         },
     }
+    for name in classifier_names - active:
+        classification_data[name] = dict(not_used)
 
     try:
         # Extract Sturgeon data
@@ -2078,6 +2108,87 @@ def _extract_fusion_data(sample_dir: Path) -> Dict[str, Any]:
         logging.debug(f"   Fusion: <access denied>: {e}")
 
     return fusion_data
+
+
+def _extract_itd_data(sample_dir: Path) -> Dict[str, Any]:
+    """Extract the one-row-per-sample ITD summary used by TSV export."""
+    itd_data: Dict[str, Any] = {
+        "status": "Not analysed",
+        "event_count": 0,
+        "called_genes": 0,
+        "genes": "",
+        "event_list": "",
+        "read_qc_available": False,
+    }
+    events_path = sample_dir / "itd_events.csv"
+    summary_path = sample_dir / "itd_summary.csv"
+    if not events_path.is_file() and not summary_path.is_file():
+        return itd_data
+
+    try:
+        import pandas as pd
+
+        events = pd.DataFrame()
+        summary = pd.DataFrame()
+        if events_path.is_file():
+            from robin.analysis.itd_work import normalize_itd_events_df
+
+            events = normalize_itd_events_df(pd.read_csv(events_path))
+        if summary_path.is_file():
+            summary = pd.read_csv(summary_path)
+
+        if not events.empty:
+            itd_data["event_count"] = int(len(events))
+            if "gene" in events.columns:
+                genes = sorted(
+                    {
+                        str(gene).strip()
+                        for gene in events["gene"].dropna()
+                        if str(gene).strip()
+                    }
+                )
+                itd_data["genes"] = "; ".join(genes)
+                itd_data["called_genes"] = len(genes)
+
+            event_items = []
+            for _, row in events.iterrows():
+                gene = str(row.get("gene", "")).strip()
+                chrom = str(row.get("chrom", "")).strip()
+                position = str(row.get("position", "")).strip()
+                length = str(row.get("length", "")).strip()
+                support = str(row.get("support", "")).strip()
+                vaf = row.get("vaf", "")
+                try:
+                    vaf_text = f"{float(vaf):.4f}"
+                except (TypeError, ValueError):
+                    vaf_text = str(vaf).strip()
+                event_items.append(
+                    f"{gene}|{chrom}:{position}|{length}bp|support={support}|vaf={vaf_text}"
+                )
+            itd_data["event_list"] = "; ".join(event_items)
+        elif not summary.empty and "n_events" in summary.columns:
+            called = summary[summary["n_events"].fillna(0).astype(float) > 0]
+            itd_data["event_count"] = int(summary["n_events"].fillna(0).sum())
+            if "gene" in called.columns:
+                genes = sorted(
+                    {
+                        str(gene).strip()
+                        for gene in called["gene"].dropna()
+                        if str(gene).strip()
+                    }
+                )
+                itd_data["genes"] = "; ".join(genes)
+                itd_data["called_genes"] = len(genes)
+
+        itd_data["status"] = (
+            "Events detected" if itd_data["event_count"] else "No events detected"
+        )
+        itd_data["read_qc_available"] = (sample_dir / "itd_event_qc.csv").is_file()
+    except Exception as exc:
+        logging.debug("ITD summary extraction failed for %s: %s", sample_dir, exc)
+        itd_data["status"] = "Analysis failed"
+
+    return itd_data
 
 
 def _get_confidence_color(confidence_level: str) -> str:

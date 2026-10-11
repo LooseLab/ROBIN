@@ -33,6 +33,7 @@ from robin.gui.coverage_metrics import (
     read_length_summary_line,
 )
 from robin.reference_contigs import is_visible_contig
+from robin.coverage_metrics import calculate_coverage_metrics
 
 
 class CoverageSection(ReportSection):
@@ -80,20 +81,11 @@ class CoverageSection(ReportSection):
                 os.path.join(output_dir, "target_coverage.csv")
             )
 
-            # Apply the configured reference contig scope consistently across all
-            # coverage plots and summary statistics.
-            if "#rname" in self.cov_df_main.columns:
-                self.cov_df_main = self.cov_df_main[
-                    self.cov_df_main["#rname"]
-                    .astype(str)
-                    .map(lambda v: is_visible_contig(v, scope))
-                ].copy()
-            if "chrom" in self.bedcov_df_main.columns:
-                self.bedcov_df_main = self.bedcov_df_main[
-                    self.bedcov_df_main["chrom"]
-                    .astype(str)
-                    .map(lambda v: is_visible_contig(v, scope))
-                ].copy()
+            metrics = calculate_coverage_metrics(
+                self.cov_df_main, self.bedcov_df_main, scope
+            )
+            self.cov_df_main = metrics["coverage_df"]
+            self.bedcov_df_main = metrics["target_df"]
             if "chrom" in self.target_coverage_df.columns:
                 self.target_coverage_df = self.target_coverage_df[
                     self.target_coverage_df["chrom"]
@@ -102,12 +94,8 @@ class CoverageSection(ReportSection):
                 ].copy()
 
             # Calculate global and target coverage
-            global_coverage = (
-                self.cov_df_main["covbases"].sum() / self.cov_df_main["endpos"].sum()
-            )
-            target_coverage = (
-                self.bedcov_df_main["bases"].sum() / self.bedcov_df_main["length"].sum()
-            )
+            global_coverage = metrics["global_coverage"]
+            target_coverage = metrics["target_coverage"]
 
             # Set coverage summary data
             self.coverage_data = {
