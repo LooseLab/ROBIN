@@ -37,6 +37,12 @@
   box-shadow: var(--elevation-2);
 }
 
+/* Insight cards retain their compact inner layout while sharing the ROBIN
+   card identity and token-driven surface treatment. */
+.robin-card--informational {
+  padding: 0;
+}
+
 .robin-padding-compact {
   padding: var(--robin-spacing-compact);
 }

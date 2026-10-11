@@ -1511,7 +1511,7 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
                 "classification-insight-heading text-headline-small"
             )
             with ui.element("div").classes(
-                "classification-insight-card w-full min-w-0"
+                "robin-card robin-card--informational classification-insight-card w-full min-w-0"
             ):
                 with ui.column().classes("w-full min-w-0 gap-2 p-2 md:p-3"):
                     with ui.row().classes("items-center gap-2 min-w-0"):

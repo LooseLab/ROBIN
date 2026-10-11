@@ -381,7 +381,7 @@ def add_classification_section(sample_dir: Path, launcher: Any = None) -> None:
                 }[tool_name]
                 if tool_name == "Sturgeon":
                     with ui.element("div").classes(
-                        "classification-insight-card w-full min-w-0 mb-2"
+                        "robin-card robin-card--informational classification-insight-card w-full min-w-0 mb-2"
                     ):
                         with ui.row().classes(
                             "w-full items-start gap-2 p-2 md:p-3 flex-wrap"
@@ -404,7 +404,7 @@ def add_classification_section(sample_dir: Path, launcher: Any = None) -> None:
                         }
                 elif tool_name in ("CrossNN", "PanCrossNN"):
                     with ui.element("div").classes(
-                        "classification-insight-card w-full min-w-0 mb-2"
+                        "robin-card robin-card--informational classification-insight-card w-full min-w-0 mb-2"
                     ):
                         with ui.row().classes(
                             "w-full items-start gap-2 p-2 md:p-3 flex-wrap"
@@ -427,7 +427,7 @@ def add_classification_section(sample_dir: Path, launcher: Any = None) -> None:
                         }
                 elif tool_name in ("Random Forest", "MARLIN", "Lamprey (research)", "Tucan"):
                     with ui.element("div").classes(
-                        "classification-insight-card w-full min-w-0 mb-2"
+                        "robin-card robin-card--informational classification-insight-card w-full min-w-0 mb-2"
                     ):
                         with ui.row().classes(
                             "w-full items-start gap-2 p-2 md:p-3 flex-wrap"

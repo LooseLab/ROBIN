@@ -1394,9 +1394,9 @@ a:active:not(.browser-window *) {
   box-sizing: border-box;
   border-radius: 0.75rem;
   overflow: hidden;
-  border: 1px solid rgb(226 232 240);
+  border: 1px solid var(--robin-border);
   background: var(--sample-card-gradient-light);
-  box-shadow: 0 1px 2px 0 rgb(0 0 0 / 0.05);
+  box-shadow: var(--elevation-1);
   padding: 0 0.75rem 0.75rem;
 }
 
@@ -1407,13 +1407,13 @@ a:active:not(.browser-window *) {
 
 .classification-insight-shell .classification-insight-heading.q-label,
 .classification-insight-shell .classification-insight-heading {
-  color: rgb(15 23 42);
+  color: var(--robin-text);
   flex: 0 0 auto;
   width: 100%;
   box-sizing: border-box;
   margin: 0 -0.75rem;
   padding: 0.75rem 0.75rem 0.5rem;
-  border-bottom: 1px solid rgb(241 245 249);
+  border-bottom: 1px solid var(--robin-border);
 }
 
 .body--dark .classification-insight-shell .classification-insight-heading.q-label,
@@ -1445,23 +1445,14 @@ a:active:not(.browser-window *) {
 
 .classification-insight-card {
   border-radius: 0.75rem;
-  border: 1px solid rgb(226 232 240);
+  border: 1px solid var(--robin-border);
   background: var(--sample-card-gradient-light);
-  box-shadow: 0 1px 2px 0 rgb(0 0 0 / 0.05);
-  transition: box-shadow 0.2s ease, border-color 0.2s ease;
-}
-
-.classification-insight-card:hover {
-  box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
+  box-shadow: var(--elevation-1);
 }
 
 .body--dark .classification-insight-card {
   background: var(--sample-card-gradient-dark);
   border-color: rgba(51, 65, 85, 0.5);
-}
-
-.body--dark .classification-insight-card:hover {
-  border-color: rgba(34, 197, 94, 0.3);
 }
 
 .classification-insight-icon.q-icon,
@@ -1484,7 +1475,7 @@ a:active:not(.browser-window *) {
   letter-spacing: 0.1em;
   text-transform: uppercase;
   font-weight: 700;
-  color: rgb(100 116 139);
+  color: var(--robin-text-muted);
   margin-bottom: 0.25rem;
 }
 
@@ -1498,7 +1489,7 @@ a:active:not(.browser-window *) {
   font-size: 1rem;
   line-height: 1.375rem;
   font-weight: 600;
-  color: rgb(15 23 42);
+  color: var(--robin-text);
   width: 100%;
   min-width: 0;
 }
@@ -1565,7 +1556,7 @@ a:active:not(.browser-window *) {
 .classification-insight-meta {
   font-size: 0.75rem;
   line-height: 1rem;
-  color: rgb(100 116 139);
+  color: var(--robin-text-muted);
 }
 
 .body--dark .classification-insight-meta.q-label,
@@ -1579,7 +1570,7 @@ a:active:not(.browser-window *) {
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.04em;
-  color: rgb(100 116 139);
+  color: var(--robin-text-muted);
 }
 
 .classification-insight-level--high {
