@@ -21,3 +21,91 @@
 .batman-mode .robin-card__description {
   color: inherit;
 }
+
+/* BATMAN shell chrome: black/yellow branding stays separate from scientific
+   status colours. */
+.batman-mode .q-header,
+.batman-mode .q-footer,
+.q-header.batphone,
+.q-footer.batphone,
+.body--dark .q-header.batphone,
+.body--dark .q-footer.batphone {
+  color: var(--batman-on-black) !important;
+  background: var(--batman-black) !important;
+  background-image: none !important;
+  border-color: var(--batman-yellow) !important;
+}
+
+.batman-mode .q-header,
+.q-header.batphone,
+.body--dark .q-header.batphone {
+  height: 64px;
+  border-bottom: 3px solid var(--batman-yellow) !important;
+  box-shadow: 0 2px 12px rgba(253, 227, 17, 0.25);
+}
+
+.batman-mode .q-footer,
+.q-footer.batphone,
+.body--dark .q-footer.batphone {
+  border-top: 3px solid var(--batman-yellow) !important;
+  box-shadow: 0 -2px 12px rgba(253, 227, 17, 0.2);
+}
+
+.batman-mode .q-header .q-btn,
+.batman-mode .q-header .q-icon,
+.batman-mode .q-header .q-toolbar__title,
+.batman-mode .q-header .text-headline-medium,
+.batman-mode .q-header strong,
+.batman-mode .q-header .q-label,
+.batman-mode .q-header .q-circular-progress__text,
+.q-header.batphone .q-btn,
+.q-header.batphone .q-icon,
+.q-header.batphone .q-toolbar__title,
+.q-header.batphone .text-headline-medium,
+.q-header.batphone strong,
+.q-header.batphone .q-label,
+.q-header.batphone .q-circular-progress__text,
+.batman-mode .q-footer .q-btn,
+.batman-mode .q-footer .q-label,
+.batman-mode .q-footer .q-icon,
+.batman-mode .q-footer .text-body-small,
+.batman-mode .q-footer .text-xs,
+.q-footer.batphone .q-btn,
+.q-footer.batphone .q-label,
+.q-footer.batphone .q-icon,
+.q-footer.batphone .text-body-small,
+.q-footer.batphone .text-xs,
+.batman-mode .q-header .q-btn--flat,
+.batman-mode .q-header .q-btn--flat .q-icon,
+.q-header.batphone .q-btn--flat,
+.q-header.batphone .q-btn--flat .q-icon {
+  color: var(--batman-on-black) !important;
+}
+
+.batman-mode .q-header .q-circular-progress__circle,
+.q-header.batphone .q-circular-progress__circle {
+  color: var(--batman-on-black) !important;
+}
+
+.batman-mode .q-header a:link:not(.browser-window *),
+.batman-mode .q-header a:visited:not(.browser-window *),
+.q-header.batphone a:link:not(.browser-window *),
+.q-header.batphone a:visited:not(.browser-window *) {
+  color: var(--batman-on-black) !important;
+}
+
+.batman-mode .q-header a:hover:not(.browser-window *),
+.q-header.batphone a:hover:not(.browser-window *) {
+  color: var(--batman-black) !important;
+  background-color: var(--batman-yellow) !important;
+}
+
+.batman-mode .q-header.fade,
+.batman-mode .q-footer.fade,
+.q-header.batphone.fade,
+.q-footer.batphone.fade,
+.body--dark .q-header.batphone.fade,
+.body--dark .q-footer.batphone.fade {
+  background: rgba(0, 0, 0, 0.94) !important;
+  backdrop-filter: blur(20px);
+}

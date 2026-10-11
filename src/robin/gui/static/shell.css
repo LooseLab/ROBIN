@@ -18,3 +18,117 @@
 .robin-shell__footer {
   border-top: 1px solid var(--shell-chrome-edge);
 }
+
+.q-layout {
+  position: relative;
+  z-index: 1;
+}
+
+.q-page,
+.q-page__content {
+  background: transparent;
+}
+
+/* Emerald header/footer chrome. BATMAN-specific overrides remain in
+   batman.css until that migration is complete. */
+.q-header {
+  height: 72px;
+  background: linear-gradient(to right, var(--shell-chrome-top) 0%, var(--shell-chrome-bottom) 100%);
+  border-bottom: 1px solid var(--shell-chrome-edge);
+  box-shadow: var(--elevation-2);
+  transition: background var(--transition-base), box-shadow var(--transition-base);
+  padding: 0 var(--spacing-lg);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.q-header .text-headline-medium,
+.q-header strong,
+.q-header .q-label {
+  color: var(--md-on-primary) !important;
+  font-weight: 600;
+  line-height: 1.35;
+  text-shadow: 0 1px 1px rgba(0, 0, 0, 0.12);
+}
+
+.q-header .text-headline-medium,
+.q-header strong {
+  font-size: 1.125rem;
+}
+
+.q-header .q-label {
+  font-size: 1rem;
+}
+
+.q-header .q-label.text-body-small {
+  font-size: 0.875rem;
+}
+
+.q-header.fade {
+  background: linear-gradient(to right, var(--shell-chrome-top) 0%, var(--shell-chrome-bottom) 100%);
+  box-shadow: var(--elevation-3);
+}
+
+.body--dark .q-header {
+  background: linear-gradient(to right, var(--shell-chrome-top) 0%, var(--shell-chrome-bottom) 100%);
+  border-bottom: 1px solid var(--shell-chrome-edge);
+}
+
+.body--dark .q-header .q-label,
+.body--dark .q-header .text-headline-medium,
+.body--dark .q-header strong {
+  color: var(--md-on-primary) !important;
+}
+
+.q-header a:link:not(.browser-window *),
+.q-header a:visited:not(.browser-window *),
+.q-footer a:link:not(.browser-window *),
+.q-footer a:visited:not(.browser-window *) {
+  color: rgba(255, 255, 255, 0.95) !important;
+}
+
+.q-header a:hover:not(.browser-window *),
+.q-footer a:hover:not(.browser-window *) {
+  color: #ffffff !important;
+  background-color: rgba(255, 255, 255, 0.12) !important;
+}
+
+.q-footer {
+  height: 72px;
+  background: linear-gradient(to left, var(--shell-chrome-top) 0%, var(--shell-chrome-bottom) 100%);
+  border-top: 1px solid var(--shell-chrome-edge);
+  box-shadow: var(--elevation-1);
+  transition: background var(--transition-base), box-shadow var(--transition-base);
+  padding: 0 var(--spacing-lg);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.q-footer .q-label,
+.q-footer .text-body-small {
+  color: var(--md-on-primary) !important;
+  font-size: 0.875rem;
+  line-height: 1.35;
+  text-shadow: 0 1px 1px rgba(0, 0, 0, 0.12);
+}
+
+.q-footer .text-xs,
+.q-footer .q-btn {
+  font-size: 0.875rem !important;
+}
+
+.q-footer.fade {
+  background: linear-gradient(to left, var(--shell-chrome-top) 0%, var(--shell-chrome-bottom) 100%);
+  box-shadow: var(--elevation-2);
+}
+
+.body--dark .q-footer {
+  background: linear-gradient(to left, var(--shell-chrome-top) 0%, var(--shell-chrome-bottom) 100%);
+  border-top: 1px solid var(--shell-chrome-edge);
+}
+
+.body--dark .q-footer .q-label {
+  color: var(--md-on-primary) !important;
+}
