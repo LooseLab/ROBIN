@@ -1,4 +1,4 @@
-"""Admin panel: delete or archive completed sample output folders."""
+"""Admin panel: delete or archive sample output folders."""
 
 from __future__ import annotations
 
@@ -16,6 +16,7 @@ from robin.sample_lifecycle import (
     archive_sample_data,
     assess_sample_for_removal,
     delete_sample_data,
+    removal_status_label,
     result_to_audit_details,
     validate_archive_destination,
 )
@@ -53,7 +54,11 @@ def _lifecycle_rows(launcher: "GUILauncher") -> List[Dict[str, Any]]:
                 "last_seen": record.last_seen or "—",
                 "active_jobs": record.active_jobs,
                 "pending_jobs": record.pending_jobs,
-                "status": "Ready" if assessment.removable else assessment.reason,
+                "status": removal_status_label(
+                    origin=record.origin,
+                    unfinished_jobs=record.unfinished_jobs,
+                    assessment=assessment,
+                ),
                 "removable": assessment.removable,
             }
         )
@@ -109,8 +114,10 @@ def build_sample_lifecycle_panel(launcher: "GUILauncher") -> None:
         with ui.column().classes("w-full min-w-0 gap-3 p-2 md:p-3"):
             ui.label("Sample management").classes("classification-insight-model")
             ui.label(
-                "Delete or archive completed sample output folders. "
-                "Live runs and samples with active or pending jobs cannot be removed. "
+                "Delete or archive sample output folders, including runs still marked Live. "
+                "A restart marks leftover live runs Interrupted and keeps a count of jobs that "
+                "did not finish. Samples with active or pending jobs cannot be removed until "
+                "that work finishes. "
                 "Archives are written as tar.gz files to a folder outside the work directory; "
                 "the sample folder is removed after a successful archive."
             ).classes("classification-insight-foot")
@@ -353,6 +360,10 @@ def build_sample_lifecycle_panel(launcher: "GUILauncher") -> None:
                         "color=negative no-caps"
                     )
 
+            def _sample_record(sample_id: str):
+                with launcher._samples_record_lock:
+                    return launcher._samples_master_record.get(sample_id)
+
             def _open_confirm(kind: str) -> None:
                 sample_id = _selected_sample_id(sample_table)
                 if not sample_id:
@@ -364,10 +375,27 @@ def build_sample_lifecycle_panel(launcher: "GUILauncher") -> None:
 
                 pending_action["kind"] = kind
                 pending_action["sample_id"] = sample_id
+                record = _sample_record(sample_id)
+                origin = record.origin if record is not None else ""
+                unfinished = int(record.unfinished_jobs) if record is not None else 0
+                if origin == "Live":
+                    caution = f"{sample_id} is still marked as a live run. "
+                elif origin == "Interrupted" and unfinished > 0:
+                    noun = "job" if unfinished == 1 else "jobs"
+                    caution = (
+                        f"{sample_id} was interrupted by a restart; "
+                        f"{unfinished} {noun} did not finish. "
+                    )
+                elif origin == "Interrupted":
+                    caution = f"{sample_id} was interrupted by a restart. "
+                else:
+                    caution = ""
+                needs_typed_confirm = origin in ("Live", "Interrupted")
 
                 if kind == "delete":
                     confirm_title.set_text("Delete sample permanently?")
                     confirm_body.set_text(
+                        f"{caution}"
                         f"This will permanently delete all output data for "
                         f"{sample_id} under the work directory. This cannot be undone."
                     )
@@ -396,10 +424,12 @@ def build_sample_lifecycle_panel(launcher: "GUILauncher") -> None:
                         return
                     confirm_title.set_text("Archive sample?")
                     confirm_body.set_text(
+                        f"{caution}"
                         f"Archive {sample_id} to {dest} as a tar.gz file, then remove "
                         f"the sample folder from the work directory."
                     )
-                    confirm_typed.set_visibility(False)
+                    confirm_typed.set_visibility(needs_typed_confirm)
+                    confirm_typed.value = ""
 
                 confirm_dialog.open()
 

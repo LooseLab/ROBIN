@@ -164,6 +164,8 @@ class MasterCSVManager:
             "samples_overview_total_jobs": 0,
             "samples_overview_completed_jobs": 0,
             "samples_overview_failed_jobs": 0,
+            # Jobs still active or pending when a previous ROBIN process exited.
+            "samples_overview_unfinished_jobs": 0,
             # Comma-separated unique job types seen for the sample
             "samples_overview_job_types": "",
             # Unix epoch seconds for last activity used by GUI
@@ -369,6 +371,7 @@ class MasterCSVManager:
           - total_jobs: int
           - completed_jobs: int
           - failed_jobs: int
+          - unfinished_jobs: int (in-flight jobs abandoned by a previous process)
           - job_types: Iterable[str] | str (stored as comma-separated unique list)
           - last_seen: float | int (unix epoch seconds)
         """
@@ -406,6 +409,13 @@ class MasterCSVManager:
                     overview.get(
                         "failed_jobs", existing_data.get("samples_overview_failed_jobs", 0)
                     )
+                )
+                existing_data["samples_overview_unfinished_jobs"] = int(
+                    overview.get(
+                        "unfinished_jobs",
+                        existing_data.get("samples_overview_unfinished_jobs", 0),
+                    )
+                    or 0
                 )
                 jt_value = overview.get("job_types")
                 if isinstance(jt_value, str):

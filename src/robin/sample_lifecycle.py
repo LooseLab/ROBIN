@@ -36,6 +36,18 @@ class SampleLifecycleResult:
     archive_path: str = ""
 
 
+@dataclass(frozen=True)
+class RestartSettlement:
+    """In-flight work from a previous ROBIN process, after a restart."""
+
+    origin: str
+    active_jobs: int
+    pending_jobs: int
+    unfinished_jobs: int
+    last_seen: float
+    changed: bool
+
+
 def is_housekeeping_dir(name: str) -> bool:
     """Return True when a directory name should be omitted from archives."""
     return name in HOUSEKEEPING_DIR_NAMES or name.startswith("_")
@@ -47,12 +59,13 @@ def assess_sample_for_removal(
     active_jobs: int,
     pending_jobs: int,
 ) -> SampleRemovalAssessment:
-    """Return whether delete/archive is allowed for this sample."""
-    if origin == "Live":
-        return SampleRemovalAssessment(
-            removable=False,
-            reason="Live runs cannot be deleted or archived.",
-        )
+    """Return whether delete/archive is allowed for this sample.
+
+    A Live origin does not block removal. In-flight work does: deleting a
+    folder while jobs are still queued or running would race the workers.
+    ``origin`` is retained so existing callers keep the same keyword.
+    """
+    _ = origin
     if active_jobs > 0:
         return SampleRemovalAssessment(
             removable=False,
@@ -64,6 +77,76 @@ def assess_sample_for_removal(
             reason=f"Sample has {pending_jobs} pending job(s).",
         )
     return SampleRemovalAssessment(removable=True)
+
+
+def settle_restarted_run(
+    *,
+    origin: str,
+    active_jobs: int,
+    pending_jobs: int,
+    unfinished_jobs: int,
+    last_seen: float,
+    session_started_at: float,
+) -> RestartSettlement:
+    """Drop in-flight jobs that belonged to a previous ROBIN process.
+
+    Those jobs are not marked completed or failed. They are added to
+    ``unfinished_jobs``. A run that was still Live becomes Interrupted so
+    it is not presented as a clean completion. Activity at or after
+    ``session_started_at`` belongs to this process and is left unchanged.
+    """
+    active = max(0, int(active_jobs))
+    pending = max(0, int(pending_jobs))
+    unfinished = max(0, int(unfinished_jobs))
+    seen = float(last_seen or 0.0)
+
+    if seen >= session_started_at and seen > 0:
+        return RestartSettlement(
+            origin=origin,
+            active_jobs=active,
+            pending_jobs=pending,
+            unfinished_jobs=unfinished,
+            last_seen=seen,
+            changed=False,
+        )
+
+    dropped = active + pending
+    new_unfinished = unfinished + dropped
+    new_last = seen if seen > 0 else float(session_started_at) - 1.0
+    new_origin = "Interrupted" if origin == "Live" or dropped > 0 else origin
+    changed = (
+        new_origin != origin
+        or active != 0
+        or pending != 0
+        or new_unfinished != unfinished
+        or new_last != seen
+    )
+    return RestartSettlement(
+        origin=new_origin,
+        active_jobs=0,
+        pending_jobs=0,
+        unfinished_jobs=new_unfinished,
+        last_seen=new_last,
+        changed=changed,
+    )
+
+
+def removal_status_label(
+    *,
+    origin: str,
+    unfinished_jobs: int,
+    assessment: SampleRemovalAssessment,
+) -> str:
+    """Status text for the admin sample table."""
+    if not assessment.removable:
+        return assessment.reason
+    unfinished = max(0, int(unfinished_jobs))
+    if unfinished > 0:
+        noun = "job" if unfinished == 1 else "jobs"
+        return f"Ready — {unfinished} {noun} did not finish"
+    if origin == "Interrupted":
+        return "Ready — interrupted by restart"
+    return "Ready"
 
 
 def resolve_sample_dir(work_dir: Path, sample_id: str) -> Path:

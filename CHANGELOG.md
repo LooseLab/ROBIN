@@ -11,7 +11,12 @@ and this project (almost) adheres to [Semantic Versioning](https://semver.org/sp
 - **On/off-target read lengths:** Preprocessing classifies each primary mapped read against the panel BED and accumulates on-target vs off-target counts, yield, and a compact length histogram. The Coverage page and PDF report show the metrics and histogram only when those counts exist; the sample insight card reports the medians. The sample-tracking TSV and CSV ZIP export include the same measurements.
 - **Random Forest feature count:** The RapidCNS2 classifier already reports `Number of features`; ROBIN now writes that value as `number_probes` in `random_forest_scores.csv` so the classification summary and detail cards can show it.
 
+### Changed
+- **Admin sample management:** Live runs can be deleted or archived from the Administration sample-management tab. The confirm dialog warns when the sample is still marked Live, and archiving a live run requires typing the library ID. Samples with active or pending jobs stay blocked.
+
 ### Fixed
+- **Restarted live runs:** On startup, runs left Live by the previous process are marked Interrupted. In-flight active and pending jobs are cleared so the sample can be deleted or archived, and those jobs are counted as unfinished rather than completed or failed. The samples table shows them in the U column.
+- **On/off-target length histogram:** Empty log-spaced bins are now drawn so 50 bp–500 kb stays proportional, and the Coverage chart has an x-axis zoom slider plus Fit data / Full range.
 - **PDF chromosome CNV gene labels:** Per-chromosome copy-number plots now use smaller, tighter gene labels than the genome-wide figure, with more stagger so nearby names (for example KCNK12 / FBXO11) stay readable.
 - **MNP-Flex live parquet:** Bed conversion now copies the sample parquet under the writer lock before reading, so live updates cannot replace the file mid-conversion.
 - **MNP-Flex parquet selection:** Bulk/API conversion now requires a methylation parquet (`chrom`/`chromStart` plus methylation columns) and ignores coverage, fusion, SNP, and leftover snapshot files. Reconstruction accepts `start`/`start_pos` aliases instead of failing with `KeyError: 'chromStart'`.
@@ -44,6 +49,7 @@ and this project (almost) adheres to [Semantic Versioning](https://semver.org/sp
 - **Admin sample management:** The **Administration** page adds a **Sample management** tab (admin only) to permanently delete completed sample output folders or archive them as `tar.gz` files to a server-side destination outside the work directory. Live runs and samples with active or pending jobs are blocked. Archives include analysis outputs and `sample_identifier_manifest.json` but exclude housekeeping folders (for example `_locks` and `_fusion_staging`). Successful archive removes the sample from live tracking; delete and archive actions are audit-logged (`sample.deleted`, `sample.archived`).
 
 ### Changed
+- **Admin sample management:** Live runs can be deleted or archived from the Administration sample-management tab. The confirm dialog warns when the sample is still marked Live, and archiving a live run requires typing the library ID. Samples with active or pending jobs stay blocked.
 - **ClairS-TO image pin:** SNP/INDEL calling uses a single `CLAIRS_TO_IMAGE` setting, currently `hkubal/clairs-to:v0.4.4`. The image is pulled only if it is not already present locally (the tag is not refreshed on every run).
 - **GUI authentication:** Replaced the shared single-password gate with multi-user accounts. Legacy `gui_password_hash` is used only to bootstrap the first `admin` user when no accounts exist (`robin users bootstrap-admin`).
 - **Research disclaimer:** Removed the global GUI startup agreement dialog and redundant disclaimers on report export dialogs; consent is enforced per user at login. The CLI `I agree` prompt is skipped when an active admin has already accepted the current consent version.

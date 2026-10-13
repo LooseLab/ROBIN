@@ -433,7 +433,7 @@ class SampleRecord:
 
     sample_id: str
     test_id: str = ""  # From sample_identifier_manifest.json if present; else empty
-    origin: str = "Live"  # Live, Pre-existing, or Complete
+    origin: str = "Live"  # Live, Pre-existing, Complete, or Interrupted
     run_start: str = ""
     device: str = ""
     flowcell: str = ""
@@ -442,6 +442,7 @@ class SampleRecord:
     total_jobs: int = 0
     completed_jobs: int = 0
     failed_jobs: int = 0
+    unfinished_jobs: int = 0  # In-flight jobs abandoned when ROBIN restarted
     job_types: str = ""
     last_seen: str = ""  # Formatted timestamp string
     _last_seen_raw: float = 0.0  # Raw timestamp for sorting
@@ -464,6 +465,7 @@ class SampleRecord:
             "total_jobs": self.total_jobs,
             "completed_jobs": self.completed_jobs,
             "failed_jobs": self.failed_jobs,
+            "unfinished_jobs": self.unfinished_jobs,
             "job_types": self.job_types,
             "last_seen": self.last_seen,
             "files_seen": self.files_seen,
@@ -505,6 +507,9 @@ class GUILauncher:
         # Sample status transition timeout (in seconds)
         # Change to 60 for testing (1 minute), 3600 for production (60 minutes)
         self.completion_timeout_seconds = DEFAULT_MNPFLEX_IDLE_SECONDS
+        # In-flight job counts and Live origin from before this timestamp belong
+        # to a previous process. See _settle_runs_interrupted_by_restart.
+        self._session_started_at: float = time.time()
 
         # Message queue for non-blocking communication
         self.update_queue = queue.PriorityQueue()
@@ -1139,6 +1144,83 @@ class GUILauncher:
         except Exception as e:
             logging.debug(f"Error saving master record cache: {e}")
 
+    def _activity_is_from_this_session(self, last_seen: float) -> bool:
+        """True when ``last_seen`` was recorded after this process started."""
+        started = float(getattr(self, "_session_started_at", 0.0) or 0.0)
+        seen = float(last_seen or 0.0)
+        return seen >= started and seen > 0
+
+    def _apply_restart_settlement(self, record: SampleRecord) -> bool:
+        """Record previous-process in-flight jobs as unfinished. Returns True if changed."""
+        from robin.sample_lifecycle import settle_restarted_run
+
+        settled = settle_restarted_run(
+            origin=record.origin,
+            active_jobs=record.active_jobs,
+            pending_jobs=record.pending_jobs,
+            unfinished_jobs=record.unfinished_jobs,
+            last_seen=record._last_seen_raw,
+            session_started_at=float(getattr(self, "_session_started_at", 0.0) or 0.0),
+        )
+        if not settled.changed:
+            return False
+        record.origin = settled.origin
+        record.active_jobs = settled.active_jobs
+        record.pending_jobs = settled.pending_jobs
+        record.unfinished_jobs = settled.unfinished_jobs
+        if settled.last_seen != record._last_seen_raw:
+            record._last_seen_raw = settled.last_seen
+            if settled.last_seen > 0:
+                record.last_seen = time.strftime(
+                    "%Y-%m-%d %H:%M:%S", time.localtime(settled.last_seen)
+                )
+        record._dirty = True
+        return True
+
+    def _overview_persist_payload(self, record: SampleRecord) -> Dict[str, Any]:
+        return {
+            "active_jobs": int(record.active_jobs),
+            "pending_jobs": int(record.pending_jobs),
+            "total_jobs": int(record.total_jobs),
+            "completed_jobs": int(record.completed_jobs),
+            "failed_jobs": int(record.failed_jobs),
+            "unfinished_jobs": int(record.unfinished_jobs),
+            "job_types": record.job_types,
+            "last_seen": float(record._last_seen_raw),
+        }
+
+    def _settle_runs_interrupted_by_restart(self) -> None:
+        """A restarted process is not still running the previous session's jobs."""
+        if not self.monitored_directory:
+            return
+        settled_ids: List[str] = []
+        with self._samples_record_lock:
+            for record in self._samples_master_record.values():
+                if self._apply_restart_settlement(record):
+                    settled_ids.append(record.sample_id)
+        if not settled_ids:
+            return
+        try:
+            base = Path(self.monitored_directory)
+            if base.exists():
+                manager = MasterCSVManager(str(base))
+                with self._samples_record_lock:
+                    for sid in settled_ids:
+                        record = self._samples_master_record.get(sid)
+                        if record is None:
+                            continue
+                        manager.update_sample_overview(
+                            sid, self._overview_persist_payload(record)
+                        )
+        except Exception as e:
+            logging.debug(f"Error persisting interrupted-run state: {e}")
+        self._save_master_record_cache()
+        logging.info(
+            "Marked %d sample(s) interrupted by restart (unfinished jobs kept): %s",
+            len(settled_ids),
+            ", ".join(sorted(settled_ids)),
+        )
+
     def _ensure_job_baseline(self, sid: str) -> Dict[str, int]:
         """
         Freeze per-process baseline totals from master.csv the first time we see a sample.
@@ -1418,6 +1500,9 @@ class GUILauncher:
                                 record.failed_jobs = int(
                                     first_row.get("samples_overview_failed_jobs", 0) or 0
                                 )
+                                record.unfinished_jobs = int(
+                                    first_row.get("samples_overview_unfinished_jobs", 0) or 0
+                                )
                                 record.job_types = str(
                                     first_row.get("samples_overview_job_types", "") or ""
                                 )
@@ -1430,6 +1515,9 @@ class GUILauncher:
                         )
                         # Load test_id from sample_identifier_manifest.json if present
                         record.test_id = _get_test_id_from_manifest(sample_dir)
+
+                        if self._apply_restart_settlement(record):
+                            updated_any = True
 
                         # Do not leave new records as default "Live" when this folder is already
                         # finished on disk — that would look like a Live→Complete transition and
@@ -1468,9 +1556,13 @@ class GUILauncher:
                         elif record.origin == "Pre-existing" and (now_ts - record._last_seen_raw) >= self.completion_timeout_seconds:
                             # Keep as Pre-existing if it was pre-existing and still inactive
                             pass
-                        elif record.origin == "Complete":
-                            # Reactivate if file was modified recently OR if there are active jobs
-                            if (now_ts - record._last_seen_raw) < self.completion_timeout_seconds or record.active_jobs > 0 or record.pending_jobs > 0:
+                        elif record.origin in ("Complete", "Interrupted"):
+                            # Only this process's activity can make a sample Live again.
+                            if self._activity_is_from_this_session(record._last_seen_raw) and (
+                                (now_ts - record._last_seen_raw) < self.completion_timeout_seconds
+                                or record.active_jobs > 0
+                                or record.pending_jobs > 0
+                            ):
                                 record.origin = "Live"
                                 record._dirty = True
 
@@ -1480,16 +1572,9 @@ class GUILauncher:
                         # Persist overview to master.csv via MasterCSVManager
                         try:
                             manager = MasterCSVManager(str(base))
-                            persist_payload = {
-                                "active_jobs": int(record.active_jobs),
-                                "pending_jobs": int(record.pending_jobs),
-                                "total_jobs": int(record.total_jobs),
-                                "completed_jobs": int(record.completed_jobs),
-                                "failed_jobs": int(record.failed_jobs),
-                                "job_types": record.job_types,
-                                "last_seen": float(record._last_seen_raw),
-                            }
-                            manager.update_sample_overview(sid, persist_payload)
+                            manager.update_sample_overview(
+                                sid, self._overview_persist_payload(record)
+                            )
                         except Exception as e:
                             logging.debug(f"Error persisting overview for {sid}: {e}")
 
@@ -1593,6 +1678,16 @@ class GUILauncher:
 
                     # Mark as dirty to trigger UI update
                     record._dirty = True
+                    if self._activity_is_from_this_session(record._last_seen_raw) and record.origin in (
+                        "Complete",
+                        "Interrupted",
+                    ):
+                        if (
+                            record.active_jobs > 0
+                            or record.pending_jobs > 0
+                            or (time.time() - record._last_seen_raw) < self.completion_timeout_seconds
+                        ):
+                            record.origin = "Live"
                     self._samples_master_record[sid] = record
 
                 # Persist updates to master.csv
@@ -1602,16 +1697,9 @@ class GUILauncher:
                         manager = MasterCSVManager(str(base))
                         for record in self._samples_master_record.values():
                             if record._dirty:
-                                persist_payload = {
-                                    "active_jobs": int(record.active_jobs),
-                                    "pending_jobs": int(record.pending_jobs),
-                                    "total_jobs": int(record.total_jobs),
-                                    "completed_jobs": int(record.completed_jobs),
-                                    "failed_jobs": int(record.failed_jobs),
-                                    "job_types": record.job_types,
-                                    "last_seen": float(record._last_seen_raw),
-                                }
-                                manager.update_sample_overview(record.sample_id, persist_payload)
+                                manager.update_sample_overview(
+                                    record.sample_id, self._overview_persist_payload(record)
+                                )
                                 record._dirty = False
                 except Exception as e:
                     logging.debug(f"Error persisting workflow updates: {e}")
@@ -1704,6 +1792,8 @@ class GUILauncher:
                 logging.info("Loaded samples from cache - table will populate immediately")
             # Skip spurious target.bam finalization on restart when outputs already exist
             self._seed_finalized_samples_from_disk()
+            # Previous process's live runs and in-flight jobs are not still running.
+            self._settle_runs_interrupted_by_restart()
 
         try:
             # When reload is requested, we must run in the main thread
@@ -3116,7 +3206,9 @@ class GUILauncher:
                         ui.label("All tracked samples").classes(
                             "text-headline-medium text-slate-900 dark:text-slate-50 shrink-0"
                         )
-                        ui.label("A=Active  P=Pending  T=Total  C=Completed  F=Failed").classes(
+                        ui.label(
+                            "A=Active  P=Pending  T=Total  C=Completed  F=Failed  U=Unfinished"
+                        ).classes(
                             "text-[11px] text-slate-600 dark:text-slate-400 shrink-0"
                         )
                         with ui.row().classes(
@@ -3228,7 +3320,7 @@ class GUILauncher:
                         # Origin filter
                         self.origin_filter = (
                             ui.select(
-                                options=["All", "Live", "Pre-existing", "Complete"],
+                                options=["All", "Live", "Pre-existing", "Complete", "Interrupted"],
                                 value=self._samples_filters.get("origin", "All"),
                                 label="Origin",
                             )
@@ -3366,6 +3458,15 @@ class GUILauncher:
                                 "name": "failed_jobs",
                                 "label": "F",
                                 "field": "failed_jobs",
+                                "sortable": True,
+                                "align": "center",
+                                "style": "width:52px; max-width:52px;",
+                                "headerStyle": "width:52px; max-width:52px;",
+                            },
+                            {
+                                "name": "unfinished_jobs",
+                                "label": "U",
+                                "field": "unfinished_jobs",
                                 "sortable": True,
                                 "align": "center",
                                 "style": "width:52px; max-width:52px;",
