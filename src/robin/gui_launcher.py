@@ -2461,6 +2461,15 @@ class GUILauncher:
             filename = data.get("filename", "")
             level = data.get("level", "warning")
 
+            # Rollover writes many BAMs. One toast covers the problem; each
+            # skipped file is still written to the workflow log.
+            if title == "Missing Sample Name":
+                now = time.monotonic()
+                last_alert = float(getattr(self, "_missing_sample_alert_at", 0.0))
+                if now - last_alert < 60.0:
+                    return
+                self._missing_sample_alert_at = now
+
             # Build notification message
             if sample_id:
                 notification_msg = f"[{sample_id}] {message}"

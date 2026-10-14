@@ -515,6 +515,31 @@ def _get_modbase_model_warning(modbase_models: Optional[str]) -> Optional[str]:
     )
 
 
+def _assigned_sample_id(
+    lb_tag: Optional[str], runid_tag: Optional[str]
+) -> str:
+    """Return the library name, or the run id when the library name is absent."""
+    library = (lb_tag or "").strip()
+    if library:
+        return library
+    return (runid_tag or "").strip()
+
+
+def _unassigned_sample_result(
+    filename: str, directory: str, file_size: int, bam_path: str
+) -> Dict[str, Any]:
+    """Metadata for a BAM that must not be turned into a sample."""
+    state = _PASS_STR if _PASS_STR in bam_path else _FAIL_STR
+    return {
+        "sample_id": "",
+        "sample_id_unassigned": True,
+        "file_size": file_size,
+        "state": state,
+        "filename": filename,
+        "directory": directory,
+    }
+
+
 def _extract_sample_id_from_bam(
     bam_path: str,
     *,
@@ -524,39 +549,23 @@ def _extract_sample_id_from_bam(
     Extract sample ID from BAM file read group tags (and, if needed, a quick
     barcode probe).
 
+    The sample id is the read-group library name (LB), or the run id from DS
+    when LB is absent. Returns an empty string when neither is present.
+    Callers must not invent a sample id from the filename.
+
     This is used both as a fallback when comprehensive processing fails and as
     an early probe to decide whether this BAM's sample output directory
     already exists (idempotency for re-adding watch folders).
     """
     try:
-        bam_basename = os.path.basename(bam_path)
-        unknown_fallback = f"unknown_sample_{bam_basename}"
-
-        with pysam.AlignmentFile(bam_path, "rb") as bam:
-            # Get read group tags
-            rg_tags = bam.header.get(_RG_TAG, [])
+        with pysam.AlignmentFile(bam_path, "rb", check_sq=False) as bam:
+            rg_tags = get_rg_tags_from_bam(bam)
             if not rg_tags:
-                return unknown_fallback
+                return ""
 
-            # Process only the first RG tag for efficiency
-            rg_tag = rg_tags[0]
-
-            # Look for LB (Library) tag which contains the sample ID
-            lb_tag = rg_tag.get("LB")
-            if lb_tag:
-                sample_id = lb_tag
-            else:
-                # Fallback to runid from DS tag per ONT specification
-                ds_tag = rg_tag.get("DS", "")
-                if ds_tag:
-                    ds_tags = ds_tag.split(" ")
-                    if ds_tags and ds_tags[0].startswith(_RUNID_PREFIX):
-                        runid = ds_tags[0].removeprefix(_RUNID_PREFIX)
-                        sample_id = runid if runid else unknown_fallback
-                    else:
-                        sample_id = unknown_fallback
-                else:
-                    sample_id = unknown_fallback
+            sample_id = _assigned_sample_id(rg_tags[4], rg_tags[3])
+            if not sample_id:
+                return ""
 
             if not detect_barcodes:
                 return sample_id
@@ -589,8 +598,8 @@ def _extract_sample_id_from_bam(
             return sample_id
 
     except Exception:
-        # If pysam fails, return a stable directory-safe fallback.
-        return f"unknown_sample_{os.path.basename(bam_path)}"
+        # Unreadable headers are not assigned a sample id.
+        return ""
 
 
 # ============================================================================
@@ -641,18 +650,12 @@ def process_bam_reads(
             if not rg_tags:
                 return None
 
-            # Step 2: Determine sample ID
-            # Ensure sample_id is not None - use runid as fallback per ONT specification
-            # LB tag is optional, but runid from DS tag is always present
-            sample_id = (
-                rg_tags[4]  # LB (Library) tag
-                if rg_tags[4]
-                else (
-                    rg_tags[3]  # runid from DS tag as fallback
-                    if rg_tags[3]
-                    else f"unknown_sample_{os.path.basename(bam_file)}"
-                )  # filename as final fallback
-            )
+            # Step 2: Determine sample ID from the header.
+            # LB is the library/sample name. Run id is the fallback when LB is
+            # absent. A missing name is not replaced with the filename.
+            sample_id = _assigned_sample_id(rg_tags[4], rg_tags[3])
+            if not sample_id:
+                return {"sample_id": "", "sample_id_unassigned": True}
 
             # Step 3: Initialize data structures
             # Pre-allocate dictionary with known size for better performance
@@ -1058,12 +1061,24 @@ def extract_bam_metadata(
         detect_barcodes=detect_barcodes,
         target_bed=target_bed,
     )
+    if bam_info and bam_info.get("sample_id_unassigned"):
+        metadata.extracted_data = _unassigned_sample_result(
+            filename, directory, file_size, bam_path
+        )
+        metadata.processing_steps.append("sample_id_unassigned")
+        return metadata
     if bam_info is None:
         # Fallback to basic extraction if processing fails
         sample_id = _extract_sample_id_from_bam(
             bam_path,
             detect_barcodes=detect_barcodes,
         )
+        if not sample_id:
+            metadata.extracted_data = _unassigned_sample_result(
+                filename, directory, file_size, bam_path
+            )
+            metadata.processing_steps.append("sample_id_unassigned")
+            return metadata
         state = _PASS_STR if _PASS_STR in bam_path else _FAIL_STR
 
         # Pre-allocate dictionary for better performance
@@ -1110,6 +1125,32 @@ def extract_bam_metadata(
 # ============================================================================
 # HELPER FUNCTIONS
 # ============================================================================
+
+
+def _missing_sample_message(filename: str) -> str:
+    """User-facing explanation for a BAM that has no assignable sample name."""
+    return (
+        f"No sample name could be assigned for {filename}. "
+        "The BAM header has no library name (LB) or run id, so this file was not processed. "
+        "Other files with the same problem are skipped and listed in the workflow log."
+    )
+
+
+def _skip_bam_without_sample_id(job, logger, bam_path: str) -> None:
+    """Record a deliberate skip so the file is not analysed or given a sample folder."""
+    message = _missing_sample_message(os.path.basename(bam_path))
+    logger.warning(message)
+    job.context.add_metadata("skip_downstream", True)
+    job.context.add_metadata("skip_reason", "missing_sample_id")
+    job.context.add_metadata("sample_id_warning", message)
+    job.context.add_result(
+        "preprocessing",
+        {
+            "status": "skipped",
+            "reason": "missing_sample_id",
+            "message": message,
+        },
+    )
 
 
 def _send_alignment_warning_notification(
@@ -1230,11 +1271,22 @@ def bam_preprocessing_handler(job, center: str = None):
         )
         logger.debug(f"Extracted metadata: {metadata.extracted_data}")
 
+        sample_id = (metadata.extracted_data.get("sample_id") or "").strip()
+        if (
+            metadata.extracted_data.get("sample_id_unassigned")
+            or not sample_id
+            or sample_id == "unknown"
+            or sample_id.startswith("unknown_sample_")
+        ):
+            # Header did not yield a library name or run id. Do not create a
+            # sample directory and do not continue the workflow for this file.
+            _skip_bam_without_sample_id(job, logger, bam_path)
+            return
+
         # Step 2.5: Check for alignment data and warn if missing
         mapped_reads = metadata.extracted_data.get("mapped_reads", 0)
         unmapped_reads = metadata.extracted_data.get("unmapped_reads", 0)
         total_reads = mapped_reads + unmapped_reads
-        sample_id = metadata.extracted_data.get("sample_id", "unknown")
 
         modbase_warning = _get_modbase_model_warning(
             metadata.extracted_data.get("modbase_models")

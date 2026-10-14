@@ -1237,11 +1237,19 @@ def _wrap_real_handler(
                     f"{job_type} skipped (deliberate): {os.path.basename(job.context.filepath)}"
                 )
                 try:
+                    skip_reason = str(job.context.metadata.get("skip_reason") or "")
+                    bam_name = os.path.basename(job.context.filepath)
+                    if skip_reason == "missing_sample_id":
+                        skip_message = f"Skipped (no sample name): {bam_name}"
+                    elif skip_reason == "too_many_reads":
+                        skip_message = f"Skipped (too many reads): {bam_name}"
+                    else:
+                        skip_message = f"Skipped: {bam_name}"
                     # Inform GUI/CLI via GUI hook if available
                     _gui_send_update(
                         _GUIUpdateType.LOG_MESSAGE,
                         {
-                            "message": f"Skipped (too many reads): {os.path.basename(job.context.filepath)}",
+                            "message": skip_message,
                             "level": "WARNING",
                         },
                         priority=0,
@@ -3455,15 +3463,24 @@ class Coordinator:
             for metadata_key, title in (
                 ("modbase_warning", "Methylation Model Warning"),
                 ("alignment_warning", "BAM Alignment Warning"),
+                ("sample_id_warning", "Missing Sample Name"),
             ):
                 warning_message = ctx.metadata.get(metadata_key)
                 if not warning_message:
                     continue
+                if metadata_key == "sample_id_warning":
+                    # The message already names the file. An empty sample id
+                    # keeps the toast from being prefixed with "unknown".
+                    note_sample_id = ""
+                    note_filename = ""
+                else:
+                    note_sample_id = ctx.get_sample_id()
+                    note_filename = os.path.basename(ctx.filepath)
                 self._gui_notifications.append(
                     {
                         "message": str(warning_message),
-                        "sample_id": ctx.get_sample_id(),
-                        "filename": os.path.basename(ctx.filepath),
+                        "sample_id": note_sample_id,
+                        "filename": note_filename,
                         "title": title,
                         "level": "warning",
                     }
