@@ -44,7 +44,7 @@ dependencies = [
     "ruptures",
     "pywebview",
     "torch", #==1.13.1",
-    "scikit-learn==1.18.0",
+    "scikit-learn==1.8.0",
     "tabulate",
     "networkx",
     "docker",
