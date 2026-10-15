@@ -1934,7 +1934,7 @@ def _get_available_panels() -> List[str]:
     show_default=True,
     help=(
         "Reference genome: HTTPS URL to download, or path to a local FASTA "
-        "(e.g. .fa or .fa.gz)."
+        "(e.g. .fa or .fa.gz). Plain gzip is re-encoded as bgzip."
     ),
 )
 @click.option(
@@ -1962,6 +1962,7 @@ def sequencing_files(
     Copies the processed ``*_panel_name_uniq.bed`` and, when packaged, ``*_panel_source.bed``
     (original / unprocessed design) into one folder for adaptive sampling and aligners.
     The default reference is NCBI GRCh38 (no-alt analysis set, UCSC-style names), a large download.
+    That NCBI file is plain gzip; it is re-encoded as bgzip so it can be indexed.
     """
     out = (output_dir or (Path.cwd() / "reference_files")).resolve()
     bed_name = panel_bed_filename(panel)
