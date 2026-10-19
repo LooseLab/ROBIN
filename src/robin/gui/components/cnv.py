@@ -48,6 +48,10 @@ from robin.analysis.cnv_regional import (
     is_reportable_chromosome,
     load_panel_gene_bed,
 )
+from robin.analysis.cnv_reporting import (
+    build_cnv_evidence, evidence_table_rows, EVIDENCE_NOTES, GENE_COLUMNS, DEPTH_COLUMNS,
+)
+from robin.analysis.cnv_regional import load_target_coverage_df
 from robin.analysis.itd_work import load_gene_target_coverage
 from robin.classification_config import get_cnv_thresholds
 
@@ -1796,10 +1800,23 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
             genome_charts = (cnv_abs, cnv_diff)
 
             ui.separator().classes("mgmt-detail-separator")
-            regional_cnv_label = ui.label("Regional CNV events").classes(
+            ui.label("CNV review candidates").classes("target-coverage-panel__meta-label mt-2 mb-1")
+            ui.label(EVIDENCE_NOTES).classes("classification-insight-meta mb-2")
+            ui.label("Gene-level CNV evidence").classes("target-coverage-panel__meta-label")
+            _, gene_cnv_table = styled_table(
+                columns=[{"name": key, "field": key, "label": label, "sortable": True}
+                         for key, label in GENE_COLUMNS], rows=[], pagination=20, class_size="table-xs",
+            )
+            ui.label("Supporting target depth — comparator intervals exclude the tested target").classes("target-coverage-panel__meta-label")
+            _, depth_cnv_table = styled_table(
+                columns=[{"name": key, "field": key, "label": label, "sortable": True}
+                         for key, label in DEPTH_COLUMNS], rows=[], pagination=20, class_size="table-xs",
+            )
+            segment_summary = ui.label("Regional candidates awaiting data").classes("classification-insight-meta")
+            regional_cnv_label = ui.label("Cytoband CNV summary").classes(
                 "target-coverage-panel__meta-label mt-2 mb-1"
             )
-            regional_cnv_summary = ui.label("No regional CNV events detected").classes(
+            regional_cnv_summary = ui.label("Cytoband summary awaiting data").classes(
                 "classification-insight-meta mb-2"
             )
             regional_cnv_columns = [
@@ -1828,7 +1845,7 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
                 },
                 {
                     "name": "mean_cnv",
-                    "label": "Mean CNV",
+                    "label": "Mean log2 ratio",
                     "field": "mean_cnv",
                     "sortable": True,
                     "align": "right",
@@ -1844,6 +1861,13 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
             ]
             _, regional_cnv_table = styled_table(
                 columns=regional_cnv_columns, rows=[], pagination=20, class_size="table-xs"
+            )
+            ui.label("Bin-based regional candidates — endpoints are approximate").classes("target-coverage-panel__meta-label")
+            _, segment_cnv_table = styled_table(
+                columns=regional_cnv_columns + [
+                    {"name": "median_log2", "field": "median_log2", "label": "Median log2"},
+                    {"name": "bin_count", "field": "bin_count", "label": "Usable bins"},
+                ], rows=[], pagination=20, class_size="table-xs",
             )
             try:
                 regional_cnv_table.props('multi-sort rows-per-page-options="[10,20,50,0]"')
@@ -1867,7 +1891,8 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
                 {"name": "start_mb", "label": "Start (Mb)", "field": "start_mb", "sortable": True, "align": "right"},
                 {"name": "end_mb", "label": "End (Mb)", "field": "end_mb", "sortable": True, "align": "right"},
                 {"name": "length_mb", "label": "Length (Mb)", "field": "length_mb", "sortable": True, "align": "right"},
-                {"name": "mean_cnv_str", "label": "Mean CNV", "field": "mean_cnv_str", "sortable": True, "align": "right"},
+                {"name": "statistic", "label": "Statistic", "field": "statistic"},
+                {"name": "mean_cnv_str", "label": "Log2 ratio", "field": "mean_cnv_str", "sortable": True, "align": "right"},
                 {"name": "confidence", "label": "Confidence", "field": "confidence", "sortable": True, "align": "center"},
                 {"name": "proportion_affected", "label": "% Affected", "field": "proportion_affected", "sortable": True, "align": "right"},
                 {"name": "genes_str", "label": "Genes", "field": "genes_str"},
@@ -3204,9 +3229,6 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
                 if isinstance(cnv_log2_map, dict) and cnv_log2_map:
                     data = cnv_log2_map
                     source = "cnv_log2"
-                elif isinstance(cnv_map, dict):
-                    data = cnv_map
-                    source = "cnv"
                 else:
                     data = None
                     source = "none"
@@ -3214,7 +3236,8 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
                     cache_key = (
                         f"{source}:{state.get('cnv_m')}:{state.get('cnv2_m')}:"
                         f"{state.get('cnv_log2_m')}:"
-                        f"{int(binw)}:{sex_lbl}"
+                        f"{int(binw)}:{sex_lbl}:"
+                        f"{max((p.stat().st_mtime_ns for p in (sample_dir / 'bed_coverage_main.csv', sample_dir / 'target_coverage.csv') if p.exists()), default=0)}"
                     )
                     if state.get("cyto_cache_key") != cache_key:
                         panel_name, panel_genes_df = load_panel_gene_bed(str(sample_dir))
@@ -3222,13 +3245,33 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
                         state["cyto_df_all"] = df_all
                         state["panel_name"] = panel_name
                         state["panel_genes_df"] = panel_genes_df
+                        state["cnv_evidence"] = build_cnv_evidence(
+                            data, int(binw), sex_lbl, _load_cytobands_df(),
+                            _load_centromere_bed_df(), panel_genes_df,
+                            load_target_coverage_df(str(sample_dir)),
+                        )
                         state["cyto_cache_key"] = cache_key
+                    evidence = state.get("cnv_evidence", {"genes": [], "segments": [], "target_depth": []})
+                    gene_rows, depth_rows = evidence_table_rows(evidence)
+                    show = lambda row: selected in (None, "All") or row["chromosome"] == selected
+                    gene_cnv_table.rows = [row for row in gene_rows if show(row)]
+                    depth_cnv_table.rows = [row for row in depth_rows if show(row)]
+                    segment_cnv_table.rows = [
+                        {**format_regional_event_table_row(row), "median_log2": round(row["median_log2"], 3),
+                         "bin_count": row["bin_count"]} for row in evidence["segments"] if show(row)
+                    ]
+                    segment_summary.set_text(
+                        f"{len(segment_cnv_table.rows)} regional candidates; {len(gene_cnv_table.rows)} gene/target intervals assessed"
+                        if gene_cnv_table.rows or segment_cnv_table.rows else "No candidates meet these calling rules, or no assessable panel intervals"
+                    )
+                    for table in (gene_cnv_table, depth_cnv_table, segment_cnv_table):
+                        table.update()
                     df_all = state.get("cyto_df_all")
                     panel_genes_df = state.get("panel_genes_df")
                     if not isinstance(panel_genes_df, pd.DataFrame):
                         _, panel_genes_df = load_panel_gene_bed(str(sample_dir))
                     panel_name = state.get("panel_name")
-                    regional_title = "Regional CNV events"
+                    regional_title = "Cytoband CNV summary"
                     if panel_name:
                         regional_title += f" ({panel_name} panel genes)"
                     regional_cnv_label.set_text(regional_title)
@@ -3262,7 +3305,7 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
                             regional_cnv_summary.set_text(summary)
                         else:
                             regional_cnv_summary.set_text(
-                                "No regional CNV events detected"
+                                "No cytobands meet these calling rules"
                             )
                     else:
                         regional_cnv_table.rows = []
@@ -3271,12 +3314,20 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
                         except Exception:
                             pass
                         regional_cnv_summary.set_text(
-                            "No regional CNV events detected"
+                            "No cytobands meet these calling rules"
                         )
                 else:
                     regional_cnv_summary.set_text("CNV data not available")
+                    segment_summary.set_text("CNV evidence unavailable")
+                    for table in (gene_cnv_table, depth_cnv_table, segment_cnv_table, regional_cnv_table):
+                        table.rows = []
+                        table.update()
             except Exception:
-                pass
+                logging.exception("Could not update shared CNV evidence")
+                segment_summary.set_text("CNV evidence could not be calculated")
+                for table in (gene_cnv_table, depth_cnv_table, segment_cnv_table):
+                    table.rows = []
+                    table.update()
         except Exception:
             pass
 
@@ -3430,6 +3481,12 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
         cnv_dict_npy_changed = prev_cnv_dict_npy_mtime != cnv_dict_npy_mtime
         data_array_npy_changed = prev_data_array_npy_mtime != data_array_npy_mtime
         xy_pkl_changed = prev_xy_pkl_mtime != xy_pkl_mtime
+        coverage_stamp = max(
+            (p.stat().st_mtime_ns for p in (sample_dir / "bed_coverage_main.csv", sample_dir / "target_coverage.csv") if p.exists()),
+            default=0,
+        )
+        coverage_changed = state.get("target_depth_stamp", 0) != coverage_stamp
+        state["target_depth_stamp"] = coverage_stamp
 
         files_changed = (
             cnv_npy_changed
@@ -3438,6 +3495,7 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
             or cnv_dict_npy_changed
             or data_array_npy_changed
             or xy_pkl_changed
+            or coverage_changed
         )
 
         needs_update = (

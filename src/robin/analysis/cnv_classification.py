@@ -40,14 +40,14 @@ def _chromosome_region_slice(
     end_pos: int,
     bin_width: int,
 ) -> np.ndarray:
-    """Return bins covering [start_pos, end_pos] on a per-chromosome track."""
+    """Return bins overlapping [start_pos, end_pos) on a chromosome track."""
     if chromosome not in cnv_map:
         return np.asarray([], dtype=float)
     arr = np.asarray(cnv_map[chromosome], dtype=float).ravel()
     if arr.size == 0 or bin_width <= 0:
         return np.asarray([], dtype=float)
     start_bin = max(0, int(start_pos // bin_width))
-    end_bin = min(arr.size - 1, int(end_pos // bin_width))
+    end_bin = min(arr.size - 1, (int(end_pos) + bin_width - 1) // bin_width - 1)
     if end_bin < start_bin:
         return np.asarray([], dtype=float)
     return arr[start_bin : end_bin + 1]
@@ -131,6 +131,7 @@ class CNVEvent:
             "end_pos_mb": f"{self.end_pos/1e6:.2f}",
             "length_mb": f"{self.length/1e6:.2f}",
             "mean_cnv_str": f"{self.mean_cnv:.3f}",
+            "statistic": "Median log2 ratio" if self.arm else "Mean log2 ratio",
             "genes_str": ", ".join(self.genes) if self.genes else "",
         }
 
@@ -200,10 +201,13 @@ def analyze_chromosome_arms(
         p_arm_values: List[float] = []
         for _, band in p_arm_cytobands.iterrows():
             start_pos_bin = max(0, int(band["start_pos"] // bin_width))
-            end_pos_bin = min(len(cnv_data[chromosome]) - 1, int(band["end_pos"] // bin_width))
+            end_pos_bin = min(len(cnv_data[chromosome]) - 1, (int(band["end_pos"]) + bin_width - 1) // bin_width - 1)
             if end_pos_bin >= start_pos_bin:
                 region_values = cnv_data[chromosome][start_pos_bin:end_pos_bin + 1]
-                p_arm_values.extend(region_values)
+                # Collect each genomic bin once, including when a boundary
+                # falls inside a bin shared by adjacent cytobands.
+                p_arm_values.extend((idx, value) for idx, value in enumerate(region_values, start_pos_bin))
+        p_arm_values = list(dict(p_arm_values).values())
         p_arm_values = _finite_arm_values(p_arm_values)
         if p_arm_values:
             p_arm_mean = float(np.median(p_arm_values))
@@ -228,10 +232,11 @@ def analyze_chromosome_arms(
         q_arm_values: List[float] = []
         for _, band in q_arm_cytobands.iterrows():
             start_pos_bin = max(0, int(band["start_pos"] // bin_width))
-            end_pos_bin = min(len(cnv_data[chromosome]) - 1, int(band["end_pos"] // bin_width))
+            end_pos_bin = min(len(cnv_data[chromosome]) - 1, (int(band["end_pos"]) + bin_width - 1) // bin_width - 1)
             if end_pos_bin >= start_pos_bin:
                 region_values = cnv_data[chromosome][start_pos_bin:end_pos_bin + 1]
-                q_arm_values.extend(region_values)
+                q_arm_values.extend((idx, value) for idx, value in enumerate(region_values, start_pos_bin))
+        q_arm_values = list(dict(q_arm_values).values())
         q_arm_values = _finite_arm_values(q_arm_values)
         if q_arm_values:
             q_arm_mean = float(np.median(q_arm_values))

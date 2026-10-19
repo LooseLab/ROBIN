@@ -898,7 +898,9 @@ def resolve_cnv_calling_bin_width(
 ) -> int:
     """Effective bin width for arm/whole-chromosome calling (at least 1 Mb)."""
     analysis_bw = max(int(analysis_bin_width), 1)
-    return max(analysis_bw, int(min_calling_bin_width))
+    # Keep the calling lattice aligned to the analysis bins. Returning a
+    # nominal 1 Mb for groups of 19 kb bins shifts genomic coordinates.
+    return max(1, int(np.ceil(min_calling_bin_width / analysis_bw))) * analysis_bw
 
 
 def coarsen_cnv_track_values(
@@ -914,8 +916,15 @@ def coarsen_cnv_track_values(
     effective_bw = group_size * analysis_bin_width
     if effective_bw <= analysis_bin_width:
         return values
-    _, coarsened = downsample_cnv_for_plot(values, analysis_bin_width, effective_bw)
-    return coarsened
+    # Retain the final partial group; display downsampling trims it, but
+    # event calling must not silently discard chromosome-tip evidence.
+    starts = np.arange(0, values.size, group_size)
+    finite = np.isfinite(values)
+    if not starts.size:
+        return values.copy()
+    sums = np.add.reduceat(np.where(finite, values, 0.0), starts)
+    counts = np.add.reduceat(finite.astype(int), starts)
+    return np.divide(sums, counts, out=np.full(sums.shape, np.nan), where=counts > 0)
 
 
 def coarsen_cnv_track(

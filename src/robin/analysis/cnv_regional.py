@@ -12,6 +12,7 @@ import pandas as pd
 from robin import resources
 from robin.analysis.cnv_analysis import region_has_mappable_support
 from robin.analysis.cnv_classification import CNVEvent
+from robin.analysis.cnv_reporting import interval_statistics
 from robin.utils.sequencing_files import panel_bed_filename
 
 logger = logging.getLogger(__name__)
@@ -63,7 +64,10 @@ def load_panel_gene_bed(output_dir: str) -> tuple[str | None, pd.DataFrame]:
 
 def load_target_coverage_df(output_dir: str) -> pd.DataFrame:
     """Load per-target coverage for panel gene coverage overlays."""
-    path = os.path.join(output_dir, "target_coverage.csv")
+    # The live coverage table is written here by the current coverage worker.
+    path = os.path.join(output_dir, "bed_coverage_main.csv")
+    if not os.path.exists(path):
+        path = os.path.join(output_dir, "target_coverage.csv")
     empty = pd.DataFrame(
         columns=["chrom", "startpos", "endpos", "name", "length", "coverage", "bases"]
     )
@@ -142,8 +146,8 @@ def panel_genes_in_region(
 
     hits = panel_genes_df[
         (panel_genes_df["chrom"] == chrom)
-        & (panel_genes_df["start_pos"] <= end_pos)
-        & (panel_genes_df["end_pos"] >= start_pos)
+        & (panel_genes_df["start_pos"] < end_pos)
+        & (panel_genes_df["end_pos"] > start_pos)
     ]
     labels: list[str] = []
     seen: set[str] = set()
@@ -271,8 +275,6 @@ def analyze_cytoband_cnv(
     )
 
     centromere = centromere_bed[centromere_bed["chrom"] == chromosome]
-    cen_start = int(centromere["start_pos"].iloc[0]) if not centromere.empty else None
-    cen_end = int(centromere["end_pos"].iloc[0]) if not centromere.empty else None
 
     max_expected_cytobands = len(chromosome_cytobands)
     merged_cytobands = [None] * max_expected_cytobands
@@ -281,16 +283,15 @@ def analyze_cytoband_cnv(
 
     for _, cytoband in chromosome_cytobands.iterrows():
         start_bin = int(cytoband["start_pos"] / bin_width)
-        end_bin = int(cytoband["end_pos"] / bin_width)
+        end_bin = (int(cytoband["end_pos"]) + bin_width - 1) // bin_width - 1
         start_bin = max(0, start_bin)
         end_bin = min(chrom_arr.size - 1, end_bin)
 
         # Centromeric / satellite bands are not assessed (same as prior regional logic).
         band_overlaps_centromere = (
-            cen_start is not None
-            and cen_end is not None
-            and int(cytoband["start_pos"]) < cen_end
-            and int(cytoband["end_pos"]) > cen_start
+            not centromere.empty
+            and ((centromere["start_pos"] < int(cytoband["end_pos"]))
+                 & (centromere["end_pos"] > int(cytoband["start_pos"]))).any()
         )
 
         if band_overlaps_centromere:
@@ -299,15 +300,16 @@ def analyze_cytoband_cnv(
         elif start_bin < chrom_arr.size and end_bin >= start_bin:
             region_cnv = chrom_arr[start_bin : end_bin + 1]
             finite = region_cnv[np.isfinite(region_cnv)]
+            stats = interval_statistics(chrom_arr, bin_width, int(cytoband["start_pos"]), int(cytoband["end_pos"]))
             if finite.size == 0:
                 mean_cnv = float("nan")
                 state = "NO_DATA"
-            elif not region_has_mappable_support(region_cnv):
+            elif stats["usable_fraction"] < 0.4:
                 # Too few mappable bins (e.g. acrocentric p / seg-dup) — not assessable.
                 mean_cnv = float("nan")
                 state = "NO_DATA"
             else:
-                mean_cnv = float(np.mean(finite))
+                mean_cnv = stats["mean_log2"]
                 if mean_cnv >= cytoband_gain_threshold:
                     state = "GAIN"
                 elif mean_cnv <= cytoband_loss_threshold:
@@ -338,8 +340,8 @@ def analyze_cytoband_cnv(
             if current_group["cnv_state"] in SIGNIFICANT_CNV_STATES:
                 genes_in_region = gene_bed[
                     (gene_bed["chrom"] == current_group["chrom"])
-                    & (gene_bed["start_pos"] <= current_group["end_pos"])
-                    & (gene_bed["end_pos"] >= current_group["start_pos"])
+                    & (gene_bed["start_pos"] < current_group["end_pos"])
+                    & (gene_bed["end_pos"] > current_group["start_pos"])
                 ]["gene"].tolist()
                 current_group["genes"] = genes_in_region
 
@@ -350,7 +352,9 @@ def analyze_cytoband_cnv(
                 v for v in current_group["mean_cnv"] if np.isfinite(v)
             ]
             current_group["mean_cnv"] = (
-                float(np.mean(finite_means)) if finite_means else float("nan")
+                interval_statistics(chrom_arr, bin_width, int(current_group["start_pos"]),
+                                    int(current_group["end_pos"]))["mean_log2"]
+                if finite_means else float("nan")
             )
             current_group["length"] = (
                 current_group["end_pos"] - current_group["start_pos"]
@@ -376,8 +380,8 @@ def analyze_cytoband_cnv(
         if current_group["cnv_state"] in SIGNIFICANT_CNV_STATES:
             genes_in_region = gene_bed[
                 (gene_bed["chrom"] == current_group["chrom"])
-                & (gene_bed["start_pos"] <= current_group["end_pos"])
-                & (gene_bed["end_pos"] >= current_group["start_pos"])
+                & (gene_bed["start_pos"] < current_group["end_pos"])
+                & (gene_bed["end_pos"] > current_group["start_pos"])
             ]["gene"].tolist()
             current_group["genes"] = genes_in_region
 
@@ -386,7 +390,9 @@ def analyze_cytoband_cnv(
         )
         finite_means = [v for v in current_group["mean_cnv"] if np.isfinite(v)]
         current_group["mean_cnv"] = (
-            float(np.mean(finite_means)) if finite_means else float("nan")
+            interval_statistics(chrom_arr, bin_width, int(current_group["start_pos"]),
+                                int(current_group["end_pos"]))["mean_log2"]
+            if finite_means else float("nan")
         )
         current_group["length"] = (
             current_group["end_pos"] - current_group["start_pos"]

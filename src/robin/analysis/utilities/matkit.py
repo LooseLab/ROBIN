@@ -72,8 +72,37 @@ MIN_PRIMARY_QS = 12
 
 # Cache of opened reference FASTA by real path so the same ref is not re-indexed/re-opened per BAM.
 _ref_fasta_cache: dict[str, pysam.FastaFile] = {}
+# Sequence names per reference path. Alt contigs in the BAM are often absent here.
+_fasta_reference_names: dict[str, frozenset[str]] = {}
+# Contigs already reported as missing, so a BAM full of alt alignments logs once.
+_logged_missing_reference_sequences: set[str] = set()
 # Lazy per-chromosome sorted CpG anchor positions (forward-strand C of each CG dinucleotide).
 _cpg_anchor_index: dict[str, dict[str, list[int]]] = {}
+
+
+def _note_missing_reference_sequence(chrom: str) -> None:
+    """Log once when the reference FASTA has no contig the BAM is aligned to."""
+    if chrom in _logged_missing_reference_sequences:
+        return
+    _logged_missing_reference_sequences.add(chrom)
+    logging.warning(
+        "Reference FASTA has no sequence %r; skipping methylation sites on this contig",
+        chrom,
+    )
+
+
+def _fasta_has_sequence(
+    ref_fasta_path: str, ref_fasta_obj: pysam.FastaFile, chrom: str
+) -> bool:
+    """Return whether ``chrom`` is in this reference, logging the first miss."""
+    names = _fasta_reference_names.get(ref_fasta_path)
+    if names is None:
+        names = frozenset(ref_fasta_obj.references)
+        _fasta_reference_names[ref_fasta_path] = names
+    if chrom in names:
+        return True
+    _note_missing_reference_sequence(chrom)
+    return False
 
 
 def _primary_meets_min_qs(read) -> bool:
@@ -889,6 +918,11 @@ def cpg_cytosine_site(
             return refpos, PLUS_STRAND
         if refpos >= 1 and ref_fasta_obj.fetch(chrom, refpos - 1, refpos + 1).upper() == "CG":
             return refpos, MINUS_STRAND
+    except KeyError:
+        # pysam >= 0.23 raises KeyError when the contig is absent. Older pysam
+        # raised ValueError. Either way the site cannot be a reference CpG.
+        _note_missing_reference_sequence(chrom)
+        return None
     except ValueError:
         return None
     return None
@@ -922,6 +956,9 @@ def _read_ref_seq_window(
     fetch_end = max_r + 2
     try:
         seq = ref_fasta_obj.fetch(chrom, fetch_start, fetch_end).upper().encode("ascii")
+    except KeyError:
+        _note_missing_reference_sequence(chrom)
+        return None
     except ValueError:
         return None
     return seq, fetch_start
@@ -933,11 +970,18 @@ def _build_cpg_anchors_for_chrom(
     """Return sorted 0-based C coordinates for every reference CpG on ``chrom``."""
     try:
         chrom_len = ref_fasta_obj.get_reference_length(chrom)
-    except ValueError:
+    except (KeyError, ValueError):
+        _note_missing_reference_sequence(chrom)
         return []
     if chrom_len < 2:
         return []
-    seq = ref_fasta_obj.fetch(chrom, 0, chrom_len).upper().encode("ascii")
+    try:
+        seq = ref_fasta_obj.fetch(chrom, 0, chrom_len).upper().encode("ascii")
+    except KeyError:
+        _note_missing_reference_sequence(chrom)
+        return []
+    except ValueError:
+        return []
     anchors: list[int] = []
     start = 0
     while True:
@@ -1010,6 +1054,8 @@ def _cpg_by_anchor_from_read_coverage(
     CpG are covered matches scanning ``ref_map.values()`` in order.
     """
     if not ref_map:
+        return {}
+    if not _fasta_has_sequence(ref_fasta_path, ref_fasta_obj, chrom):
         return {}
 
     ref_values = ref_map.values()
