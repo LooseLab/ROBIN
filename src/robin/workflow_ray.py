@@ -4733,6 +4733,27 @@ class Coordinator:
                             pass
                     print("[SHUTDOWN] Processor actors shut down")
 
+            # Workers are stopped: reconcile gene calls from all stored evidence.
+            # Keep this separate from fusion finalization, which also touches SVs.
+            work_dir = getattr(self, "work_dir", None)
+            if work_dir:
+                from pathlib import Path
+
+                @ray.remote
+                def reconcile_fusion_sample(work_dir, sample_id):
+                    from robin.analysis.fusion_incremental import reconcile_gene_pair_calls
+                    reconcile_gene_pair_calls(work_dir, sample_id)
+
+                sample_ids = {
+                    path.parent.name
+                    for pattern in ("*/target_candidates_dataset", "*/genome_wide_candidates_dataset",
+                                    "*/*_target_candidates.parquet", "*/*_genome_wide_candidates.parquet",
+                                    "*/_fusion_staging")
+                    for path in Path(work_dir).glob(pattern)
+                }
+                for sample_id in sorted(sample_ids):
+                    await reconcile_fusion_sample.remote(str(work_dir), sample_id)
+
             print("[SHUTDOWN] Coordinator shutdown complete")
             return True
         except Exception as e:

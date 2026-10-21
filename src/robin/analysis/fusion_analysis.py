@@ -1045,6 +1045,10 @@ Examples:
             logger.error(f"Analysis failed: {result['error_message']}")
             sys.exit(1)
         
+        # The standalone invocation has finished ingesting this sample.
+        from robin.analysis.fusion_incremental import reconcile_gene_pair_calls
+        reconcile_gene_pair_calls(work_dir, sample_id)
+
         # Print summary
         print("\n" + "="*60)
         print("FUSION ANALYSIS COMPLETE")
