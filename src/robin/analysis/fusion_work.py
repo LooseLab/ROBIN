@@ -568,53 +568,8 @@ def _append_combined_gene_intersections(
 
 def _check_read_alignments_overlap_columnar(data: Dict[str, List[Any]]) -> bool:
     """Columnar version of overlap checks to avoid row dicts."""
-    reference_ids = data.get("reference_id", [])
-    if len(reference_ids) < 2:
-        return False
-
-    reference_starts = data["reference_start"]
-    reference_ends = data["reference_end"]
-    gene_names = data["col4"]
-
-    genomic_alignments: Dict[str, List[str]] = {}
-    for i in range(len(reference_ids)):
-        genomic_key = (
-            f"{reference_ids[i]}:{reference_starts[i]}-{reference_ends[i]}"
-        )
-        genomic_alignments.setdefault(genomic_key, []).append(gene_names[i])
-
-    for genes in genomic_alignments.values():
-        if len(genes) > 1 and len(set(genes)) > 1:
-            return True
-
-    if get_fusion_rule("coordinate_similarity_filter"):
-        max_diff = get_fusion_threshold("coordinate_similarity")
-        alignments_by_chrom: Dict[str, List[int]] = defaultdict(list)
-        for i, chrom in enumerate(reference_ids):
-            alignments_by_chrom[chrom].append(i)
-
-        for chrom, chrom_indices in alignments_by_chrom.items():
-            if len(chrom_indices) < 2:
-                continue
-            for i in range(len(chrom_indices)):
-                for j in range(i + 1, len(chrom_indices)):
-                    idx1 = chrom_indices[i]
-                    idx2 = chrom_indices[j]
-                    if are_coordinates_similar(
-                        reference_starts[idx1],
-                        reference_ends[idx1],
-                        reference_starts[idx2],
-                        reference_ends[idx2],
-                        max_diff,
-                    ):
-                        logger.debug(
-                            "Filtering similar alignments: "
-                            f"{reference_ids[idx1]}:{reference_starts[idx1]}-{reference_ends[idx1]} vs "
-                            f"{reference_ids[idx2]}:{reference_starts[idx2]}-{reference_ends[idx2]}"
-                        )
-                        return True
-
-    return False
+    rows = [dict(zip(data, values)) for values in zip(*data.values())]
+    return _check_read_alignments_overlap(rows)
 
 
 # =============================================================================
@@ -980,7 +935,8 @@ def _check_read_alignments_overlap(read_rows: List[Dict]) -> bool:
     """
     Check for false positives in read alignments:
     - Same genomic alignment annotated with multiple genes (overlapping gene regions)
-    - Very similar (but not identical) alignments that are likely mapping artifacts
+    - Very similar alignments assigned to different genes
+    Same-gene copies are retained once by _canonicalize_gene_alignment_rows.
     
     Args:
         read_rows: List of alignment dictionaries for the same read
@@ -1031,6 +987,8 @@ def _check_read_alignments_overlap(read_rows: List[Dict]) -> bool:
                     _, row1 = chrom_alignments[i]
                     _, row2 = chrom_alignments[j]
                     
+                    if row1['col4'] == row2['col4']:
+                        continue  # Redundant same-gene alignments are collapsed separately.
                     if are_coordinates_similar(
                         row1['reference_start'], row1['reference_end'],
                         row2['reference_start'], row2['reference_end'],
@@ -1046,7 +1004,11 @@ def _check_read_alignments_overlap(read_rows: List[Dict]) -> bool:
 def _canonicalize_gene_alignment_rows(
     rows: List[Dict[str, Any]],
 ) -> List[Dict[str, Any]]:
-    """Collapse BAM and SA-tag representations of the same gene alignment."""
+    """Collapse exact copies and near-identical same-gene alignments, across strands.
+
+    Prefer BAM records, then primary status, MAPQ and span. Compare against retained
+    representatives only so chains of nearby alignments cannot merge distant ends.
+    """
     unique: Dict[Tuple[Any, ...], Dict[str, Any]] = {}
     for row in rows:
         key = (
@@ -1064,8 +1026,32 @@ def _canonicalize_gene_alignment_rows(
         ):
             unique[key] = row
 
+    candidates = list(unique.values())
+    # Preserve rejection of competing gene annotations before collapsing copies.
+    if get_fusion_rule("coordinate_similarity_filter") and not _check_read_alignments_overlap(candidates):
+        max_diff = get_fusion_threshold("coordinate_similarity")
+        candidates.sort(key=lambda row: (
+            bool(row.get("_from_sa_tag", False)),
+            bool(row.get("is_supplementary", False)),
+            -row.get("mapping_quality", 0),
+            -row.get("mapping_span", 0),
+            row["reference_id"], row["reference_start"], row["reference_end"], row["strand"],
+        ))
+        retained = defaultdict(list)
+        representatives = []
+        for row in candidates:
+            key = (row["read_id"], row["col4"], row["reference_id"])
+            if any(are_coordinates_similar(
+                row["reference_start"], row["reference_end"],
+                other["reference_start"], other["reference_end"], max_diff,
+            ) for other in retained[key]):
+                continue
+            retained[key].append(row)
+            representatives.append(row)
+        candidates = representatives
+
     result = []
-    for row in unique.values():
+    for row in candidates:
         row.pop("_from_sa_tag", None)
         result.append(row)
     return result
@@ -1330,8 +1316,10 @@ def _process_reads_for_fusions(
     filtered_data = _create_fusion_columnar()
     for read_id, alignments in read_alignments.items():
         if not _check_read_alignments_overlap_columnar(alignments):
-            for column in _FUSION_COLUMNS:
-                filtered_data[column].extend(alignments[column])
+            rows = [dict(zip(alignments, values)) for values in zip(*alignments.values())]
+            for row in _canonicalize_gene_alignment_rows(rows):
+                for column in _FUSION_COLUMNS:
+                    filtered_data[column].append(row[column])
 
     if not filtered_data["reference_id"]:
         return None

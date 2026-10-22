@@ -3277,7 +3277,7 @@ class Coordinator:
                     for ref in ready_refs:
                         sample_id = task_ref_to_sample_id.get(ref, "unknown")
                         try:
-                            result = await asyncio.to_thread(ray.get, ref)
+                            result = await ref
                             completed += 1
 
                             if isinstance(result, Exception):

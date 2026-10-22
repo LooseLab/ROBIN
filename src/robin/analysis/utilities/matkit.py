@@ -950,8 +950,7 @@ def _read_ref_seq_window(
     """Fetch one reference slice covering all aligned positions on a read."""
     if not ref_map:
         return None
-    min_r = min(ref_map.values())
-    max_r = max(ref_map.values())
+    min_r, max_r = _reference_map_bounds(ref_map)
     fetch_start = max(0, min_r - 1)
     fetch_end = max_r + 2
     try:
@@ -1058,16 +1057,15 @@ def _cpg_by_anchor_from_read_coverage(
     if not _fasta_has_sequence(ref_fasta_path, ref_fasta_obj, chrom):
         return {}
 
-    ref_values = ref_map.values()
-    min_r = min(ref_values)
-    max_r = max(ref_map.values())
-    # One mapping supplies both membership and the original aligned-position
-    # order. The previous implementation materialised a list, a set, and a
-    # second dictionary for every read.
-    position_order: dict[int, int] = {}
-    for idx, refpos in enumerate(ref_values):
-        if refpos not in position_order:
-            position_order[refpos] = idx
+    min_r, max_r = _reference_map_bounds(ref_map)
+    if isinstance(ref_map, _CigarPositionMap):
+        position_order_get = ref_map.reference_order
+    else:
+        # Compatibility for direct callers and the full-map equivalence oracle.
+        position_order = {}
+        for idx, refpos in enumerate(ref_map.values()):
+            position_order.setdefault(refpos, idx)
+        position_order_get = position_order.get
 
     panel_candidates = None
     if panel_index is not None:
@@ -1102,14 +1100,14 @@ def _cpg_by_anchor_from_read_coverage(
             if seq[seq_i : seq_i + 2] != _REF_CG:
                 continue
         visits: list[tuple[int, str]] = []
-        if anchor in position_order:
+        if position_order_get(anchor) is not None:
             visits.append((anchor, PLUS_STRAND))
-        if anchor + 1 in position_order:
+        if position_order_get(anchor + 1) is not None:
             visits.append((anchor + 1, MINUS_STRAND))
         if not visits:
             continue
         if len(visits) > 1:
-            visits.sort(key=lambda item: position_order[item[0]])
+            visits.sort(key=lambda item: position_order_get(item[0]))
         chosen = visits[0]
         for refpos_c, strand in visits[1:]:
             if (refpos_c, strand) in read_sites and chosen not in read_sites:
@@ -1425,6 +1423,93 @@ def sort_bams(files_and_timestamps, watchfolder, file_endings, simtime):
     return files_and_timestamps
 
 
+class _CigarPositionMap:
+    """Sparse query/reference lookup over matched CIGAR blocks.
+
+    Query offsets follow pysam's stored-sequence coordinates on both strands.
+    Insertions and soft clips consume query bases; deletions/skips consume
+    reference bases; hard clips consume neither stored query nor reference.
+    Storage is proportional to CIGAR blocks, never aligned read length.
+    """
+
+    def __init__(self, read):
+        blocks = []
+        query = 0
+        reference = read.reference_start
+        rank = 0
+        for op, length in read.cigartuples or ():
+            if op in (0, 7, 8):  # M, =, X: same semantics as matches_only=True
+                blocks.append((query, reference, length, rank))
+                query += length
+                reference += length
+                rank += length
+            elif op in (1, 4):  # I, S
+                query += length
+            elif op in (2, 3):  # D, N
+                reference += length
+            elif op != 5:  # H; unusual/padded CIGARs use the legacy lookup
+                raise ValueError("Unsupported CIGAR operation")
+        self.blocks = blocks
+        self.query_starts = [block[0] for block in blocks]
+        self.reference_starts = [block[1] for block in blocks]
+        self.bounds = (
+            (blocks[0][1], blocks[-1][1] + blocks[-1][2] - 1) if blocks else None
+        )
+
+    def __bool__(self):
+        return bool(self.blocks)
+
+    def get(self, query_position, default=None):
+        idx = bisect.bisect_right(self.query_starts, query_position) - 1
+        if idx >= 0:
+            query, reference, length, _ = self.blocks[idx]
+            offset = query_position - query
+            if offset < length:
+                return reference + offset
+        return default
+
+    def reference_order(self, reference_position):
+        """Rank among matched bases, or None for a deletion/reference skip."""
+        idx = bisect.bisect_right(self.reference_starts, reference_position) - 1
+        if idx >= 0:
+            _, reference, length, rank = self.blocks[idx]
+            offset = reference_position - reference
+            if offset < length:
+                return rank + offset
+        return None
+
+
+def _targeted_read_to_ref_positions(read):
+    try:
+        return _CigarPositionMap(read)
+    except ValueError:
+        # Preserve pysam behaviour for rare CIGAR operations such as padding.
+        return map_read_to_ref_positions(read)
+
+
+def _reference_map_bounds(ref_map):
+    if isinstance(ref_map, _CigarPositionMap):
+        return ref_map.bounds
+    return (min(ref_map.values()), max(ref_map.values())) if ref_map else None
+
+
+def _read_may_hit_panel(read, chrom, panel_index, cpg_only, combine_strands):
+    """Reject using the classifier methylation index, never adaptive targets.
+
+    This is the existing parquet_filter.txt index passed by bed_conversion.
+    Duck-typed indexes without range lookup retain the unfiltered read path.
+    """
+    if panel_index is None or not hasattr(panel_index, "overlaps"):
+        return True
+    start, end = read.reference_start, read.reference_end
+    if end is None:
+        return True
+    # A read covering only the G of a CpG can emit its upstream C anchor when
+    # strands are combined. Never reject that boundary case.
+    start -= int(cpg_only and combine_strands)
+    return panel_index.overlaps(chrom, start, end)
+
+
 def map_read_to_ref_positions(read):
     """
     Map read positions to reference positions for aligned bases.
@@ -1736,6 +1821,10 @@ def process_bam_counts_improved(
                 primary_qs_excluded.add(read.query_name)
                 continue
 
+        chrom = ref_names[read.reference_id]
+        if not _read_may_hit_panel(read, chrom, panel_index, cpg_only, combine_strands):
+            continue
+
         try:
             # Extract modification data from MM/ML tags
             mods = read.modified_bases or {}
@@ -1748,8 +1837,7 @@ def process_bam_counts_improved(
         if not mods and not implicit_canonical_cpg:
             continue
 
-        chrom = ref_names[read.reference_id]
-        ref_map = map_read_to_ref_positions(read)
+        ref_map = _targeted_read_to_ref_positions(read)
 
         if combine_mods:
             ## This is what we use.

@@ -51,6 +51,15 @@ class PanelIntervalIndex:
         # interval for non-panel positions.
         return idx >= 0 and bool(prefix_max_ends[idx] > pos)
 
+    def overlaps(self, chrom: str, start: int, end: int) -> bool:
+        """Whether any panel interval overlaps the half-open reference span."""
+        intervals = self.intervals_by_chrom.get(chrom)
+        if intervals is None or end <= start:
+            return False
+        starts, _, prefix_max_ends = intervals
+        idx = int(np.searchsorted(starts, end, side="left")) - 1
+        return idx >= 0 and bool(prefix_max_ends[idx] > start)
+
     def cpg_candidates(self, chrom: str, start: int, end: int) -> Optional[np.ndarray]:
         """Return candidate CpG anchors in ``[start, end)`` for this panel.
 
