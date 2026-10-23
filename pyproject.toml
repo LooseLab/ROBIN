@@ -125,6 +125,7 @@ dev = [
 
 [project.scripts]
 robin = "robin.cli:main"
+robin-sv-replay = "robin.sv_replay.replay:main"
 
 [project.urls]
 Homepage = "https://github.com/yourusername/robin"

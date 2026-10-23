@@ -60,6 +60,7 @@ DEFAULT_STAGES: Dict[str, Stage] = {
     "target": Stage("target", 5),
     "fusion": Stage("fusion", 6),
     "itd": Stage("itd", 17),
+    "sv": Stage("sv", 18),
     "sturgeon": Stage("sturgeon", 7),
     "nanodx": Stage("nanodx", 8),
     "pannanodx": Stage("pannanodx", 9),

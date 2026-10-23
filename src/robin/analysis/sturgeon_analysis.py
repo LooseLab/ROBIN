@@ -585,6 +585,7 @@ def sturgeon_bam_background_work(parquet_path, output_path, probes_file, current
     except Exception as e:
         print(f"Error in process_bam (sturgeon): {e}")
         logger.error(f"Error in process_bam (sturgeon): {e}")
+        raise
     finally:
         # Comprehensive cleanup of all large DataFrames and variables
         if merged_modkit_df is not None:

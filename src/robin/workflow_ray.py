@@ -187,6 +187,8 @@ except Exception:
     _snp_analysis_handler = None
     _target_bam_finalize_handler = None
 
+from robin.analysis.sv_analysis import sv_handler as _sv_handler
+
 try:
     from robin.analysis.fusion_analysis import fusion_handler as _fusion_handler
 except Exception as exc:
@@ -500,6 +502,7 @@ QUEUE_TO_TYPES: Dict[str, Set[str]] = {
     "cnv": {"cnv"},
     "target": {"target"},
     "fusion": {"fusion"},
+    "sv": {"sv"},
     "itd": {"itd"},
     "classification": {"sturgeon", "nanodx", "pannanodx"},
     "slow": {"random_forest", "marlin", "lamprey", "tucan", "igv_bam", "snp_analysis", "target_bam_finalize"},
@@ -507,7 +510,7 @@ QUEUE_TO_TYPES: Dict[str, Set[str]] = {
 
 TRIGGERS: Dict[str, List[str]] = {
     # preprocessing -> analyses
-    "preprocessing": ["bed_conversion", "mgmt", "cnv", "target", "fusion", "itd"],
+    "preprocessing": ["bed_conversion", "mgmt", "cnv", "target", "fusion", "itd", "sv"],
     # bed_conversion -> classifiers
     "bed_conversion": ["sturgeon", "nanodx", "pannanodx", "random_forest", "marlin", "lamprey", "tucan"],
     # Build IGV-ready BAM after target analysis
@@ -585,6 +588,7 @@ _LAMPREY_MEMORY = 8 * _GB
 _TUCAN_MEMORY = 4 * _GB
 RESOURCE_HINTS: Dict[str, Dict[str, Any]] = {
     # Tune these to your cluster
+    "sv": {"num_cpus": 1, "memory": _DEFAULT_MEMORY},
     "preprocessing": {"num_cpus": 1, "memory": _DEFAULT_MEMORY},
     "bed_conversion": {"num_cpus": 1, "memory": _DEFAULT_MEMORY},
     "mgmt": {"num_cpus": 1, "memory": _DEFAULT_MEMORY},
@@ -944,6 +948,7 @@ def _clone_workflow_context(
 
 NEEDS_WORK_DIR: Set[str] = {
     "bed_conversion",
+    "sv",
     "mgmt",
     "cnv",
     "target",
@@ -1254,6 +1259,7 @@ bed_conversion_handler_remote = ray.remote(
 mgmt_handler_remote = ray.remote(_wrap_real_handler(_mgmt_handler, "mgmt"))
 cnv_handler_remote = ray.remote(_wrap_real_handler(_cnv_handler, "cnv"))
 target_handler_remote = ray.remote(_wrap_real_handler(_target_handler, "target"))
+sv_handler_remote = ray.remote(_wrap_real_handler(_sv_handler, "sv"))
 fusion_handler_remote = ray.remote(_wrap_real_handler(_fusion_handler, "fusion"))
 itd_handler_remote = ray.remote(_wrap_real_handler(_itd_handler, "itd"))
 sturgeon_handler_remote = ray.remote(_wrap_real_handler(_sturgeon_handler, "sturgeon"))
@@ -1961,6 +1967,7 @@ class Coordinator:
             ("cnv", cnv_handler_remote),
             ("target", target_handler_remote),
             ("fusion", fusion_handler_remote),
+            ("sv", sv_handler_remote),
             ("itd", itd_handler_remote),
             ("sturgeon", sturgeon_handler_remote),
             ("nanodx", nanodx_handler_remote),
@@ -2026,6 +2033,7 @@ class Coordinator:
                     "target",
                     "fusion",
                     "itd",
+                    "sv",
                 ],  # Lightweight analysis types share a CPU
                 "classif": [
                     "sturgeon",

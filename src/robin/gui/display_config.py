@@ -74,6 +74,8 @@ DISPLAY_SECTIONS: Dict[str, DisplaySection] = {
         workflow_step="target",
         surfaces=frozenset({"sample_page", "sample_details", "report"}),
     ),
+    "sv": DisplaySection("sv", "Structural variants", "analysis", workflow_step="sv",
+                         surfaces=frozenset({"sample_page"})),
     "cnv": DisplaySection("cnv", "CNV", "analysis", workflow_step="cnv"),
     "mgmt": DisplaySection("mgmt", "MGMT", "analysis", workflow_step="mgmt"),
     "fusion": DisplaySection(

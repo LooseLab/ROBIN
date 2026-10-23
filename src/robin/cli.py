@@ -101,6 +101,7 @@ from robin.utils.sequencing_files import (
     panel_source_filename,
 )
 from robin.workflow_config import merge_workflow_params
+from robin.analysis.sv_analysis import sv_handler
 
 
 def _download_missing_models(missing_files, models_dir):
@@ -263,6 +264,7 @@ VALID_JOB_TYPES = {
     "cnv",
     "target",
     "fusion",
+    "sv",
     "itd",
     "sturgeon",
     "nanodx",
@@ -284,6 +286,7 @@ QUEUE_MAPPING = {
     "cnv": "cnv",
     "target": "target",
     "fusion": "fusion",
+    "sv": "sv",
     "itd": "fusion",
     "sturgeon": "classification",
     "nanodx": "classification",
@@ -347,6 +350,7 @@ HANDLER_CONFIGS = [
     ("cnv", "cnv", cnv_handler, "analysis", True),
     ("target", "target", target_handler, "analysis", True),
     ("fusion", "fusion", fusion_handler, "analysis", True),
+    ("sv", "sv", sv_handler, "analysis", True),
     ("fusion", "itd", itd_handler, "analysis", True),
     ("classification", "sturgeon", sturgeon_handler, None, True),
     ("classification", "nanodx", nanodx_handler, None, True),

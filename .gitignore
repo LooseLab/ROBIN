@@ -180,3 +180,20 @@ src/robin/models/Capper_et_al_NN_v2.pkl
 src/robin/models/pancan_devel_v5i_NN_v2.pkl
 src/robin/resources/clinvar.vcf.gz
 src/robin/resources/clinvar.vcf.gz.tbi 
+
+# Local replay data, GUI sessions, sequencing inputs and account databases
+/replay_runs/
+/results/
+/.nicegui/
+*.bam
+*.bai
+*.cram
+*.crai
+*.fastq
+*.fastq.gz
+*.fq
+*.fq.gz
+*.sqlite
+*.sqlite-*
+security.db
+security.db-*

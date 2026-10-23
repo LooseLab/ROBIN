@@ -6063,6 +6063,18 @@ class GUILauncher:
                                             except Exception:
                                                 pass
 
+                                    # Experimental SV checkpoint viewer
+                                    if is_section_visible(
+                                        "sv", workflow_steps=workflow_steps,
+                                        display_config=display_config, viewer_role=viewer_role,
+                                    ):
+                                        try:
+                                            from robin.gui.components.sv import add_sv_section
+                                            add_sv_section(self, sample_dir)
+                                        except Exception:
+                                            logging.exception("[GUI] Structural variants section failed")
+                                            ui.label("Structural variants viewer could not be loaded.")
+
                                     # Fusion section + BED coverage
                                     if is_section_visible(
                                         "fusion",

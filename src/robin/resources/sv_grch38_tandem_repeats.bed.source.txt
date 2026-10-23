@@ -1,0 +1,7 @@
+Source: https://github.com/KolmogorovLab/Severus
+Commit: 7301b90b69b8da2061d3985d8b3428008b352a54
+File: vntrs/human_GRCh38_no_alt_analysis_set.trf.bed
+Assembly: GRCh38 no-alt analysis set
+Use: tandem-repeat context for SV evidence, not comprehensive repeat masking
+SHA-256: 729cbb38bff84534070033db1ae004b6368f6856eef12dd7ce93e8ee55f37407
+Upstream repository license: BSD-3-Clause; see accompanying .LICENSE.txt

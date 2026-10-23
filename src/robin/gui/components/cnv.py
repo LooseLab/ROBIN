@@ -1271,19 +1271,19 @@ def _cnv_load_binary_payload(
         try:
             out["cnv"] = np.load(cnv_npy, allow_pickle=True).item()
         except Exception:
-            out["cnv"] = None
+            out["retry_cnv"] = True
 
     if cnv2_npy_changed and cnv2_npy.exists():
         try:
             out["cnv2"] = np.load(cnv2_npy, allow_pickle=True).item()
         except Exception:
-            out["cnv2"] = None
+            out["retry_cnv2"] = True
 
     if cnv3_npy_changed and cnv3_npy.exists():
         try:
             out["cnv3"] = np.load(cnv3_npy, allow_pickle=True).item()
         except Exception:
-            out["cnv3"] = None
+            out["retry_cnv3"] = True
 
     if data_array_reload and data_array_npy.exists():
         try:
@@ -3777,10 +3777,20 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
         state["last_visit_time"] = state.get("last_visit_time", time.time())
         state["cnv_plot_theme_dark"] = _is_dark_mode()
 
+        for track in ("cnv", "cnv2", "cnv3"):
+            if payload.get("retry_"+track):state.pop(track+"_m",None)
         launcher._cnv_state[key] = state
         _update_breakpoints_visibility()
 
+    refresh_inflight=False
+    refresh_pending=False
+
     async def _refresh_cnv_async() -> None:
+        nonlocal refresh_inflight,refresh_pending
+        if refresh_inflight:
+            refresh_pending=True
+            return
+        refresh_inflight=True
         try:
             plan = _prepare_cnv_refresh()
             if plan is None:
@@ -3800,7 +3810,12 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
                 payload = {}
             _apply_cnv_refresh_after_load(plan, payload)
         except Exception:
-            pass
+            logging.exception("CNV refresh failed; preserving cached data")
+        finally:
+            refresh_inflight=False
+            if refresh_pending:
+                refresh_pending=False
+                asyncio.create_task(_refresh_cnv_async())
 
     def _refresh_cnv_sync(sample_dir: Path, launcher: Any) -> None:
         """Synchronous CNV refresh (no event loop)."""
@@ -4063,6 +4078,81 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
         except Exception:
             pass
         launcher._cnv_state.setdefault(key, {})["cnv_plot_theme_dark"] = dark
+
+    # Register on this browser client, never on the shared launcher.
+    from .sv_cnv import boundary_series
+    highlight_client=ui.context.client
+    if not hasattr(highlight_client, '_sv_cnv_highlighters'):
+        highlight_client._sv_cnv_highlighters={}
+
+    def highlight_sv(row):
+        state=launcher._cnv_state.setdefault(str(sample_dir), {})
+        cnv_map=_unwrap_cnv_track_map(state.get('cnv'))
+        if not cnv_map:
+            ui.notify('CNV data is not available yet',type='info')
+            return
+        selected=row['c1'] if row['c1']==row['c2'] else 'All'
+        if selected!='All' and (selected not in cnv_map or not _cnv_contig_ok(selected)):
+            ui.notify('SV chromosome is not available in the CNV profile',type='info')
+            return
+        state['selected_chrom']=selected
+        cnv_chrom_select.set_options({'All':'All',**{c:c for c in cnv_map if _cnv_contig_ok(c)}})
+        cnv_chrom_select.value=selected
+        state['_force_chrom_refresh']=True
+        _render_cnv_from_state(state)
+        overlay=boundary_series(dict(row,bin_width=int(state.get('cnv_dict',{}).get('bin_width',1000000))),cnv_map,selected)
+        bands=[[area[0]['xAxis'],area[1]['xAxis']] for area in overlay['markArea']['data']]
+        for chart in genome_charts:
+            _cnv_reset_genome_x_data_zoom(chart)
+            _cnv_echart_push_update(chart)
+            # This DOM overlay never calls ECharts setOption during animation.
+            ui.run_javascript("""(() => {
+                const component=getElement(CHART_ID);
+                if (!component) return;
+                const token={}; component._svFadeToken=token;
+                const root=component.$el;
+                root?.querySelectorAll('.robin-sv-band').forEach(e=>e.remove());
+                const bands=BANDS;
+                const midpointLine=MIDPOINT_LINE;
+                let attempts=0;
+                const draw=()=>{
+                    if (component._svFadeToken!==token) return;
+                    const chart=component.chart;
+                    if (!chart || chart.isDisposed() || chart.getWidth()<10 || chart.getHeight()<10) {
+                        if (++attempts<40) setTimeout(draw,50); return;
+                    }
+                    chart.resize();
+                    const rect=chart.getModel().getComponent('grid',0)?.coordinateSystem?.getRect();
+                    if (!rect) {if (++attempts<40) setTimeout(draw,50);return;}
+                    const dom=chart.getDom();
+                    if (getComputedStyle(dom).position==='static') dom.style.position='relative';
+                    const nodes=[];
+                    for (const [start,end] of bands) {
+                        const a=chart.convertToPixel({xAxisIndex:0},start);
+                        const b=chart.convertToPixel({xAxisIndex:0},end);
+                        if (!Number.isFinite(a)||!Number.isFinite(b)) continue;
+                        const left=Math.max(rect.x,Math.min(a,b));
+                        const right=Math.min(rect.x+rect.width,Math.max(a,b));
+                        if (right<left) continue;
+                        const band=document.createElement('div');
+                        band.className='robin-sv-band';
+                        Object.assign(band.style,{position:'absolute',pointerEvents:'none',
+                            left:(midpointLine?left-1.5:left)+'px',top:rect.y+'px',width:(midpointLine?3:Math.max(2,right-left))+'px',
+                            height:rect.height+'px',background:'#8b5cf6',opacity:midpointLine?'0.8':'0.22',
+                            zIndex:'5',border:'none',transition:'opacity 1500ms ease-out'});
+                        dom.appendChild(band);nodes.push(band);
+                    }
+                    setTimeout(()=>{
+                        if (component._svFadeToken!==token) return;
+                        nodes.forEach(e=>e.style.opacity='0');
+                    },1500);
+                    setTimeout(()=>nodes.forEach(e=>e.remove()),3000);
+                };
+                requestAnimationFrame(()=>requestAnimationFrame(draw));
+            })()""".replace('CHART_ID',str(chart.id)).replace('BANDS',json.dumps(bands)).replace('MIDPOINT_LINE',json.dumps(overlay['midpoint_line'])))
+        ui.run_javascript("document.getElementById('analysis-detail-cnv')?.scrollIntoView({behavior:'smooth',block:'start'})")
+
+    highlight_client._sv_cnv_highlighters[str(sample_dir)]=highlight_sv
 
     # Start the refresh timer (every 30 seconds)
     refresh_timer = client_timer(30.0, _refresh_cnv, active=True, immediate=False)

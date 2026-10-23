@@ -116,7 +116,9 @@ def test_coarsen_cnv_track_values_averages_to_one_megabase() -> None:
 
 def test_prepare_cnv_calling_track_coarsens_log2_track() -> None:
     cnv = {"chr1": np.full(20, 3.0)}
-    track, calling_bw = prepare_cnv_calling_track(cnv, 100_000, "Male")
+    track, calling_bw, analysis_track = prepare_cnv_calling_track(cnv, 100_000, "Male")
+    assert len(analysis_track["chr1"]) == 20
+    np.testing.assert_allclose(analysis_track["chr1"], np.log2(1.5), rtol=1e-6)
     assert calling_bw == CNV_CALLING_MIN_BIN_WIDTH
     assert len(track["chr1"]) == 2
     np.testing.assert_allclose(track["chr1"], np.log2(1.5), rtol=1e-6)
