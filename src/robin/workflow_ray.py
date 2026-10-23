@@ -45,7 +45,7 @@ import pickle
 import uuid
 import asyncio
 import argparse
-from collections import deque
+from collections import deque, defaultdict
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Set, Tuple, Callable
 import inspect
@@ -2379,6 +2379,65 @@ class Coordinator:
             queue_name
         ):
             await asyncio.sleep(0.05)
+
+    def _input_backlog(self) -> Tuple[int, int]:
+        """Count admitted work once, including batcher and coordinator waiting lists."""
+        counts = defaultdict(int)
+        for info in self.active.values():
+            counts[info["job_type"]] += int(info.get("work_count", 1))
+        for entries in self.waiting_by_type_global.values():
+            for entry in entries:
+                counts[self._entry_job_type(entry)] += self._entry_work_count(entry)
+        for entries in self.waiting_by_queue.values():
+            for entry in entries:
+                counts[self._entry_job_type(entry)] += self._entry_work_count(entry)
+        for entry in self.waiting_global:
+            counts[self._entry_job_type(entry)] += self._entry_work_count(entry)
+        for (kind, _sid), jobs in self.waiting_by_type_sample.items():
+            counts[kind] += sum(_job_work_count(job) for job in jobs)
+        _, batched = self._batcher_waiting_counts()
+        for kind, count in batched.items():
+            counts[kind] += count
+        for kind, jobs in self.classif_waiting_by_type.items():
+            counts[kind] += sum(_job_work_count(job) for job in jobs.values())
+        return counts["preprocessing"], sum(
+            count for kind, count in counts.items() if kind != "preprocessing"
+        )
+
+    async def submit_input_jobs(self, jobs: List[Job]) -> bool:
+        """Admit external input only; downstream submit_jobs never uses this gate.
+
+        Hysteresis prevents repeated stop/start near the downstream high watermark.
+        Admission checks do not wait inside the coordinator: callers retry outside it.
+        """
+        if self._shutdown_requested:
+            raise RuntimeError("Workflow is shutting down; input admission stopped")
+
+        def setting(name, default):
+            try:
+                return max(1, int(os.environ.get(name, default)))
+            except ValueError:
+                return default
+
+        high = setting("ROBIN_INPUT_DOWNSTREAM_HIGH", 2048)
+        low = min(high - 1, setting("ROBIN_INPUT_DOWNSTREAM_LOW", 1024))
+        limit = setting("ROBIN_INPUT_PREPROCESSING_LIMIT", 512)
+        prep, downstream = self._input_backlog()
+        paused = getattr(self, "_input_admission_paused", False)
+        if downstream >= high:
+            paused = True
+        elif downstream <= low:
+            paused = False
+        if paused != getattr(self, "_input_admission_paused", False):
+            logging.getLogger("robin.workflow").info(
+                "Input admission %s: downstream=%d (pause=%d, resume=%d)",
+                "paused" if paused else "resumed", downstream, high, low,
+            )
+        self._input_admission_paused = paused
+        if paused or prep >= limit or not await self.can_accept_jobs(len(jobs)):
+            return False
+        await self.submit_jobs(jobs)
+        return True
 
     async def can_accept_jobs(self, n: int = 1) -> bool:
         try:
@@ -5229,23 +5288,15 @@ async def submit_existing_paths(
                 batch += jobs
                 if len(batch) >= 256:
                     while True:
-                        try:
-                            can_accept = await coord.can_accept_jobs.remote(len(batch))
-                        except Exception:
-                            can_accept = True
+                        can_accept = await coord.submit_input_jobs.remote(batch)
                         if can_accept:
-                            await coord.submit_jobs.remote(batch)
                             break
                         await asyncio.sleep(0.2)
                     batch = []
             if batch:
                 while True:
-                    try:
-                        can_accept = await coord.can_accept_jobs.remote(len(batch))
-                    except Exception:
-                        can_accept = True
+                    can_accept = await coord.submit_input_jobs.remote(batch)
                     if can_accept:
-                        await coord.submit_jobs.remote(batch)
                         break
                     await asyncio.sleep(0.2)
     if seed_jobs:
@@ -5254,12 +5305,8 @@ async def submit_existing_paths(
         for i in range(0, len(seed_jobs), BATCH):
             chunk = seed_jobs[i : i + BATCH]
             while True:
-                try:
-                    can_accept = await coord.can_accept_jobs.remote(len(chunk))
-                except Exception:
-                    can_accept = True
+                can_accept = await coord.submit_input_jobs.remote(chunk)
                 if can_accept:
-                    await coord.submit_jobs.remote(chunk)
                     break
                 await asyncio.sleep(0.2)
 
@@ -5613,14 +5660,16 @@ class RayFileWatcher(FileSystemEventHandler):
                 or (now - self._last_flush) >= self._flush_interval_s
             ):
                 batch = self._pending_jobs[: self._batch_size]
-                del self._pending_jobs[: self._batch_size]
-                try:
-                    ray.get(self.coord.submit_jobs.remote(batch))
-                except Exception:
-                    pass
-                self._last_flush = now
+                # Keep ownership until admitted. Blocking this producer applies
+                # backpressure to live events without occupying coordinator slots.
+                while not ray.get(self.coord.submit_input_jobs.remote(batch)):
+                    time.sleep(0.2)
+                del self._pending_jobs[:len(batch)]
+                self._last_flush = time.time()
         except Exception:
-            pass
+            logging.getLogger("robin.workflow").exception(
+                "Input submission failed; retaining pending watcher jobs for retry"
+            )
 
     def _handle(self, fp: str):
         if fp in self.processed:
@@ -5686,7 +5735,10 @@ class RayFileWatcher(FileSystemEventHandler):
     # Ensure remaining jobs are flushed on shutdown
     def flush_remaining(self):
         while self._pending_jobs:
+            before = len(self._pending_jobs)
             self._flush_if_needed(force=True)
+            if len(self._pending_jobs) == before:
+                raise RuntimeError("Watcher input flush failed; pending jobs retained")
 
 
 # Global coordinator reference for external access
