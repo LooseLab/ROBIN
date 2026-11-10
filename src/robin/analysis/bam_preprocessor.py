@@ -676,6 +676,7 @@ def process_bam_reads(
             }
 
             # Initialize counters as local integers for faster hot-loop updates
+            primary_read_count = 0
             mapped_reads = 0
             unmapped_reads = 0
             yield_tracking = 0
@@ -755,7 +756,11 @@ def process_bam_reads(
                 if has_supplementary_alignments:
                     reads_with_supplementary.add(query_name)
 
-                if not is_secondary:  # Only process primary alignments
+                if not is_secondary:  # Primary, supplementary and unmapped records
+                    if not is_supplementary:
+                        # One record per read (its primary alignment or its
+                        # unmapped record), the unit MinKNOW uses for reads per file.
+                        primary_read_count += 1
                     if not is_unmapped:
                         mapped_reads += 1
                         mapped_bases += read_length
@@ -821,6 +826,7 @@ def process_bam_reads(
             # Step 5: Finalize data
             # Build counters dict once
             counters = {
+                "primary_read_count": primary_read_count,
                 "mapped_reads": mapped_reads,
                 "unmapped_reads": unmapped_reads,
                 "yield_tracking": yield_tracking,
@@ -940,6 +946,7 @@ def calculate_bam_summary(bam_data: Dict[str, Any]) -> Dict[str, Any]:
 
     # Pre-allocate result dictionary with known size
     result = {
+        "primary_read_count": bam_data.get("primary_read_count", 0),
         "mapped_reads": bam_data.get("mapped_reads", 0),
         "unmapped_reads": bam_data.get("unmapped_reads", 0),
         "yield_tracking": bam_data.get("yield_tracking", 0),
@@ -1378,11 +1385,10 @@ def bam_preprocessing_handler(job, center: str = None):
         else:
             logger.debug("No reference found in job context")
 
-        # Check read count threshold: skip large BAMs unless ROBIN_PROCESS_LARGE_BAMS is set
+        # Check read count threshold: skip large BAMs unless ROBIN_PROCESS_LARGE_BAMS is set.
+        # Count reads, not alignment records, to match MinKNOW's reads-per-file rollover.
         try:
-            total_reads = int(metadata.extracted_data.get("mapped_reads", 0)) + int(
-                metadata.extracted_data.get("unmapped_reads", 0)
-            )
+            total_reads = int(metadata.extracted_data.get("primary_read_count", 0))
         except Exception:
             total_reads = 0
         
@@ -1529,6 +1535,9 @@ def bam_preprocessing_handler(job, center: str = None):
         logger.info(f"Preprocessing complete for {os.path.basename(bam_path)}")
         logger.info(f"Sample ID: {metadata.extracted_data.get('sample_id', 'unknown')}")
         logger.info(f"State: {metadata.extracted_data.get('state', 'unknown')}")
+        logger.info(
+            f"Reads (counted toward the 50,000 limit): {metadata.extracted_data.get('primary_read_count', 0):,}"
+        )
         logger.info(f"Mapped reads: {metadata.extracted_data.get('mapped_reads', 0):,}")
         logger.info(
             f"Unmapped reads: {metadata.extracted_data.get('unmapped_reads', 0):,}"
