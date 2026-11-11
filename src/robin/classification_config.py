@@ -15,13 +15,13 @@ CLASSIFIER_CONFIDENCE_THRESHOLDS: Dict[str, Dict[str, float]] = {
         "low": 0.0,
     },
     "nanodx": {
-        "high": 50.0,
-        "medium": 25.0,
+        "high": 20.0,
+        "medium": 10.0,
         "low": 0.0,
     },
     "pannanodx": {
-        "high": 50.0,
-        "medium": 25.0,
+        "high": 15.0,
+        "medium": 10.0,
         "low": 0.0,
     },
     "random_forest": {
