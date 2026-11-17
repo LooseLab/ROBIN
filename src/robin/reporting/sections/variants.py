@@ -14,6 +14,7 @@ from reportlab.lib.styles import ParagraphStyle
 from reportlab.lib.colors import HexColor
 from ..sections.base import ReportSection
 from robin import resources
+from robin.analysis.variant_classification import is_clinvar_significant_from_info
 
 logger = logging.getLogger(__name__)
 
@@ -51,67 +52,9 @@ class VariantAnalysis:
             logger.error("Error loading resources: %s", str(e))
             logger.debug("Exception details:", exc_info=True)
 
-    def _is_pathogenic(self, info_str):
-        """Check if a variant is pathogenic based on CLNSIG and CLNSIGCONF fields."""
-        logger.debug("Checking pathogenicity for variant with info: %s", info_str)
-
-        if "CLNSIG=" not in info_str:
-            logger.debug("No CLNSIG field found in variant")
-            return False
-
-        pathogenic_terms = [
-            "pathogenic",
-            "likely_pathogenic",
-            "pathogenic/likely_pathogenic",
-            "likely pathogenic",
-            "pathogenic/likely pathogenic",
-        ]
-
-        # First check CLNSIG field
-        for field in info_str.split(";"):
-            if field.startswith("CLNSIG="):
-                clnsig_value = field.split("=")[1].lower()
-                logger.debug("Found CLNSIG value: %s", clnsig_value)
-
-                # Direct pathogenic classification
-                if any(term in clnsig_value for term in pathogenic_terms):
-                    logger.debug("Direct pathogenic classification found")
-                    return True
-
-                # Handle conflicting classifications
-                if "conflicting_classifications_of_pathogenicity" in clnsig_value:
-                    logger.debug(
-                        "Found conflicting classifications, checking CLNSIGCONF"
-                    )
-                    # Look for CLNSIGCONF field
-                    for conf_field in info_str.split(";"):
-                        if conf_field.startswith("CLNSIGCONF="):
-                            conf_value = conf_field.split("=")[1].lower()
-                            logger.debug("Found CLNSIGCONF value: %s", conf_value)
-
-                            # Count pathogenic vs benign classifications
-                            pathogenic_count = sum(
-                                int(count.strip("()"))
-                                for term in pathogenic_terms
-                                for count in conf_value.split("|")
-                                if term in count.lower()
-                            )
-                            benign_count = sum(
-                                int(count.strip("()"))
-                                for count in conf_value.split("|")
-                                if "benign" in count.lower()
-                            )
-                            logger.debug(
-                                "Pathogenic count: %d, Benign count: %d",
-                                pathogenic_count,
-                                benign_count,
-                            )
-
-                            # Return true if there are more pathogenic classifications
-                            return pathogenic_count > benign_count
-
-        logger.debug("No pathogenic classification found")
-        return False
+    def _is_clinvar_significant(self, info_str):
+        """Check if a variant is ClinVar-significant across germline, oncogenic, and somatic tracks."""
+        return is_clinvar_significant_from_info(info_str)
 
     def process_vcf(self, vcf_file, variant_type, result):
         """Process a VCF file and extract pathological variants."""
@@ -134,10 +77,10 @@ class VariantAnalysis:
                         continue
 
                     info_str = fields[7]
-                    if self._is_pathogenic(info_str):
+                    if self._is_clinvar_significant(info_str):
                         pathogenic_count += 1
                         logger.debug(
-                            "Found pathogenic variant at %s:%s", fields[0], fields[1]
+                            "Found ClinVar-significant variant at %s:%s", fields[0], fields[1]
                         )
 
                         variant_data = {
@@ -184,6 +127,10 @@ class VariantAnalysis:
                                     "Clinical significance: %s",
                                     variant_data["significance"],
                                 )
+                            elif field.startswith("ONC="):
+                                variant_data["oncogenicity"] = field.split("=")[1]
+                            elif field.startswith("SCI="):
+                                variant_data["somatic_impact"] = field.split("=")[1]
                             elif field.startswith("CLNDN="):
                                 variant_data["disease"] = field.split("=")[1]
                                 logger.debug(
@@ -508,6 +455,9 @@ class VariantsSection(ReportSection):
                 "Note: Variants are classified as pathogenic based on ClinVar annotations. "
                 "Disease associations are derived from ClinVar's CLNDN field where available."
             )
+            clinvar_release = getattr(self.report, "clinvar_metadata", {}).get("file_date")
+            if clinvar_release:
+                note_text += f" ClinVar release: {clinvar_release}."
             self.elements.append(Paragraph(note_text, note_style))
 
         # Build export DataFrames for CSVs

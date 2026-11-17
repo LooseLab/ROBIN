@@ -37,6 +37,7 @@ warnings.filterwarnings(
 import os
 import sys
 import csv
+import importlib
 import shutil
 import tempfile
 from pathlib import Path
@@ -50,35 +51,60 @@ is_development_mode = os.environ.get("ROBIN_DEV_MODE", "").lower() in ("1", "tru
 
 from robin.workflow_simple import default_file_classifier, Job
 
-# Many analysis handlers have optional third-party dependencies. Import them lazily
-# so lightweight commands (e.g. `robin utils update-models`) still work.
-_analysis_import_error: Optional[BaseException] = None
-try:
-    from robin.analysis.bam_preprocessor import bam_preprocessing_handler
-    from robin.analysis.mgmt_analysis import mgmt_handler
-    from robin.analysis.cnv_analysis import cnv_handler
-    from robin.analysis.bed_conversion import bed_conversion_handler
-    from robin.analysis.sturgeon_analysis import sturgeon_handler
-    from robin.analysis.nanodx_analysis import nanodx_handler, pannanodx_handler
-    from robin.analysis.random_forest_analysis import random_forest_handler
-    from robin.analysis.target_analysis import target_handler
-    from robin.analysis.fusion_analysis import fusion_handler
-    from robin.analysis.utilities.matkit import run_matkit
-    from robin.analysis.mgmt_analysis import extract_mgmt_site_rows_from_bed
-except Exception as e:
-    _analysis_import_error = e
-    bam_preprocessing_handler = None  # type: ignore[assignment]
-    mgmt_handler = None  # type: ignore[assignment]
-    cnv_handler = None  # type: ignore[assignment]
-    bed_conversion_handler = None  # type: ignore[assignment]
-    sturgeon_handler = None  # type: ignore[assignment]
-    nanodx_handler = None  # type: ignore[assignment]
-    pannanodx_handler = None  # type: ignore[assignment]
-    random_forest_handler = None  # type: ignore[assignment]
-    target_handler = None  # type: ignore[assignment]
-    fusion_handler = None  # type: ignore[assignment]
-    run_matkit = None  # type: ignore[assignment]
-    extract_mgmt_site_rows_from_bed = None  # type: ignore[assignment]
+
+def _configure_runtime_caches() -> None:
+    """Prepare persistent writable caches before optional plotting imports.
+
+    Matplotlib and Fontconfig otherwise fall back to rebuilding caches in a
+    temporary directory when the user's standard cache locations are not
+    writable. This is intentionally called from the CLI entry point, after
+    the lightweight CLI module has loaded but before workflow handlers import
+    plotting libraries.
+    """
+    cache_root = Path(
+        os.environ.get("XDG_CACHE_HOME", str(Path.home() / ".cache"))
+    ) / "robin"
+    try:
+        cache_root.mkdir(parents=True, exist_ok=True)
+        matplotlib_cache = cache_root / "matplotlib"
+        fontconfig_cache = cache_root / "fontconfig"
+        matplotlib_cache.mkdir(parents=True, exist_ok=True)
+        fontconfig_cache.mkdir(parents=True, exist_ok=True)
+        os.environ.setdefault("MPLCONFIGDIR", str(matplotlib_cache))
+        os.environ.setdefault("XDG_CACHE_HOME", str(cache_root.parent))
+    except OSError:
+        # Cache setup must never prevent a workflow from starting. Matplotlib
+        # will use its normal fallback behaviour if the user cache is locked.
+        return
+
+
+_HANDLER_IMPORTS = {
+    "preprocessing": ("robin.analysis.bam_preprocessor", "bam_preprocessing_handler"),
+    "bed_conversion": ("robin.analysis.bed_conversion", "bed_conversion_handler"),
+    "mgmt": ("robin.analysis.mgmt_analysis", "mgmt_handler"),
+    "cnv": ("robin.analysis.cnv_analysis", "cnv_handler"),
+    "target": ("robin.analysis.target_analysis", "target_handler"),
+    "fusion": ("robin.analysis.fusion_analysis", "fusion_handler"),
+    "itd": ("robin.analysis.itd_analysis", "itd_handler"),
+    "sturgeon": ("robin.analysis.sturgeon_analysis", "sturgeon_handler"),
+    "nanodx": ("robin.analysis.nanodx_analysis", "nanodx_handler"),
+    "pannanodx": ("robin.analysis.nanodx_analysis", "pannanodx_handler"),
+    "random_forest": ("robin.analysis.random_forest_analysis", "random_forest_handler"),
+    "marlin": ("robin.analysis.marlin_analysis", "marlin_handler"),
+    "lamprey": ("robin.analysis.lamprey_analysis", "lamprey_handler"),
+    "tucan": ("robin.analysis.tucan_analysis", "tucan_handler"),
+}
+
+
+def _load_analysis_handler(handler_name: str):
+    """Import one analysis handler only when a workflow registers it."""
+    module_name, attribute = _HANDLER_IMPORTS[handler_name]
+    try:
+        return getattr(importlib.import_module(module_name), attribute)
+    except Exception as exc:
+        raise click.ClickException(
+            f"Could not load analysis handler '{handler_name}': {exc}"
+        ) from exc
 from robin.logging_config import (
     configure_logging,
 )
@@ -92,6 +118,7 @@ from robin.utils.sequencing_files import (
     panel_source_available,
     panel_source_filename,
 )
+from robin.workflow_config import merge_workflow_params
 
 
 def _download_missing_models(missing_files, models_dir):
@@ -254,10 +281,14 @@ VALID_JOB_TYPES = {
     "cnv",
     "target",
     "fusion",
+    "itd",
     "sturgeon",
     "nanodx",
     "pannanodx",
     "random_forest",
+    "marlin",
+    "lamprey",
+    "tucan",
 }
 DEFAULT_LOG_LEVEL = "ERROR"
 DEFAULT_ANALYSIS_WORKERS = 1
@@ -271,14 +302,26 @@ QUEUE_MAPPING = {
     "cnv": "cnv",
     "target": "target",
     "fusion": "fusion",
+    "itd": "fusion",
     "sturgeon": "classification",
     "nanodx": "classification",
     "pannanodx": "classification",
     "random_forest": "slow",
+    "marlin": "slow",
+    "lamprey": "slow",
+    "tucan": "slow",
 }
 
 # Jobs that require bed_conversion as a dependency
-JOBS_REQUIRING_BED_CONVERSION = {"sturgeon", "nanodx", "pannanodx", "random_forest"}
+JOBS_REQUIRING_BED_CONVERSION = {
+    "sturgeon",
+    "nanodx",
+    "pannanodx",
+    "random_forest",
+    "marlin",
+    "lamprey",
+    "tucan",
+}
 
 from robin.reporting.sections.disclaimer_text import EXTENDED_DISCLAIMER_TEXT
 
@@ -315,17 +358,21 @@ DISCLAIMER_TEXT = EXTENDED_DISCLAIMER_TEXT
 
 # Handler configurations
 HANDLER_CONFIGS = [
-    # (queue_type, job_type, handler_func, legacy_queue_type, needs_work_dir)
-    ("preprocessing", "preprocessing", bam_preprocessing_handler, None, False),
-    ("bed_conversion", "bed_conversion", bed_conversion_handler, None, True),
-    ("mgmt", "mgmt", mgmt_handler, "analysis", True),
-    ("cnv", "cnv", cnv_handler, "analysis", True),
-    ("target", "target", target_handler, "analysis", True),
-    ("fusion", "fusion", fusion_handler, "analysis", True),
-    ("classification", "sturgeon", sturgeon_handler, None, True),
-    ("classification", "nanodx", nanodx_handler, None, True),
-    ("classification", "pannanodx", pannanodx_handler, None, True),
-    ("slow", "random_forest", random_forest_handler, None, True),
+    # (queue_type, job_type, handler_name, legacy_queue_type, needs_work_dir)
+    ("preprocessing", "preprocessing", "preprocessing", None, False),
+    ("bed_conversion", "bed_conversion", "bed_conversion", None, True),
+    ("mgmt", "mgmt", "mgmt", "analysis", True),
+    ("cnv", "cnv", "cnv", "analysis", True),
+    ("target", "target", "target", "analysis", True),
+    ("fusion", "fusion", "fusion", "analysis", True),
+    ("fusion", "itd", "itd", "analysis", True),
+    ("classification", "sturgeon", "sturgeon", None, True),
+    ("classification", "nanodx", "nanodx", None, True),
+    ("classification", "pannanodx", "pannanodx", None, True),
+    ("slow", "random_forest", "random_forest", None, True),
+    ("slow", "marlin", "marlin", None, True),
+    ("slow", "lamprey", "lamprey", None, True),
+    ("slow", "tucan", "tucan", None, True),
 ]
 
 
@@ -338,7 +385,24 @@ def _get_user_acknowledgment() -> bool:
     # Skip disclaimer in development mode
     if is_development_mode:
         return True
-        
+
+    try:
+        from robin.security import SecurityStore, get_consent_version
+
+        store = SecurityStore()
+        if store.any_active_admin_has_consent(get_consent_version()):
+            return True
+    except Exception:
+        pass
+
+    env_ack = os.environ.get("ROBIN_RESEARCH_ACK", "").strip()
+    if env_ack == "I agree":
+        _echo_styled(
+            "Research-use acknowledgment accepted via ROBIN_RESEARCH_ACK.",
+            level="info",
+        )
+        return True
+
     if _RICH_AVAILABLE and _RICH_CONSOLE is not None:
         _RICH_CONSOLE.print(
             Panel(
@@ -386,6 +450,7 @@ def _warn_if_process_large_bams() -> None:
 @click.version_option()
 def main() -> None:
     """Robin now uses Little John - his second in command who kept the merry men in line."""
+    _configure_runtime_caches()
     pass
 
 
@@ -409,27 +474,699 @@ def _iter_mgmt_bams(root: Path, recursive: bool) -> Iterable[Path]:
 
 @main.group()
 def password() -> None:
-    """Manage the GUI login password (stored as a hash)."""
+    """Manage the default admin password for GUI sign-in."""
     pass
 
 
 @password.command("set")
-def password_set() -> None:
-    """Set or replace the GUI password. Prompts twice for confirmation; input is never echoed."""
+@click.option(
+    "--username",
+    default="admin",
+    show_default=True,
+    help="Admin account to create or update.",
+)
+def password_set(username: str) -> None:
+    """Set or replace the default admin password. Prompts twice; input is never echoed."""
     try:
-        from robin.gui_launcher import set_gui_password_interactive
+        from robin.gui_launcher import set_default_admin_password_interactive
+
+        store, auth, audit = _get_security_services()
     except ImportError as e:
-        click.echo(f"GUI password module not available: {e}", err=True)
+        click.echo(f"Security module not available: {e}", err=True)
         sys.exit(1)
-    if not set_gui_password_interactive():
+
+    username = username.strip()
+    if not username:
+        click.echo("Username cannot be empty.", err=True)
         sys.exit(1)
-    click.echo("GUI password set successfully.")
+
+    had_user = store.get_user_by_username(username) is not None
+    if not set_default_admin_password_interactive(auth, username=username):
+        sys.exit(1)
+
+    audit.log_event(
+        event_type=(
+            "admin.user.password_reset" if had_user else "admin.user.bootstrap"
+        ),
+        target_type="user",
+        target_id=username,
+        details={
+            "username": username,
+            "source": "robin password set",
+            "must_change_password": False,
+        },
+    )
+
+
+@main.group()
+def users() -> None:
+    """Manage GUI users for multi-user authentication."""
+    pass
+
+
+def _get_security_services():
+    from robin.security import AuditService, AuthService, SecurityStore
+
+    store = SecurityStore()
+    return store, AuthService(store), AuditService(store)
+
+
+@users.command("bootstrap-admin")
+@click.option("--username", default="admin", show_default=True, help="Initial admin username.")
+@click.option(
+    "--from-legacy-hash",
+    is_flag=True,
+    help="Import the legacy GUI password hash file (password unchanged).",
+)
+def users_bootstrap_admin(username: str, from_legacy_hash: bool) -> None:
+    """Create the first admin account for a new ROBIN install."""
+    try:
+        from robin.gui_launcher import _get_gui_password_hash_path
+        from robin.security import get_consent_version
+
+        store, auth, audit = _get_security_services()
+    except ImportError as e:
+        click.echo(f"Security module not available: {e}", err=True)
+        sys.exit(1)
+
+    username = username.strip()
+    if not username:
+        click.echo("Username cannot be empty.", err=True)
+        sys.exit(1)
+
+    if store.has_users():
+        click.echo(
+            "Users already exist. Use 'robin users create' to add more accounts.",
+            err=True,
+        )
+        sys.exit(1)
+
+    if from_legacy_hash:
+        if username != "admin":
+            click.echo(
+                "Legacy hash import always creates user 'admin'. Omit --username or use --username admin.",
+                err=True,
+            )
+            sys.exit(1)
+        legacy_path = _get_gui_password_hash_path()
+        if not auth.bootstrap_admin_from_legacy_hash(legacy_path):
+            click.echo(
+                "No users created. Create a legacy hash with an older ROBIN release, "
+                "run `robin password set`, or run without --from-legacy-hash.",
+                err=True,
+            )
+            sys.exit(1)
+        user = store.get_user_by_username("admin")
+        user_id = user.id if user else None
+    else:
+        password = click.prompt("Password", hide_input=True, confirmation_prompt=True)
+        try:
+            user_id = auth.create_user(username, password, role="admin", must_change_password=False)
+        except Exception as e:
+            click.echo(f"Failed to create admin user '{username}': {e}", err=True)
+            sys.exit(1)
+
+    audit.log_event(
+        event_type="admin.user.bootstrap",
+        target_type="user",
+        target_id=username,
+        details={
+            "username": username,
+            "user_id": user_id,
+            "from_legacy_hash": from_legacy_hash,
+            "consent_version": get_consent_version(),
+        },
+    )
+    click.echo(f"Bootstrap complete. Admin user '{username}' is ready for GUI login.")
+
+
+@users.command("create")
+@click.argument("username", type=str)
+@click.option("--role", type=click.Choice(["admin", "user"]), default="user", show_default=True)
+@click.option("--email", type=str, default="", help="Contact email for this account.")
+@click.option(
+    "--clinical-role",
+    type=str,
+    default="",
+    help="Clinical role label (e.g. Consultant, Scientist).",
+)
+@click.option("--training", is_flag=True, help="Grant training received approval.")
+@click.option("--report-export", is_flag=True, help="Grant report export approval.")
+@click.option(
+    "--minknow-remote-control",
+    is_flag=True,
+    help="Grant MinKNOW remote control approval.",
+)
+def users_create(
+    username: str,
+    role: str,
+    email: str,
+    clinical_role: str,
+    training: bool,
+    report_export: bool,
+    minknow_remote_control: bool,
+) -> None:
+    """Create a GUI user account."""
+    try:
+        from robin.security.user_metadata import CLINICAL_ROLE_KEY, EMAIL_KEY
+        from robin.security.user_approvals import (
+            ADMIN_USER_APPROVALS_UPDATED_EVENT,
+            MINKNOW_REMOTE_CONTROL_KEY,
+            REPORT_EXPORT_KEY,
+            TRAINING_RECEIVED_KEY,
+            approval_audit_details,
+            default_approvals,
+        )
+
+        store, auth, audit = _get_security_services()
+    except ImportError as e:
+        click.echo(f"Security module not available: {e}", err=True)
+        sys.exit(1)
+
+    username = username.strip()
+    if not username:
+        click.echo("Username cannot be empty.", err=True)
+        sys.exit(1)
+
+    password = click.prompt("Password", hide_input=True, confirmation_prompt=True)
+    metadata = {
+        EMAIL_KEY: email.strip(),
+        CLINICAL_ROLE_KEY: clinical_role.strip(),
+    }
+    approvals = {
+        TRAINING_RECEIVED_KEY: training,
+        REPORT_EXPORT_KEY: report_export,
+        MINKNOW_REMOTE_CONTROL_KEY: minknow_remote_control,
+    }
+    try:
+        user_id = auth.create_user(
+            username,
+            password,
+            role=role,
+            metadata=metadata,
+            approvals=approvals if role != "admin" else None,
+        )
+        create_details: Dict[str, Any] = {
+            "role": role,
+            "user_id": user_id,
+            "metadata": metadata,
+        }
+        if role != "admin":
+            create_details["initial_approvals"] = approval_audit_details(
+                default_approvals(),
+                approvals,
+                source="cli",
+            )
+        audit.log_event(
+            event_type="admin.user.created",
+            user_id=None,
+            target_type="user",
+            target_id=username,
+            details=create_details,
+        )
+        if role != "admin" and approval_audit_details(
+            default_approvals(), approvals
+        ).get("changes"):
+            audit.log_event(
+                event_type=ADMIN_USER_APPROVALS_UPDATED_EVENT,
+                user_id=None,
+                target_type="user",
+                target_id=username,
+                details=approval_audit_details(
+                    default_approvals(),
+                    approvals,
+                    source="cli",
+                    extra={"user_id": user_id, "context": "user_created"},
+                ),
+            )
+    except ValueError as e:
+        click.echo(str(e), err=True)
+        sys.exit(1)
+    except Exception as e:
+        click.echo(f"Failed to create user '{username}': {e}", err=True)
+        sys.exit(1)
+    click.echo(f"Created user '{username}' with role '{role}'.")
+    click.echo("The user must choose a new password on first GUI sign-in.")
+
+
+@users.command("set-password")
+@click.argument("username", type=str)
+def users_set_password(username: str) -> None:
+    """Set a new password for an existing GUI user."""
+    try:
+        store, auth, audit = _get_security_services()
+    except ImportError as e:
+        click.echo(f"Security module not available: {e}", err=True)
+        sys.exit(1)
+
+    username = username.strip()
+    if not username:
+        click.echo("Username cannot be empty.", err=True)
+        sys.exit(1)
+
+    password = click.prompt("New password", hide_input=True, confirmation_prompt=True)
+    new_hash = auth.hash_password(password)
+    if not store.set_user_password_hash(username, new_hash, must_change_password=True):
+        click.echo(f"User '{username}' not found.", err=True)
+        sys.exit(1)
+    audit.log_event(
+        event_type="admin.user.password_reset",
+        user_id=None,
+        target_type="user",
+        target_id=username,
+        details={"username": username, "must_change_password": True},
+    )
+    click.echo(f"Updated password for user '{username}'.")
+    click.echo("The user must choose a new password on next GUI sign-in.")
+
+
+@users.command("list")
+def users_list() -> None:
+    """List configured GUI users."""
+    try:
+        from robin.security.user_approvals import (
+            MINKNOW_REMOTE_CONTROL_KEY,
+            REPORT_EXPORT_KEY,
+            TRAINING_RECEIVED_KEY,
+        )
+
+        store, _, _ = _get_security_services()
+    except ImportError as e:
+        click.echo(f"Security module not available: {e}", err=True)
+        sys.exit(1)
+
+    users = store.list_users()
+    if not users:
+        click.echo("No users configured.")
+        return
+    click.echo("Configured users:")
+    for user in users:
+        email = user.metadata.get("email") or "—"
+        clinical_role = user.metadata.get("clinical_role") or "—"
+        training = "yes" if user.approvals.get(TRAINING_RECEIVED_KEY) else "no"
+        report_export = "yes" if user.approvals.get(REPORT_EXPORT_KEY) else "no"
+        minknow_remote_control = (
+            "yes" if user.approvals.get(MINKNOW_REMOTE_CONTROL_KEY) else "no"
+        )
+        if store.user_has_role(user.id, "admin"):
+            training = "yes (admin)"
+            report_export = "yes (admin)"
+            minknow_remote_control = "yes (admin)"
+        click.echo(
+            f" - {user.username} (id={user.id}, active={user.is_active}, "
+            f"email={email}, clinical_role={clinical_role}, "
+            f"training={training}, report_export={report_export}, "
+            f"minknow_remote_control={minknow_remote_control}, "
+            f"last_login={user.last_login_at or 'never'})"
+        )
+
+
+@users.command("set-profile")
+@click.argument("username", type=str)
+@click.option("--email", type=str, default=None, help="Contact email.")
+@click.option(
+    "--clinical-role",
+    type=str,
+    default=None,
+    help="Clinical role label (e.g. Consultant, Scientist).",
+)
+@click.option("--notes", type=str, default=None, help="Internal notes about this account.")
+def users_set_profile(
+    username: str,
+    email: Optional[str],
+    clinical_role: Optional[str],
+    notes: Optional[str],
+) -> None:
+    """Update profile metadata for a GUI user account."""
+    try:
+        from robin.security.user_metadata import CLINICAL_ROLE_KEY, EMAIL_KEY, NOTES_KEY
+
+        store, _, audit = _get_security_services()
+    except ImportError as e:
+        click.echo(f"Security module not available: {e}", err=True)
+        sys.exit(1)
+
+    username = username.strip()
+    if not username:
+        click.echo("Username cannot be empty.", err=True)
+        sys.exit(1)
+
+    updates = {}
+    if email is not None:
+        updates[EMAIL_KEY] = email
+    if clinical_role is not None:
+        updates[CLINICAL_ROLE_KEY] = clinical_role
+    if notes is not None:
+        updates[NOTES_KEY] = notes
+    if not updates:
+        click.echo("Provide at least one of --email, --clinical-role, or --notes.", err=True)
+        sys.exit(1)
+
+    try:
+        if not store.update_user_metadata(username, updates):
+            click.echo(f"User '{username}' not found.", err=True)
+            sys.exit(1)
+    except ValueError as e:
+        click.echo(str(e), err=True)
+        sys.exit(1)
+
+    audit.log_event(
+        event_type="admin.user.profile_updated",
+        user_id=None,
+        target_type="user",
+        target_id=username,
+        details={"metadata": updates},
+    )
+    click.echo(f"Updated profile metadata for '{username}'.")
+
+
+@users.command("set-approvals")
+@click.argument("username", type=str)
+@click.option(
+    "--training/--no-training",
+    default=None,
+    help="Grant or revoke training received approval.",
+)
+@click.option(
+    "--report-export/--no-report-export",
+    default=None,
+    help="Grant or revoke report export approval.",
+)
+@click.option(
+    "--minknow-remote-control/--no-minknow-remote-control",
+    default=None,
+    help="Grant or revoke MinKNOW remote control approval.",
+)
+def users_set_approvals(
+    username: str,
+    training: Optional[bool],
+    report_export: Optional[bool],
+    minknow_remote_control: Optional[bool],
+) -> None:
+    """Update approval flags for a GUI user account."""
+    try:
+        from robin.security.user_approvals import (
+            ADMIN_USER_APPROVALS_UPDATED_EVENT,
+            MINKNOW_REMOTE_CONTROL_KEY,
+            REPORT_EXPORT_KEY,
+            TRAINING_RECEIVED_KEY,
+            approval_audit_details,
+            normalize_approvals,
+        )
+
+        store, _, audit = _get_security_services()
+    except ImportError as e:
+        click.echo(f"Security module not available: {e}", err=True)
+        sys.exit(1)
+
+    username = username.strip()
+    if not username:
+        click.echo("Username cannot be empty.", err=True)
+        sys.exit(1)
+
+    user = store.get_user_by_username(username)
+    if user is None:
+        click.echo(f"User '{username}' not found.", err=True)
+        sys.exit(1)
+    if store.user_has_role(user.id, "admin"):
+        click.echo("Administrators always have all approvals; nothing to update.", err=True)
+        sys.exit(1)
+
+    updates = {}
+    if training is not None:
+        updates[TRAINING_RECEIVED_KEY] = training
+    if report_export is not None:
+        updates[REPORT_EXPORT_KEY] = report_export
+    if minknow_remote_control is not None:
+        updates[MINKNOW_REMOTE_CONTROL_KEY] = minknow_remote_control
+    if not updates:
+        click.echo(
+            "Provide at least one of --training/--no-training, "
+            "--report-export/--no-report-export, or "
+            "--minknow-remote-control/--no-minknow-remote-control.",
+            err=True,
+        )
+        sys.exit(1)
+
+    previous_approvals = dict(user.approvals)
+    updated_approvals = normalize_approvals(updates, existing=previous_approvals)
+    if not approval_audit_details(previous_approvals, updated_approvals).get("changes"):
+        click.echo("No approval changes to apply.", err=True)
+        sys.exit(1)
+
+    if not store.update_user_approvals(username, updates):
+        click.echo(f"Failed to update approvals for '{username}'.", err=True)
+        sys.exit(1)
+
+    audit.log_event(
+        event_type=ADMIN_USER_APPROVALS_UPDATED_EVENT,
+        user_id=None,
+        target_type="user",
+        target_id=username,
+        details=approval_audit_details(
+            previous_approvals,
+            updated_approvals,
+            source="cli",
+            extra={"user_id": user.id},
+        ),
+    )
+    click.echo(f"Updated approvals for '{username}'.")
+
+
+@users.command("consent-status")
+@click.option(
+    "--version",
+    "consent_version",
+    default="",
+    help="Consent version to check (default: active ROBIN_CONSENT_VERSION).",
+)
+def users_consent_status(consent_version: str) -> None:
+    """Show per-user research-use consent status."""
+    try:
+        from robin.security import get_consent_version
+
+        store, _, _ = _get_security_services()
+    except ImportError as e:
+        click.echo(f"Security module not available: {e}", err=True)
+        sys.exit(1)
+
+    version = (consent_version or get_consent_version()).strip()
+    rows = store.list_consent_status(version)
+    if not rows:
+        click.echo("No users configured.")
+        return
+
+    click.echo(f"Consent version: {version}")
+    for row in rows:
+        status = "accepted" if row["has_consent"] else "pending"
+        agreed = row["agreed_at"] or "never"
+        active = "active" if row["is_active"] else "inactive"
+        click.echo(
+            f" - {row['username']} ({active}): {status} (agreed_at={agreed})"
+        )
+
+
+@users.command("deactivate")
+@click.argument("username", type=str)
+def users_deactivate(username: str) -> None:
+    """Deactivate a user account."""
+    try:
+        store, _, audit = _get_security_services()
+    except ImportError as e:
+        click.echo(f"Security module not available: {e}", err=True)
+        sys.exit(1)
+    username = username.strip()
+    user = store.get_user_by_username(username)
+    if user is None:
+        click.echo(f"User '{username}' not found.", err=True)
+        sys.exit(1)
+    if store.user_has_role(user.id, "admin") and store.count_active_admins() <= 1:
+        click.echo("Cannot deactivate the last active admin.", err=True)
+        sys.exit(1)
+    if not store.set_user_active(username, False):
+        click.echo(f"Failed to deactivate '{username}'.", err=True)
+        sys.exit(1)
+    audit.log_event(
+        event_type="admin.user.deactivated",
+        target_type="user",
+        target_id=username,
+        details={"username": username},
+    )
+    click.echo(f"Deactivated user '{username}'.")
+
+
+@users.command("activate")
+@click.argument("username", type=str)
+def users_activate(username: str) -> None:
+    """Activate a user account."""
+    try:
+        store, _, audit = _get_security_services()
+    except ImportError as e:
+        click.echo(f"Security module not available: {e}", err=True)
+        sys.exit(1)
+    username = username.strip()
+    if not store.set_user_active(username, True):
+        click.echo(f"User '{username}' not found.", err=True)
+        sys.exit(1)
+    audit.log_event(
+        event_type="admin.user.activated",
+        target_type="user",
+        target_id=username,
+        details={"username": username},
+    )
+    click.echo(f"Activated user '{username}'.")
+
+
+@users.command("grant-role")
+@click.argument("username", type=str)
+@click.argument("role", type=click.Choice(["admin", "user"]))
+def users_grant_role(username: str, role: str) -> None:
+    """Grant a role to a user."""
+    try:
+        store, _, audit = _get_security_services()
+    except ImportError as e:
+        click.echo(f"Security module not available: {e}", err=True)
+        sys.exit(1)
+    username = username.strip()
+    user = store.get_user_by_username(username)
+    if user is None:
+        click.echo(f"User '{username}' not found.", err=True)
+        sys.exit(1)
+    store.assign_role(user.id, role)
+    audit.log_event(
+        event_type="admin.user.role_granted",
+        target_type="user",
+        target_id=username,
+        details={"username": username, "role": role},
+    )
+    click.echo(f"Granted role '{role}' to '{username}'.")
+
+
+@users.command("revoke-role")
+@click.argument("username", type=str)
+@click.argument("role", type=click.Choice(["admin", "user"]))
+def users_revoke_role(username: str, role: str) -> None:
+    """Revoke a role from a user."""
+    try:
+        store, _, audit = _get_security_services()
+    except ImportError as e:
+        click.echo(f"Security module not available: {e}", err=True)
+        sys.exit(1)
+    username = username.strip()
+    user = store.get_user_by_username(username)
+    if user is None:
+        click.echo(f"User '{username}' not found.", err=True)
+        sys.exit(1)
+    if role == "admin" and store.user_has_role(user.id, "admin") and store.count_active_admins() <= 1:
+        click.echo("Cannot revoke admin role from the last active admin.", err=True)
+        sys.exit(1)
+    if not store.revoke_role(user.id, role):
+        click.echo(f"Role '{role}' was not assigned to '{username}'.", err=True)
+        sys.exit(1)
+    audit.log_event(
+        event_type="admin.user.role_revoked",
+        target_type="user",
+        target_id=username,
+        details={"username": username, "role": role},
+    )
+    click.echo(f"Revoked role '{role}' from '{username}'.")
+
+
+@main.group()
+def audit() -> None:
+    """Query and export audit events."""
+    pass
+
+
+@audit.command("list")
+@click.option("--user", "username", type=str, default="", help="Filter by username.")
+@click.option("--event", "event_type", type=str, default="", help="Filter by event type.")
+@click.option("--from-ts", type=str, default="", help="Start timestamp (UTC ISO8601).")
+@click.option("--to-ts", type=str, default="", help="End timestamp (UTC ISO8601).")
+@click.option("--limit", type=int, default=50, show_default=True)
+def audit_list(username: str, event_type: str, from_ts: str, to_ts: str, limit: int) -> None:
+    """List recent audit events."""
+    try:
+        store, _, _ = _get_security_services()
+    except ImportError as e:
+        click.echo(f"Security module not available: {e}", err=True)
+        sys.exit(1)
+
+    events = store.query_audit_events(
+        username=username,
+        event_type=event_type,
+        from_ts=from_ts,
+        to_ts=to_ts,
+        limit=limit,
+    )
+    if not events:
+        click.echo("No audit events found.")
+        return
+    for e in events:
+        click.echo(
+            f"{e['occurred_at']} user={e['username'] or '-'} event={e['event_type']} "
+            f"target={e['target_type']}:{e['target_id']} result={e['result']}"
+        )
+
+
+@audit.command("export")
+@click.option("--user", "username", type=str, default="", help="Filter by username.")
+@click.option("--event", "event_type", type=str, default="", help="Filter by event type.")
+@click.option("--from-ts", type=str, default="", help="Start timestamp (UTC ISO8601).")
+@click.option("--to-ts", type=str, default="", help="End timestamp (UTC ISO8601).")
+@click.option("--limit", type=int, default=5000, show_default=True)
+@click.option("--out", "out_path", type=click.Path(path_type=Path), required=True)
+def audit_export(username: str, event_type: str, from_ts: str, to_ts: str, limit: int, out_path: Path) -> None:
+    """Export audit events to CSV."""
+    try:
+        store, _, _ = _get_security_services()
+    except ImportError as e:
+        click.echo(f"Security module not available: {e}", err=True)
+        sys.exit(1)
+
+    events = store.query_audit_events(
+        username=username,
+        event_type=event_type,
+        from_ts=from_ts,
+        to_ts=to_ts,
+        limit=limit,
+    )
+    fieldnames = [
+        "id",
+        "occurred_at",
+        "user_id",
+        "username",
+        "event_type",
+        "target_type",
+        "target_id",
+        "result",
+        "error_code",
+        "ip",
+        "user_agent",
+        "session_id",
+        "request_id",
+        "details",
+    ]
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(out_path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        for e in events:
+            row = dict(e)
+            row["details"] = str(e.get("details", {}))
+            writer.writerow({k: row.get(k, "") for k in fieldnames})
+    click.echo(f"Exported {len(events)} audit events to {out_path}")
 
 
 @main.group()
 def utils() -> None:
     """Utility helpers for inspecting robin outputs."""
     pass
+
+
+from robin.minknow.cli import minknow as minknow_cli  # noqa: E402
+
+main.add_command(minknow_cli)
 
 
 @utils.command()
@@ -450,6 +1187,9 @@ def utils() -> None:
 )
 def mgmt(output_dir: Path, recursive: bool, out_path: Path) -> None:
     """Summarize MGMT CpG site methylation counts from mgmt_sorted.bam files."""
+    from robin.analysis.mgmt_analysis import extract_mgmt_site_rows_from_bed
+    from robin.analysis.utilities.matkit import run_matkit
+
     if not output_dir.exists():
         click.echo(f"Error: output_dir not found: {output_dir}", err=True)
         sys.exit(1)
@@ -547,13 +1287,23 @@ def update_clinvar() -> None:
     """Update ClinVar to the newest available NCBI version (best-effort)."""
 
     try:
-        from robin.utils.clinvar_manager import update_clinvar_if_newer
+        from robin.utils.clinvar_manager import (
+            format_clinvar_version_label,
+            get_clinvar_metadata,
+            update_clinvar_if_newer,
+        )
 
         updated = update_clinvar_if_newer(download_if_missing=True)
+        metadata = get_clinvar_metadata()
         if updated:
             click.echo("ClinVar updated successfully.")
         else:
             click.echo("ClinVar is already up to date.")
+        click.echo(format_clinvar_version_label(metadata))
+        if metadata.get("sha256"):
+            click.echo(f"SHA256: {metadata['sha256']}")
+        if metadata.get("remote_last_modified"):
+            click.echo(f"NCBI Last-Modified: {metadata['remote_last_modified']}")
     except Exception as e:
         click.echo(f"Failed to update ClinVar: {e}", err=True)
         sys.exit(1)
@@ -793,13 +1543,21 @@ def list_job_types() -> None:
         "mgmt": ["mgmt - MGMT methylation analysis"],
         "cnv": ["cnv - Copy number variation analysis"],
         "target": ["target - Target analysis"],
-        "fusion": ["fusion - Fusion detection analysis"],
+        "fusion": [
+            "fusion - Fusion detection analysis",
+            "itd - ITD / insertion hotspot calling (FLT3, NPM1, …)",
+        ],
         "classification": [
             "sturgeon - Sturgeon classification analysis",
             "nanodx - NanoDX analysis",
             "pannanodx - PanNanoDX analysis",
         ],
-        "slow": ["random_forest - Random Forest analysis"],
+        "slow": [
+            "random_forest - Random Forest analysis",
+            "marlin - MARLIN leukemia methylation classification",
+            "lamprey - Lamprey hematological classification (research/evaluation only)",
+            "tucan - Tucan pediatric solid tumor / lymphoma classification",
+        ],
     }
 
     click.echo("Available job types in robin:\n")
@@ -815,7 +1573,7 @@ def list_job_types() -> None:
         "  • Simplified format (recommended): 'mgmt,sturgeon' (bed_conversion auto-added)"
     )
     click.echo(
-        "  • Full pipeline (simplified): 'mgmt,cnv,target,fusion,sturgeon,nanodx,pannanodx,random_forest' (bed_conversion auto-added)"
+        "  • Full pipeline (simplified): 'mgmt,cnv,target,fusion,itd,sturgeon,nanodx,pannanodx,random_forest,marlin,lamprey,tucan' (bed_conversion auto-added)"
     )
     click.echo(
         "  • Legacy format with queue prefixes: 'preprocessing:bed_conversion,mgmt:mgmt,classification:sturgeon'"
@@ -824,7 +1582,11 @@ def list_job_types() -> None:
         "\nNote: 'preprocessing' is automatically added as the first step if not specified."
     )
     click.echo(
-        "Note: 'bed_conversion' is automatically added when needed for sturgeon, nanodx, pannanodx, or random_forest jobs."
+        "Note: 'bed_conversion' is automatically added when needed for sturgeon, nanodx, pannanodx, random_forest, marlin, lamprey, or tucan jobs."
+    )
+    click.echo(
+        "Note: 'lamprey' is research/evaluation use only (not for clinical decision-making); "
+        "install Lamprey separately and set ROBIN_LAMPREY_RESEARCH_ACK=1."
     )
     click.echo(
         "Note: Each analysis type (mgmt, cnv, target, fusion) has its own queue for parallel processing."
@@ -877,9 +1639,8 @@ def _validate_bed_file(bed_path: Path) -> Tuple[bool, List[str]]:
                 except ValueError:
                     errors.append(f"Line {line_num}: Start and end positions must be integers")
                 
-                # Check for gene name in 4th column (required for ROBIN panels)
-                if len(parts) < 4 or not parts[3].strip():
-                    errors.append(f"Line {line_num}: Missing gene name in 4th column")
+                # Column 4 may be a gene name, a placeholder ('.'), or absent (3-col BED).
+                # Placeholders are annotated from all_genes2.bed during add-panel.
                 
                 # Optional: validate 6-column BED format if present
                 if len(parts) >= 6:
@@ -912,11 +1673,100 @@ def _validate_bed_file(bed_path: Path) -> Tuple[bool, List[str]]:
     return len(errors) == 0, errors
 
 
+def _is_placeholder_gene_name(name: object) -> bool:
+    """True when a BED name column should be treated as missing."""
+    if name is None:
+        return True
+    text = str(name).strip()
+    return text == "" or text == "." or text.lower() == "nan" or text.lower() == "none"
+
+
+def _resolve_all_genes_bed() -> Optional[Path]:
+    """Locate the packaged genome-wide gene BED used for panel annotation."""
+    candidates: List[Path] = []
+    try:
+        from robin import resources
+
+        resources_dir = Path(resources.__file__).resolve().parent
+        candidates.append(resources_dir / "all_genes2.bed")
+        candidates.append(resources_dir / "all_genes3.bed")
+        candidates.append(resources_dir / "all_genes.bed")
+    except Exception:
+        pass
+    here = Path(__file__).resolve().parent
+    candidates.append(here.parent / "robin" / "resources" / "all_genes2.bed")
+    for path in candidates:
+        if path.is_file():
+            return path
+    return None
+
+
+def _load_all_genes_dataframe(genes_bed: Path):
+    """Load ``all_genes*.bed`` as chrom/start/end/gene (gene names stripped)."""
+    import pandas as pd
+
+    genes = pd.read_csv(
+        genes_bed,
+        sep="\t",
+        header=None,
+        names=["chrom", "start", "end", "gene"],
+        usecols=[0, 1, 2, 3],
+        comment="#",
+        dtype={"chrom": str, "start": int, "end": int, "gene": str},
+    )
+    genes["gene"] = genes["gene"].astype(str).str.strip()
+    genes = genes[genes["gene"].map(lambda g: not _is_placeholder_gene_name(g))]
+    return genes.reset_index(drop=True)
+
+
+def _annotate_placeholder_intervals_with_genes(panel_df, genes_df) -> List[Dict[str, object]]:
+    """Intersect placeholder panel intervals with the gene reference.
+
+    Returns gene-body rows (chrom/start/end/gene) for each overlapping gene.
+    """
+    annotated: List[Dict[str, object]] = []
+    seen_genes: set[str] = set()
+    genes_by_chrom = {chrom: group for chrom, group in genes_df.groupby("chrom", sort=False)}
+
+    for chrom, intervals in panel_df.groupby("chrom", sort=False):
+        gene_chrom = genes_by_chrom.get(chrom)
+        if gene_chrom is None or gene_chrom.empty:
+            continue
+        gene_starts = gene_chrom["start"].to_numpy()
+        gene_ends = gene_chrom["end"].to_numpy()
+        gene_names = gene_chrom["gene"].to_numpy()
+        for _, row in intervals.iterrows():
+            start = int(row["start"])
+            end = int(row["end"])
+            overlaps = (gene_starts < end) & (gene_ends > start)
+            if not overlaps.any():
+                continue
+            for idx in overlaps.nonzero()[0]:
+                gene = str(gene_names[idx])
+                if gene in seen_genes:
+                    continue
+                seen_genes.add(gene)
+                annotated.append(
+                    {
+                        "chrom": chrom,
+                        "start": int(gene_starts[idx]),
+                        "end": int(gene_ends[idx]),
+                        "gene": gene,
+                    }
+                )
+    return annotated
+
+
 def _generate_unique_gene_bed(input_bed_path: Path, output_bed_path: Path) -> bool:
-    """Generate unique gene BED file from input BED file."""
+    """Generate unique gene BED file from input BED file.
+
+    Intervals that already carry gene names keep those names and coordinates.
+    Intervals named ``.`` / empty / missing are annotated by intersecting with
+    ``all_genes2.bed`` (gene-body coordinates from the reference).
+    """
     try:
         import pandas as pd
-        
+
         # Read the input BED file - handle both 4-column and 6-column BED formats
         try:
             # Try 6-column format first (chrom, start, end, gene, score, strand)
@@ -928,37 +1778,95 @@ def _generate_unique_gene_bed(input_bed_path: Path, output_bed_path: Path) -> bo
                 comment='#'
             )
         except ValueError:
-            # Fallback to 4-column format (chrom, start, end, gene)
-            df = pd.read_csv(
+            # Fallback to 4-column / 3-column format
+            raw = pd.read_csv(
                 input_bed_path,
                 sep='\t',
                 header=None,
-                names=['chrom', 'start', 'end', 'gene'],
-                comment='#'
+                comment='#',
             )
-        
-        # Process gene names - handle comma-separated genes
-        processed_regions = []
-        for _, row in df.iterrows():
-            genes = [g.strip() for g in str(row['gene']).split(',')]
+            if raw.shape[1] < 3:
+                click.echo("Error: BED file must have at least 3 columns", err=True)
+                return False
+            raw = raw.iloc[:, :4].copy()
+            while raw.shape[1] < 4:
+                raw[raw.shape[1]] = "."
+            raw.columns = ['chrom', 'start', 'end', 'gene']
+            df = raw
+
+        df["chrom"] = df["chrom"].astype(str)
+        df["start"] = df["start"].astype(int)
+        df["end"] = df["end"].astype(int)
+        if "gene" not in df.columns:
+            df["gene"] = "."
+        df["gene"] = df["gene"].fillna(".").astype(str)
+
+        named_mask = ~df["gene"].map(_is_placeholder_gene_name)
+        named_df = df.loc[named_mask]
+        placeholder_df = df.loc[~named_mask]
+
+        processed_regions: List[Dict[str, object]] = []
+
+        # Keep explicit gene names from the upload (comma-separated supported).
+        for _, row in named_df.iterrows():
+            genes = [g.strip() for g in str(row["gene"]).split(",")]
             for gene in genes:
-                if gene and gene != 'nan':  # Skip empty gene names and NaN values
-                    processed_regions.append({
-                        'chrom': row['chrom'],
-                        'start': int(row['start']),
-                        'end': int(row['end']),
-                        'gene': gene
-                    })
-        
+                if _is_placeholder_gene_name(gene):
+                    continue
+                processed_regions.append(
+                    {
+                        "chrom": row["chrom"],
+                        "start": int(row["start"]),
+                        "end": int(row["end"]),
+                        "gene": gene,
+                    }
+                )
+
+        annotated_from_reference = 0
+        if not placeholder_df.empty:
+            genes_bed = _resolve_all_genes_bed()
+            if genes_bed is None:
+                if named_df.empty:
+                    click.echo(
+                        "Error: panel intervals have no gene names and "
+                        "all_genes2.bed was not found for annotation",
+                        err=True,
+                    )
+                    return False
+                click.echo(
+                    "Warning: some intervals have placeholder gene names ('.') but "
+                    "all_genes2.bed was not found; those intervals will be skipped",
+                    err=True,
+                )
+            else:
+                genes_df = _load_all_genes_dataframe(genes_bed)
+                annotated = _annotate_placeholder_intervals_with_genes(
+                    placeholder_df, genes_df
+                )
+                annotated_from_reference = len(annotated)
+                processed_regions.extend(annotated)
+                click.echo(
+                    f"Annotated {len(placeholder_df)} placeholder interval(s) via "
+                    f"{genes_bed.name}: {annotated_from_reference} unique gene(s)"
+                )
+
+        if not processed_regions:
+            click.echo(
+                "Error: no gene names could be recovered from the panel BED "
+                "(provide gene names in column 4, or ensure all_genes2.bed is available)",
+                err=True,
+            )
+            return False
+
         # Convert to DataFrame and remove duplicates
         processed_df = pd.DataFrame(processed_regions)
-        
+
         # Remove duplicates based on gene name (keep first occurrence)
         processed_df = processed_df.drop_duplicates(subset=['gene'], keep='first')
-        
+
         # Sort by chromosome and position
         processed_df = processed_df.sort_values(['chrom', 'start', 'end'])
-        
+
         # Write to output file in standard 4-column BED format
         processed_df[['chrom', 'start', 'end', 'gene']].to_csv(
             output_bed_path,
@@ -966,7 +1874,15 @@ def _generate_unique_gene_bed(input_bed_path: Path, output_bed_path: Path) -> bo
             header=False,
             index=False
         )
-        
+
+        click.echo(
+            f"Wrote {len(processed_df)} unique gene(s) to {output_bed_path.name}"
+            + (
+                f" ({annotated_from_reference} from gene-reference intersect)"
+                if annotated_from_reference
+                else ""
+            )
+        )
         return True
         
     except Exception as e:
@@ -1018,7 +1934,7 @@ def _get_available_panels() -> List[str]:
     show_default=True,
     help=(
         "Reference genome: HTTPS URL to download, or path to a local FASTA "
-        "(e.g. .fa or .fa.gz)."
+        "(e.g. .fa or .fa.gz). Plain gzip is re-encoded as bgzip."
     ),
 )
 @click.option(
@@ -1046,6 +1962,7 @@ def sequencing_files(
     Copies the processed ``*_panel_name_uniq.bed`` and, when packaged, ``*_panel_source.bed``
     (original / unprocessed design) into one folder for adaptive sampling and aligners.
     The default reference is NCBI GRCh38 (no-alt analysis set, UCSC-style names), a large download.
+    That NCBI file is plain gzip; it is re-encoded as bgzip so it can be indexed.
     """
     out = (output_dir or (Path.cwd() / "reference_files")).resolve()
     bed_name = panel_bed_filename(panel)
@@ -1104,7 +2021,8 @@ def sequencing_files(
 
     click.echo("")
     click.echo(
-        "Done. Use the source or processed BED as needed for adaptive sampling; "
+        "Done. Use the stranded source BED for adaptive sampling in MinKNOW; "
+        "use the processed unique-gene BED for ROBIN analyses; "
         "use the reference FASTA for alignment."
     )
 
@@ -1144,15 +2062,19 @@ def add_panel(bed_file: Path, panel_name: str, validate_only: bool) -> None:
     BED_FILE: Path to the BED file containing panel regions
     PANEL_NAME: Name for the panel (e.g., 'CustomPanel', 'MyPanel')
     
-    The BED file should be in standard format with at least 4 columns:
-    chromosome, start, end, gene_name(s) [, score, strand]
+    The BED file should be in standard format with at least 3 columns:
+    chromosome, start, end [, gene_name(s) [, score, strand]]
     
     Supported formats:
+    - 3-column: chr1, 1000000, 2000000
     - 4-column: chr1, 1000000, 2000000, GENE1
     - 6-column: chr1, 1000000, 2000000, GENE1, 0, +
     
     Gene names can be comma-separated for regions covering multiple genes.
-    The output will be a unique gene list with one entry per gene.
+    When gene names are missing or '.', intervals are annotated by intersecting
+    with the packaged all_genes2.bed reference. Named intervals keep their
+    uploaded gene labels. The processed output is a unique gene list with one
+    entry per gene.
 
     ROBIN also stores an unmodified copy of your upload as
     '{panel_name}_panel_source.bed' alongside the processed file.
@@ -1369,6 +2291,8 @@ def _create_ray_workflow_runner(
     preprocessing_workers: int = 1,
     bed_workers: int = 1,
     reference: Optional[Path] = None,
+    detect_barcodes: bool = True,
+    watch_mode: str = "auto",
 ) -> Any:
     """Create and configure Ray-based workflow runner (Ray Core)."""
     try:
@@ -1377,13 +2301,21 @@ def _create_ray_workflow_runner(
         from robin import workflow_ray as wrn
 
         class _RayCoreWrapper:
-            def __init__(self, reference: Optional[Path] = None, target_panel: str = None):
+            def __init__(
+                self,
+                reference: Optional[Path] = None,
+                target_panel: str = None,
+                detect_barcodes: bool = True,
+                watch_mode: str = "auto",
+            ):
                 self.manager = type(
                     "_DummyManager", (), {"get_priority_info": lambda _self: {}}
                 )()
                 self.coordinator = None  # Will be set when workflow starts
                 self.reference = reference  # Store reference genome for GUI access
                 self.target_panel = target_panel  # Store target panel for GUI access
+                self.detect_barcodes = detect_barcodes
+                self.watch_mode = watch_mode
 
                 # Debug logging for reference genome (only in verbose mode)
                 if self.reference:
@@ -1444,6 +2376,9 @@ def _create_ray_workflow_runner(
                     try:
                         final_result = ray.get(result, timeout=30.0)
                         return final_result
+                    except ray.exceptions.GetTimeoutError:
+                        # Submission may still have reached the coordinator; avoid false-negative UI status.
+                        return True
                     except Exception:
                         return False
 
@@ -1514,6 +2449,12 @@ def _create_ray_workflow_runner(
                                 err=True,
                             )
                         return final_result
+                    except ray.exceptions.GetTimeoutError:
+                        click.echo(
+                            f"[SNP] Submit confirmation timed out for sample '{sid_for_log}', treating as queued.",
+                            err=True,
+                        )
+                        return True
                     except Exception as e:
                         click.echo(
                             f"[SNP] Failed waiting for submit confirmation for sample '{sid_for_log}': {e}",
@@ -1586,6 +2527,12 @@ def _create_ray_workflow_runner(
                                 err=True,
                             )
                         return final_result
+                    except ray.exceptions.GetTimeoutError:
+                        click.echo(
+                            f"[Finalize] Submit confirmation timed out for sample '{sid_for_log}', treating as queued.",
+                            err=True,
+                        )
+                        return True
                     except Exception as e:
                         click.echo(
                             f"[Finalize] Failed waiting for submit confirmation for sample '{sid_for_log}': {e}",
@@ -1639,6 +2586,8 @@ def _create_ray_workflow_runner(
                         paths=[str(path)],
                         target_panel=target_panel,
                         analysis_workers=analysis_workers_local,
+                        preprocessing_workers=preprocessing_workers,
+                        bed_workers=bed_workers,
                         process_existing=not no_process_existing,
                         monitor=not no_progress,
                         watch=(not no_watch),
@@ -1649,6 +2598,8 @@ def _create_ray_workflow_runner(
                         log_level=log_level_local,
                         preset=preset,
                         workflow_runner=self_ref,
+                        detect_barcodes=self_ref.detect_barcodes,
+                        watch_mode=self_ref.watch_mode,
                         reference=str(reference) if reference else None,
                     )
 
@@ -1662,7 +2613,12 @@ def _create_ray_workflow_runner(
 
                 asyncio.run(_run_with_coordinator())
 
-        return _RayCoreWrapper(reference=reference, target_panel=target_panel)
+        return _RayCoreWrapper(
+            reference=reference,
+            target_panel=target_panel,
+            detect_barcodes=detect_barcodes,
+            watch_mode=watch_mode,
+        )
     except ImportError as e:
         click.echo(
             f"Warning: Ray Core not available ({e}). Falling back to threading-based workflow.",
@@ -1793,6 +2749,8 @@ def _create_workflow_runner(
     bed_workers: int = 1,
     reference: Optional[Path] = None,
     center: str = None,
+    detect_barcodes: bool = True,
+    watch_mode: str = "auto",
 ) -> Any:
     """Create the appropriate workflow runner based on configuration."""
     if analysis_workers < 1:
@@ -1811,6 +2769,8 @@ def _create_workflow_runner(
             target_panel,  # Pass target_panel parameter to Ray workflow runner
             preprocessing_workers=preprocessing_workers,
             bed_workers=bed_workers,
+            detect_barcodes=detect_barcodes,
+            watch_mode=watch_mode,
             reference=reference,  # Pass reference parameter to Ray workflow runner
         )
         if runner is None:
@@ -1826,6 +2786,7 @@ def _create_workflow_runner(
                 bed_workers=bed_workers,
                 reference=reference,
                 center=center,
+                detect_barcodes=detect_barcodes,
             )
         return runner
     else:
@@ -1840,6 +2801,7 @@ def _create_workflow_runner(
             bed_workers=bed_workers,
             reference=reference,
             center=center,
+            detect_barcodes=detect_barcodes,
         )
 
 
@@ -1866,16 +2828,17 @@ def _register_handlers(
         click.echo(f"Using target panel: {target_panel}")
     
     # Track handlers that should accept target_panel
-    handlers_requiring_panel = {"target", "fusion", "cnv"}
+    handlers_requiring_panel = {"target", "fusion", "cnv", "itd"}
     registered_panel_handlers = set()
     
     for (
         queue_type,
         job_type,
-        handler_func,
+        handler_name,
         legacy_queue_type,
         needs_work_dir,
     ) in HANDLER_CONFIGS:
+        handler_func = _load_analysis_handler(handler_name)
         # Determine the actual queue type based on legacy mode
         actual_queue_type = (
             legacy_queue_type
@@ -1909,26 +2872,68 @@ def _register_handlers(
                 final_handler = create_mgmt_handler_with_work_dir_and_ref(
                     handler_func, work_dir, reference
                 )
-            elif job_type == "fusion":
-                # Special handling for fusion analysis with target panel
-                def create_fusion_handler_with_work_dir(
-                    handler, work_dir_path, panel_param
+            elif reference and job_type == "bed_conversion":
+                def create_bed_conversion_handler_with_work_dir_and_ref(
+                    handler, work_dir_path, ref_path
                 ):
                     return lambda job: handler(
-                        job, work_dir=str(work_dir_path), target_panel=job.context.metadata.get("target_panel", panel_param)
+                        job, work_dir=str(work_dir_path), reference=str(ref_path)
                     )
 
+                final_handler = create_bed_conversion_handler_with_work_dir_and_ref(
+                    handler_func, work_dir, reference
+                )
+            elif job_type in ("fusion", "itd"):
+                # Special handling for fusion / ITD analysis with target panel + reference
+                def create_fusion_handler_with_work_dir(
+                    handler, work_dir_path, panel_param, ref_path
+                ):
+                    def _fusion_handler(job):
+                        # Prefer job metadata; fall back to workflow reference
+                        reference = job.context.metadata.get("reference") or (
+                            str(ref_path) if ref_path else None
+                        )
+                        if reference and not job.context.metadata.get("reference"):
+                            job.context.add_metadata("reference", str(reference))
+                        return handler(
+                            job,
+                            work_dir=str(work_dir_path),
+                            target_panel=job.context.metadata.get(
+                                "target_panel", panel_param
+                            ),
+                        )
+
+                    return _fusion_handler
+
                 final_handler = create_fusion_handler_with_work_dir(
-                    handler_func, work_dir, target_panel
+                    handler_func, work_dir, target_panel, reference
                 )
             else:
                 # Standard work directory handling
                 if job_type in ["target", "cnv"]:
-                    # Analysis with work_dir and target_panel
-                    def create_analysis_handler_with_work_dir(handler, work_dir_path, panel_param):
-                        return lambda job: handler(job, work_dir=str(work_dir_path), target_panel=job.context.metadata.get("target_panel", panel_param))
-                    
-                    final_handler = create_analysis_handler_with_work_dir(handler_func, work_dir, target_panel)
+                    # Analysis with work_dir and target_panel (+ reference for CNV master BED)
+                    def create_analysis_handler_with_work_dir(
+                        handler, work_dir_path, panel_param, ref_path
+                    ):
+                        def _analysis_handler(job):
+                            reference = job.context.metadata.get("reference") or (
+                                str(ref_path) if ref_path else None
+                            )
+                            if reference and not job.context.metadata.get("reference"):
+                                job.context.add_metadata("reference", str(reference))
+                            return handler(
+                                job,
+                                work_dir=str(work_dir_path),
+                                target_panel=job.context.metadata.get(
+                                    "target_panel", panel_param
+                                ),
+                            )
+
+                        return _analysis_handler
+
+                    final_handler = create_analysis_handler_with_work_dir(
+                        handler_func, work_dir, target_panel, reference
+                    )
                 else:
                     # Standard work directory handling for other job types
                     def create_handler_with_work_dir(handler, work_dir_path, center_param):
@@ -1941,7 +2946,7 @@ def _register_handlers(
                 return lambda job: handler(job, reference=str(ref_path), target_panel=job.context.metadata.get("target_panel", panel_param))
 
             final_handler = create_handler_with_ref(handler_func, reference, center, target_panel)
-        elif job_type in ["fusion", "cnv"]:
+        elif job_type in ["fusion", "cnv", "itd"]:
             # Analysis with target panel only (no work_dir needed)
             def create_analysis_handler_with_panel(handler, panel_param):
                 return lambda job: handler(job, target_panel=job.context.metadata.get("target_panel", panel_param))
@@ -2027,26 +3032,43 @@ def _register_command_handlers(
                 )
 
 
-def _create_classifier_with_work_dir(work_dir: Path, workflow_steps: List[str], target_panel: str):
+def _create_classifier_with_work_dir(
+    work_dir: Path,
+    workflow_steps: List[str],
+    target_panel: str,
+    itd_config: Optional[dict] = None,
+    *,
+    detect_barcodes: bool = True,
+):
     """Create a classifier function that includes work directory in job context."""
 
     def classifier_with_work_dir(filepath: str) -> List[Job]:
-        jobs = default_file_classifier(filepath, workflow_steps, target_panel)
+        jobs = default_file_classifier(
+            filepath,
+            workflow_steps,
+            target_panel,
+            detect_barcodes=detect_barcodes,
+        )
         for job in jobs:
             job.context.add_metadata("work_dir", str(work_dir))
+            if itd_config:
+                job.context.add_metadata("itd", dict(itd_config))
         return jobs
 
     return classifier_with_work_dir
 
 
 def _validate_inputs(
-    path: Path, workflow: str, analysis_workers: int, ray_num_cpus: Optional[int]
+    path: Optional[Path],
+    workflow: str,
+    analysis_workers: int,
+    ray_num_cpus: Optional[int],
 ) -> None:
     """Validate input parameters and provide helpful error messages."""
-    if not path.exists():
+    if path is not None and not path.exists():
         raise click.BadParameter(f"Path '{path}' does not exist")
 
-    if not path.is_dir():
+    if path is not None and not path.is_dir():
         raise click.BadParameter(f"Path '{path}' is not a directory")
 
     if not workflow.strip():
@@ -2060,7 +3082,7 @@ def _validate_inputs(
 
 
 def _display_workflow_config(
-    path: Path,
+    path: Optional[Path],
     center: str,
     work_dir: Optional[Path],
     workflow_steps: List[str],
@@ -2070,24 +3092,32 @@ def _display_workflow_config(
     deduplicate_jobs: tuple,
     legacy_analysis_queue: bool,
     analysis_workers: int,
+    preprocessing_workers: int,
+    bed_workers: int,
     no_process_existing: bool,
     uses_simplified_format: bool = False,
     original_workflow: str = "",
     use_ray: bool = False,
     ray_num_cpus: Optional[int] = None,
     queue_priority: tuple = (),
+    preset: Optional[str] = None,
 ) -> None:
     """Display workflow configuration information."""
     _echo_styled(f"Center: {center}", level="info")
     
-    if no_process_existing:
-            _echo_styled(
+    if path is None:
+        _echo_styled(
+            "Starting workflow without an initial watch folder; add one from the GUI.",
+            level="info",
+        )
+    elif no_process_existing:
+        _echo_styled(
             f"Starting workflow on {path} for BAM files (skipping existing files)..."
-            )
+        )
     else:
-            _echo_styled(
+        _echo_styled(
             f"Starting workflow on {path} for BAM files (will process existing files first)..."
-            )
+        )
 
     if work_dir:
         _echo_styled(f"Output directory: {work_dir}", level="info")
@@ -2131,9 +3161,21 @@ def _display_workflow_config(
             click.echo(f"  - Ray CPUs: {ray_num_cpus}")
         else:
             click.echo("  - Ray CPUs: auto-detect")
-        click.echo(
-            f"  - Analysis workers per type: {analysis_workers} (distributed across Ray cluster)"
+        click.echo(f"  - Analysis pool concurrency: {analysis_workers}")
+        click.echo(f"  - Preprocessing pool concurrency: {preprocessing_workers}")
+        click.echo(f"  - Bed conversion pool concurrency: {bed_workers}")
+        from robin.workflow_ray import (
+            _max_waiting_per_queue_cap,
+            _waiting_cap_multiplier,
         )
+
+        waiting_mult = _waiting_cap_multiplier(preset)
+        waiting_per_queue = _max_waiting_per_queue_cap(64, waiting_mult)
+        click.echo(f"  - Waiting jobs per queue: {waiting_per_queue}")
+        if waiting_mult != 1:
+            click.echo(
+                f"  - Waiting cap multiplier: {waiting_mult}x (preset={preset or 'standard'})"
+            )
         click.echo(f"  - Log level: {log_level} (applied to all Ray actors)")
 
         # Display priority configuration
@@ -2162,16 +3204,28 @@ def _display_workflow_config(
 
 
 @main.command()
-@click.argument("path", type=click.Path(exists=True, path_type=Path))
+@click.pass_context
+@click.argument(
+    "path",
+    required=False,
+    type=click.Path(path_type=Path),
+)
+@click.option(
+    "--toml",
+    "-t",
+    "toml_config",
+    type=click.Path(exists=True, path_type=Path),
+    help="Path to a TOML file with workflow settings. CLI flags override values from the file.",
+)
 @click.option(
     "--workflow",
     "-w",
-    required=True,
+    default=None,
     help="Workflow plan. Can be specified in two formats:\n1. With queue prefixes: 'preprocessing:bed_conversion,mgmt:mgmt,classification:sturgeon'\n2. Simplified (auto-queue): 'mgmt,sturgeon' - system automatically determines appropriate queue for each job type and adds bed_conversion when needed",
 )
 @click.option(
     "--center",
-    required=True,
+    default=None,
     help="Center ID running the analysis (e.g., 'Sherwood', 'Auckland', 'New York')",
 )
 @click.option(
@@ -2268,13 +3322,24 @@ def _display_workflow_config(
 @click.option(
     "--reference",
     "-r",
-    type=click.Path(exists=True, path_type=Path),
+    type=click.Path(path_type=Path),
     help="Path to reference genome (FASTA format). Required for SNP calling and some other analyses.",
 )
 @click.option(
     "--no-watch",
     is_flag=True,
     help="Do not watch directories for new files (default: watch enabled).",
+)
+@click.option(
+    "--watch-mode",
+    type=click.Choice(["auto", "native", "polling"], case_sensitive=False),
+    default="auto",
+    show_default=True,
+    help=(
+        "Filesystem watch mode: 'auto' uses polling for network filesystems "
+        "such as CIFS/NFS and native filesystem events otherwise; "
+        "'native' forces filesystem events; 'polling' forces directory polling."
+    ),
 )
 @click.option(
     "--with-gui/--no-gui",
@@ -2298,7 +3363,7 @@ def _display_workflow_config(
     "--preset",
     type=click.Choice(["p2i", "standard", "high"]),
     default="standard",
-    help="Execution preset for Ray Core: 'p2i' (2 CPUs cap, 4 grouped actors, concurrency 1), 'standard' (default; 6 CPUs cap, grouped actors, analysis uses analysis_workers), 'high' (per-job-type actors).",
+    help="Execution preset for Ray Core: 'p2i' (2 CPU cap, grouped pools, concurrency 1), 'standard' (default; grouped pools), 'high' (per-job-type actors and more BAM merge/sort threads).",
 )
 @click.option(
     "--ray-dashboard/--no-ray-dashboard",
@@ -2307,14 +3372,21 @@ def _display_workflow_config(
 )
 @click.option(
     "--target-panel",
-    type=click.Choice(_get_available_panels()),
-    required=True,
+    default=None,
     help="Target gene panel for fusion analysis. Use 'robin add-panel' to add custom panels.",
 )
+@click.option(
+    "--disable-barcode-demultiplexing",
+    is_flag=True,
+    default=False,
+    help="Disable barcode detection and barcode-based sample splitting during BAM preprocessing.",
+)
 def workflow(
-    path: Path,
-    workflow: str,
-    center: str,
+    ctx: click.Context,
+    path: Optional[Path],
+    toml_config: Optional[Path],
+    workflow: Optional[str],
+    center: Optional[str],
     commands: tuple[str, ...],
     verbose: bool,
     no_process_existing: bool,
@@ -2337,12 +3409,136 @@ def workflow(
     gui_host: str,
     gui_port: int,
     no_watch: bool,
+    watch_mode: str,
     preset: Optional[str],
     ray_dashboard: bool,
-    target_panel: str,
+    target_panel: Optional[str],
+    disable_barcode_demultiplexing: bool,
 ) -> None:
-    """Run various operations on BAM files in a directory. Preprocessing is automatically included as the first step."""
+    """Run analyses on BAM files.
+
+    PATH is optional when launching the Ray GUI with file watching enabled;
+    in that mode, a watch folder can be added from the GUI after launch.
+    Preprocessing is automatically included as the first step.
+    """
     try:
+        merged = merge_workflow_params(
+            ctx,
+            toml_config,
+            {
+                "path": path,
+                "workflow": workflow,
+                "center": center,
+                "commands": commands,
+                "verbose": verbose,
+                "no_process_existing": no_process_existing,
+                "work_dir": work_dir,
+                "log_level": log_level,
+                "job_log_level": job_log_level,
+                "deduplicate_jobs": deduplicate_jobs,
+                "no_progress": no_progress,
+                "analysis_workers": analysis_workers,
+                "preprocessing_workers": preprocessing_workers,
+                "bed_workers": bed_workers,
+                "legacy_analysis_queue": legacy_analysis_queue,
+                "use_ray": use_ray,
+                "use_ray_core": use_ray_core,
+                "ray_num_cpus": ray_num_cpus,
+                "queue_priority": queue_priority,
+                "show_priorities": show_priorities,
+                "reference": reference,
+                "with_gui": with_gui,
+                "gui_host": gui_host,
+                "gui_port": gui_port,
+                "no_watch": no_watch,
+                "watch_mode": watch_mode,
+                "preset": preset,
+                "ray_dashboard": ray_dashboard,
+                "target_panel": target_panel,
+            },
+        )
+        path = merged["path"]
+        workflow = merged["workflow"]
+        center = merged["center"]
+        commands = merged["commands"]
+        verbose = merged["verbose"]
+        no_process_existing = merged["no_process_existing"]
+        work_dir = merged["work_dir"]
+        log_level = merged["log_level"]
+        job_log_level = merged["job_log_level"]
+        deduplicate_jobs = merged["deduplicate_jobs"]
+        no_progress = merged["no_progress"]
+        analysis_workers = merged["analysis_workers"]
+        preprocessing_workers = merged["preprocessing_workers"]
+        bed_workers = merged["bed_workers"]
+        legacy_analysis_queue = merged["legacy_analysis_queue"]
+        use_ray = merged["use_ray"]
+        use_ray_core = merged["use_ray_core"]
+        ray_num_cpus = merged["ray_num_cpus"]
+        queue_priority = merged["queue_priority"]
+        show_priorities = merged["show_priorities"]
+        reference = merged["reference"]
+        with_gui = merged["with_gui"]
+        gui_host = merged["gui_host"]
+        gui_port = merged["gui_port"]
+        no_watch = merged["no_watch"]
+        watch_mode = merged["watch_mode"]
+        preset = merged["preset"]
+        ray_dashboard = merged["ray_dashboard"]
+        target_panel = merged["target_panel"]
+
+        from robin.runtime_limits import publish_workflow_preset
+
+        bam_io_threads = publish_workflow_preset(preset)
+        _echo_styled(
+            f"BAM I/O threads: {bam_io_threads} (preset={preset or 'standard'}; override with ROBIN_BAM_IO_THREADS)",
+            level="info",
+        )
+
+        # Configure barcode preprocessing behavior
+        detect_barcodes = not disable_barcode_demultiplexing
+
+        if reference is not None and not reference.exists():
+            raise click.BadParameter(f"Reference genome does not exist: {reference}")
+
+        available_panels = _get_available_panels()
+        if target_panel not in available_panels:
+            raise click.BadParameter(
+                f"Invalid target panel '{target_panel}'. "
+                f"Choose from: {', '.join(available_panels)}"
+            )
+
+        itd_cfg = merged.get("itd")
+        if isinstance(itd_cfg, dict):
+            try:
+                from robin.analysis.itd_analysis import configure_itd_defaults
+
+                configure_itd_defaults(
+                    itd_cfg,
+                    work_dir=merged.get("work_dir"),
+                )
+                _echo_styled(
+                    f"ITD config: {itd_cfg}",
+                    level="info",
+                )
+            except Exception:
+                pass
+
+        if toml_config is not None:
+            try:
+                from robin.readfish.analysis_hook import write_workflow_toml_pointer
+
+                resolved_toml = str(Path(toml_config).expanduser().resolve())
+                os.environ["ROBIN_WORKFLOW_TOML"] = resolved_toml
+                if work_dir is not None:
+                    write_workflow_toml_pointer(work_dir, resolved_toml)
+            except Exception:
+                LOGGER = logging.getLogger(__name__)
+                LOGGER.debug(
+                    "Could not publish ROBIN_WORKFLOW_TOML for readfish analysis",
+                    exc_info=True,
+                )
+
         # Check for required model files first
         _check_models_or_exit()
         
@@ -2379,6 +3575,15 @@ def workflow(
             sys.exit(1)
 
         _warn_if_process_large_bams()
+
+        if path is None and (
+            not use_ray or no_watch or not with_gui or work_dir is None
+        ):
+            raise click.BadParameter(
+                "PATH may be omitted only when the Ray workflow, file watching, "
+                "GUI, and --work-dir are enabled so a watch folder can be added "
+                "after launch."
+            )
 
         # Validate input parameters
         _validate_inputs(path, workflow, analysis_workers, ray_num_cpus)
@@ -2467,12 +3672,15 @@ def workflow(
                 deduplicate_jobs=deduplicate_jobs,
                 legacy_analysis_queue=legacy_analysis_queue,
                 analysis_workers=analysis_workers,
+                preprocessing_workers=preprocessing_workers,
+                bed_workers=bed_workers,
                 no_process_existing=no_process_existing,
                 uses_simplified_format=uses_simplified_format,
                 original_workflow=workflow,
                 use_ray=True,
                 ray_num_cpus=ray_num_cpus,
                 queue_priority=queue_priority,
+                preset=preset,
             )
 
             # Create workflow runner for Ray workflow (needed for GUI integration)
@@ -2487,6 +3695,8 @@ def workflow(
                 reference=reference,  # Add reference parameter for Ray workflow too
                 center=center,
                 target_panel=target_panel,
+                detect_barcodes=detect_barcodes,
+                watch_mode=watch_mode,
             )
 
             # Run Ray Core implementation
@@ -2497,12 +3707,15 @@ def workflow(
                 asyncio.run(
                     wrn.run(
                         plan=workflow_steps,
-                        paths=[str(path)],
+                        paths=[str(path)] if path is not None else [],
                         target_panel=target_panel,
                         analysis_workers=analysis_workers,
+                        preprocessing_workers=preprocessing_workers,
+                        bed_workers=bed_workers,
                         process_existing=not no_process_existing,
                         monitor=not no_progress,
                         watch=(not no_watch),
+                        watch_mode=watch_mode,
                         patterns=["*.bam"],
                         ignore_patterns=None,
                         recursive=True,
@@ -2513,7 +3726,12 @@ def workflow(
                         reference=str(reference) if reference else None,
                         gui_host=gui_host,
                         gui_port=gui_port,
+                        with_gui=with_gui,
                         center=center,
+                        detect_barcodes=detect_barcodes,
+                        workflow_toml=(
+                            str(toml_config.resolve()) if toml_config else None
+                        ),
                     )
                 )
             except KeyboardInterrupt:
@@ -2568,6 +3786,8 @@ def workflow(
             reference=reference,
             center=center,
             target_panel=target_panel,
+            detect_barcodes=detect_barcodes,
+            watch_mode=watch_mode,
         )
 
         # Handle Ray-specific configuration
@@ -2621,7 +3841,13 @@ def workflow(
         # Create classifier function
         classifier_func = None
         if work_dir:
-            classifier_func = _create_classifier_with_work_dir(work_dir, workflow_steps, target_panel)
+            classifier_func = _create_classifier_with_work_dir(
+                work_dir,
+                workflow_steps,
+                target_panel,
+                itd_config=itd_cfg if isinstance(itd_cfg, dict) else None,
+                detect_barcodes=detect_barcodes,
+            )
 
         # Display configuration
         _display_workflow_config(
@@ -2635,12 +3861,15 @@ def workflow(
             deduplicate_jobs=deduplicate_jobs,
             legacy_analysis_queue=legacy_analysis_queue,
             analysis_workers=analysis_workers,
+            preprocessing_workers=preprocessing_workers,
+            bed_workers=bed_workers,
             no_process_existing=no_process_existing,
             uses_simplified_format=uses_simplified_format,
             original_workflow=original_workflow_string,
             use_ray=use_ray,
             ray_num_cpus=ray_num_cpus,
             queue_priority=queue_priority,
+            preset=preset,
         )
 
         # Launch GUI if requested
@@ -2662,6 +3891,7 @@ def workflow(
                         workflow_steps=workflow_steps,
                         monitored_directory=str(work_dir) if work_dir else str(path),
                         center=center,
+                        workflow_toml=str(toml_config.resolve()) if toml_config else None,
                     )
 
                     # Now install workflow hooks for real-time monitoring
@@ -2682,6 +3912,8 @@ def workflow(
                     print(f"   Welcome page: {base_url}/")
                     print(f"   Workflow monitor: {base_url}/robin")
                     print(f"   Sample tracking: {base_url}/live_data")
+                    if gui_launcher.minknow_gui_enabled:
+                        print(f"   Sequencer (MinKNOW): {base_url}/minknow")
                     print(f"   Individual samples: {base_url}/live_data/sampleID/")
                     print(
                         "   Open your browser to monitor the workflow with the new navigation structure"

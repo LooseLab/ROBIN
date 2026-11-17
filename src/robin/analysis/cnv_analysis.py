@@ -81,7 +81,8 @@ import pickle
 import gc
 import subprocess
 import sys
-from typing import Dict, Optional, List, Tuple
+from functools import lru_cache
+from typing import Any, Dict, Optional, List, Tuple
 from dataclasses import dataclass
 
 import numpy as np
@@ -104,6 +105,10 @@ CHUNK_SIZE = 1000  # For processing large arrays in chunks
 # Set to False to use direct execution (new approach, default)
 # To revert to subprocess mode, change this to: USE_CNV_SUBPROCESS = True
 USE_CNV_SUBPROCESS = False
+
+# Drop CNV candidate breakpoints that fall in centromeric satellite regions or
+# within this margin of either chromosome tip (telomere proximity).
+BREAKPOINT_TELOMERE_MARGIN_BP = 1_000_000
 
 
 # Global cache for reference CNV dict to avoid reloading for every sample
@@ -319,19 +324,18 @@ def run_cnv_analysis_direct(
         pass1_time = time.time() - pass1_start
         logger.info(f"Pass 1 completed in {pass1_time:.2f}s (bin_width: {result.bin_width}, variance: {result.variance:.6f})")
 
-        # Second pass: process against reference using the same bin width
-        logger.debug(f"Starting Pass 2: Reference CNV extraction with {threads} threads")
+        # Reference track from packaged control counts only (no sample BAM).
+        # Re-reading the sample BAM onto the control previously contaminated CNV2.
         pass2_start = time.time()
-        result2 = cnv_from_bam.iterate_bam_file(
-            bam_path,
-            _threads=threads,
-            mapq_filter=mapq_filter,
-            copy_numbers=ref_cnv_dict_loaded,
-            log_level=int(logging.ERROR),
-            bin_width=result.bin_width,  # Use the same bin width as the sample
+        r2_cnv = build_reference_cnv_from_counts(
+            ref_cnv_dict_loaded,
+            int(result.bin_width),
         )
         pass2_time = time.time() - pass2_start
-        logger.info(f"Pass 2 completed in {pass2_time:.2f}s")
+        logger.info(
+            f"Pass 2 completed in {pass2_time:.2f}s "
+            f"(uncontaminated reference at bin_width={result.bin_width})"
+        )
         logger.info(f"Total CNV extraction time: {pass1_time + pass2_time:.2f}s")
 
         # Prepare results
@@ -341,7 +345,7 @@ def run_cnv_analysis_direct(
             "r_bin": result.bin_width,
             "r_var": result.variance,
             "genome_length": result.genome_length,
-            "r2_cnv": result2.cnv,
+            "r2_cnv": r2_cnv,
             "updated_copy_numbers": copy_numbers,  # The mutated copy_numbers
             "timing": {
                 "pass1_time": pass1_time,
@@ -633,6 +637,406 @@ def pad_arrays(
     return arr1, arr2
 
 
+def compute_cnv_log2_ratio(
+    sample_cnv: Dict[str, np.ndarray],
+    ref_cnv: Dict[str, np.ndarray],
+) -> Dict[str, np.ndarray]:
+    """Moving-averaged log2(sample/reference) per chromosome."""
+    log2_ratios: Dict[str, np.ndarray] = {}
+    for key, sample_values in sample_cnv.items():
+        if key not in ref_cnv:
+            continue
+        ma1 = moving_average(np.asarray(sample_values, dtype=float))
+        ma2 = moving_average(np.asarray(ref_cnv[key], dtype=float))
+        ma1, ma2 = pad_arrays(ma1, ma2, pad_value=0)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            ratio = np.divide(
+                ma1,
+                ma2,
+                out=np.full_like(ma1, np.nan, dtype=float),
+                where=ma2 > 0,
+            )
+            log2_ratios[key] = np.log2(ratio)
+    return log2_ratios
+
+
+def expected_cnv_ploidy_baseline(
+    chromosome: str,
+    sex_estimate: Optional[str] = None,
+) -> Optional[float]:
+    """Expected normal copy number for log2 ratio from absolute ploidy tracks."""
+    from robin.analysis.cnv_regional import is_reportable_chromosome
+
+    if not is_reportable_chromosome(chromosome):
+        return None
+    sex = str(sex_estimate or "").strip().upper()
+    is_male = sex in ("MALE", "XY", "M")
+    if chromosome == "chrY":
+        return 1.0 if is_male else None
+    if chromosome == "chrX":
+        return 1.0 if is_male else 2.0
+    return 2.0
+
+
+# Reference (CNV2) bins at or below this are treated as unmappable and excluded
+# from the log2 calling track. Matches the visual rule that a flat-zero CNV3
+# difference (sample≈ref≈0) must not yield gain/loss calls.
+CNV_REF_MAPPABILITY_EPS = 0.0
+
+# Region/arm/band must retain at least this fraction of finite (mappable) bins
+# after the CNV2 mask before GAIN/LOSS may be called. Blocks sparsely mapped
+# short arms (e.g. chr21/22 p) where only residual bins survive the mask.
+CNV_MAPPABILITY_MIN_FRACTION = 0.40
+
+
+def region_mappable_fraction(values: np.ndarray) -> float:
+    """Fraction of bins that are finite (mappable) in a region array."""
+    arr = np.asarray(values, dtype=float).ravel()
+    if arr.size == 0:
+        return 0.0
+    return float(np.mean(np.isfinite(arr)))
+
+
+def region_has_mappable_support(
+    values: np.ndarray,
+    *,
+    min_fraction: float = CNV_MAPPABILITY_MIN_FRACTION,
+) -> bool:
+    """True when a region has enough mappable bins to allow gain/loss calling."""
+    return region_mappable_fraction(values) >= float(min_fraction)
+
+
+def _mappable_mask_from_reference(
+    sample_vals: np.ndarray,
+    ref_vals: Optional[np.ndarray],
+    *,
+    eps: float = CNV_REF_MAPPABILITY_EPS,
+) -> np.ndarray:
+    """Boolean mask: True where reference has usable (mappable) signal.
+
+    When ``ref_vals`` is None the whole sample is treated as mappable (legacy
+    callers without CNV2). When provided, bins with ref ≤ ``eps`` — and any
+    sample bins beyond the reference length — are unmappable.
+    """
+    vals = np.asarray(sample_vals, dtype=float).ravel()
+    if ref_vals is None:
+        return np.ones(vals.shape, dtype=bool)
+    ref = np.asarray(ref_vals, dtype=float).ravel()
+    mask = np.zeros(vals.shape, dtype=bool)
+    n = min(vals.size, ref.size)
+    if n:
+        mask[:n] = np.isfinite(ref[:n]) & (ref[:n] > eps)
+    return mask
+
+
+def compute_cnv_log2_from_ploidy(
+    cnv_map: Dict[str, np.ndarray],
+    sex_estimate: Optional[str] = None,
+    ref_cnv_map: Optional[Dict[str, np.ndarray]] = None,
+    *,
+    ref_mappability_eps: float = CNV_REF_MAPPABILITY_EPS,
+) -> Dict[str, np.ndarray]:
+    """log2(observed ploidy / expected copy number) per bin.
+
+    Matches the interpretation of the GUI ploidy scatter plot: a region at
+    3 copies on an autosome (expected 2) yields log2(3/2) ≈ 0.585.
+
+    When ``ref_cnv_map`` (CNV2) is provided, bins with reference ploidy ≤
+    ``ref_mappability_eps`` are set to NaN so unmappable loci cannot be called
+    as gains or losses. Chromosomes absent from the reference are fully masked.
+    """
+    log2_ratios: Dict[str, np.ndarray] = {}
+    for chrom, values in cnv_map.items():
+        baseline = expected_cnv_ploidy_baseline(chrom, sex_estimate)
+        if baseline is None or baseline <= 0:
+            continue
+        vals = np.asarray(values, dtype=float)
+        ref_vals = None
+        if ref_cnv_map is not None:
+            if chrom not in ref_cnv_map:
+                log2_ratios[chrom] = np.full(vals.shape, np.nan, dtype=float)
+                continue
+            ref_vals = ref_cnv_map[chrom]
+        mappable = _mappable_mask_from_reference(
+            vals, ref_vals, eps=ref_mappability_eps
+        )
+        with np.errstate(divide="ignore", invalid="ignore"):
+            ratio = np.divide(
+                vals,
+                baseline,
+                out=np.full_like(vals, np.nan, dtype=float),
+                where=(vals > 0) & mappable,
+            )
+            log2_ratios[chrom] = np.log2(ratio)
+    return log2_ratios
+
+
+def resolve_cnv_calling_track(
+    cnv_map: Dict[str, np.ndarray],
+    sex_estimate: Optional[str] = None,
+    ref_cnv_map: Optional[Dict[str, np.ndarray]] = None,
+    *,
+    ref_mappability_eps: float = CNV_REF_MAPPABILITY_EPS,
+) -> Dict[str, np.ndarray]:
+    """Bin-level track for arm/whole-chromosome CNV event calling.
+
+    Returns log2(observed ploidy / expected copy number) per chromosome; 0 is
+    normal for that chromosome and sex. Matches the GUI CNV log2 ratio plot.
+    Pass ``ref_cnv_map`` (CNV2) to mask unmappable bins to NaN.
+    """
+    return compute_cnv_log2_from_ploidy(
+        cnv_map,
+        sex_estimate,
+        ref_cnv_map,
+        ref_mappability_eps=ref_mappability_eps,
+    )
+
+
+# Gene representative value: mean of bins spanning the gene, with focal rescue.
+# A single bin at >= this multiple of the calling cut-off is kept at its own depth
+# so real focal events are not diluted by flanking neutral bins.
+GENE_FOCAL_RESCUE_MULTIPLE = 3.0
+
+# Packaged control pickle stores mapping-start counts in fixed-width bins
+# (cnv_from_bam default ``bin_size``).
+REF_COUNT_BIN_SIZE = 1000
+
+
+def gene_region_cnv_value(
+    values: np.ndarray,
+    *,
+    start_pos: float,
+    end_pos: float,
+    bin_width: int,
+    calling_cutoff: float = 0.3,
+    focal_rescue_multiple: float = GENE_FOCAL_RESCUE_MULTIPLE,
+) -> Optional[float]:
+    """Representative CNV for a gene interval: mean, with focal rescue.
+
+    Uses the mean of finite bins overlapping ``[start_pos, end_pos]``. If any
+    single bin reaches ``focal_rescue_multiple × |calling_cutoff|`` from zero,
+    that bin's own depth is returned instead (most extreme such bin wins).
+
+    This replaces the biased max-|bin| estimator that over-called large genes
+    on flat chromosomes.
+    """
+    arr = np.asarray(values, dtype=float)
+    if arr.size == 0 or bin_width <= 0:
+        return None
+    start_bin = max(0, int(start_pos // bin_width))
+    end_bin = min(arr.size - 1, int(end_pos // bin_width))
+    if end_bin < start_bin:
+        return None
+    region = arr[start_bin : end_bin + 1]
+    finite = region[np.isfinite(region)]
+    if finite.size == 0:
+        return None
+
+    rescue_thr = float(focal_rescue_multiple) * abs(float(calling_cutoff))
+    if rescue_thr > 0:
+        extreme = finite[np.abs(finite) >= rescue_thr]
+        if extreme.size:
+            return float(extreme[np.argmax(np.abs(extreme))])
+    return float(np.mean(finite))
+
+
+def build_reference_cnv_from_counts(
+    ref_count_bins: Dict[str, Any],
+    bin_width: int,
+    *,
+    bin_size: int = REF_COUNT_BIN_SIZE,
+    ploidy: float = 2.0,
+) -> Dict[str, np.ndarray]:
+    """Build an uncontaminated reference ploidy track from control count bins.
+
+    The packaged control pickle holds per-contig mapping-start counts at
+    ``bin_size`` (default 1000 bp). Previously the second CNV pass re-read the
+    *sample* BAM on top of those counts, so the reference inherited the
+    sample's own aberrations. This mirrors ``cnv_from_bam``'s chunk + median
+    normalisation **without** adding sample reads:
+
+        CN = sum(count chunk) / median(all chunk sums) * ploidy
+    """
+    bw = max(int(bin_width), int(bin_size))
+    chunk_size = max(1, bw // int(bin_size))
+
+    chunk_sums_by_chrom: Dict[str, List[float]] = {}
+    all_sums: List[float] = []
+    for chrom, counts in ref_count_bins.items():
+        arr = np.asarray(counts, dtype=float).ravel()
+        if arr.size == 0:
+            continue
+        sums = [
+            float(np.sum(arr[i : i + chunk_size]))
+            for i in range(0, arr.size, chunk_size)
+        ]
+        if not sums:
+            continue
+        chunk_sums_by_chrom[str(chrom)] = sums
+        all_sums.extend(sums)
+
+    if not all_sums:
+        return {}
+
+    median_value = float(np.median(all_sums))
+    if not np.isfinite(median_value) or median_value <= 0:
+        median_value = 1.0
+
+    scale = float(ploidy) / median_value
+    return {
+        chrom: np.asarray(sums, dtype=float) * scale
+        for chrom, sums in chunk_sums_by_chrom.items()
+    }
+
+
+CNV_CALLING_MIN_BIN_WIDTH = 1_000_000
+
+
+def resolve_cnv_calling_bin_width(
+    analysis_bin_width: int,
+    min_calling_bin_width: int = CNV_CALLING_MIN_BIN_WIDTH,
+) -> int:
+    """Effective bin width for arm/whole-chromosome calling (at least 1 Mb)."""
+    analysis_bw = max(int(analysis_bin_width), 1)
+    return max(analysis_bw, int(min_calling_bin_width))
+
+
+def coarsen_cnv_track_values(
+    values_1d: np.ndarray,
+    analysis_bin_width: int,
+    calling_bin_width: int,
+) -> np.ndarray:
+    """Average adjacent analysis bins up to the calling bin width."""
+    values = np.asarray(values_1d, dtype=float)
+    if calling_bin_width <= analysis_bin_width:
+        return values
+    group_size = max(1, int(np.ceil(calling_bin_width / analysis_bin_width)))
+    effective_bw = group_size * analysis_bin_width
+    if effective_bw <= analysis_bin_width:
+        return values
+    _, coarsened = downsample_cnv_for_plot(values, analysis_bin_width, effective_bw)
+    return coarsened
+
+
+def coarsen_cnv_track(
+    cnv_map: Dict[str, np.ndarray],
+    analysis_bin_width: int,
+    calling_bin_width: Optional[int] = None,
+) -> Dict[str, np.ndarray]:
+    """Coarsen per-chromosome CNV arrays for event calling."""
+    calling_bw = resolve_cnv_calling_bin_width(
+        analysis_bin_width,
+        calling_bin_width or CNV_CALLING_MIN_BIN_WIDTH,
+    )
+    out: Dict[str, np.ndarray] = {}
+    for chrom, values in cnv_map.items():
+        out[chrom] = coarsen_cnv_track_values(values, analysis_bin_width, calling_bw)
+    return out
+
+
+def prepare_cnv_calling_track(
+    cnv_map: Dict[str, np.ndarray],
+    analysis_bin_width: int,
+    sex_estimate: Optional[str] = None,
+    min_calling_bin_width: int = CNV_CALLING_MIN_BIN_WIDTH,
+    ref_cnv_map: Optional[Dict[str, np.ndarray]] = None,
+    *,
+    ref_mappability_eps: float = CNV_REF_MAPPABILITY_EPS,
+) -> Tuple[Dict[str, np.ndarray], int, Dict[str, np.ndarray]]:
+    """Log2 calling track coarsened to at least ``min_calling_bin_width``.
+
+    When ``ref_cnv_map`` (CNV2) is supplied, unmappable reference bins are
+    NaN-masked before coarsening so arm/whole-chromosome callers inherit the
+    mappability gate.
+
+    Returns ``(calling_track, calling_bin_width, analysis_log2_track)``. The
+    analysis-resolution track is used for the ≥40% mappable-bin support check.
+    """
+    log2_track = resolve_cnv_calling_track(
+        cnv_map,
+        sex_estimate,
+        ref_cnv_map,
+        ref_mappability_eps=ref_mappability_eps,
+    )
+    calling_bw = resolve_cnv_calling_bin_width(analysis_bin_width, min_calling_bin_width)
+    return (
+        coarsen_cnv_track(log2_track, analysis_bin_width, calling_bw),
+        calling_bw,
+        log2_track,
+    )
+
+
+CNV_REPORT_GENOME_PLOT_BIN_WIDTH = 1_000_000
+
+
+def resolve_cnv_plot_bin_width(
+    analysis_bin_width: int,
+    plot_bin_width: Optional[int] = None,
+) -> int:
+    """Resolve display bin width the same way as the GUI CNV plot selector."""
+    if plot_bin_width is None or plot_bin_width <= 0:
+        return int(analysis_bin_width)
+    return max(int(plot_bin_width), int(analysis_bin_width))
+
+
+def downsample_cnv_for_plot(
+    values_1d: np.ndarray,
+    analysis_bin_width: int,
+    plot_bin_width: int,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """Downsample CNV values when plot_bin_width > analysis_bin_width.
+
+    Returns (x_positions_bp, values) where x is in genomic bp within the
+    chromosome. If plot_bin_width <= analysis_bin_width, returns original
+    positions and values unchanged.
+    """
+    values = np.asarray(values_1d, dtype=float)
+    if plot_bin_width <= analysis_bin_width or plot_bin_width <= 0:
+        x_bp = np.arange(len(values), dtype=float) * analysis_bin_width
+        return x_bp, values
+    group_size = int(plot_bin_width / analysis_bin_width)
+    if group_size < 1:
+        x_bp = np.arange(len(values), dtype=float) * analysis_bin_width
+        return x_bp, values
+    n = len(values)
+    n_trim = (n // group_size) * group_size
+    if n_trim == 0:
+        x_bp = np.arange(n, dtype=float) * analysis_bin_width
+        return x_bp, values
+    trimmed = values[:n_trim]
+    grouped = trimmed.reshape(-1, group_size)
+    # nanmean so CNV2-masked (NaN) bins do not zero out mappable neighbours;
+    # all-NaN groups stay NaN without a RuntimeWarning.
+    finite_counts = np.sum(np.isfinite(grouped), axis=1)
+    sums = np.nansum(grouped, axis=1)
+    values_out = np.divide(
+        sums,
+        finite_counts,
+        out=np.full(sums.shape, np.nan, dtype=float),
+        where=finite_counts > 0,
+    )
+    # Centre each display bin in analysis-bin coordinates (not nominal plot_bin_width).
+    x_bp = (np.arange(len(values_out)) * group_size + (group_size / 2.0)) * analysis_bin_width
+    return x_bp, values_out
+
+
+def downsample_cnv_chromosome_track(
+    values_1d: np.ndarray,
+    analysis_bin_width: int,
+    plot_bin_width: Optional[int] = None,
+) -> Tuple[np.ndarray, np.ndarray, float]:
+    """GUI-aligned per-chromosome CNV track for plotting.
+
+    Returns (position_mb, values, x_max_mb). The x-axis maximum is always the
+    full chromosome span from analysis bins, even when display bins are wider.
+    """
+    values = np.asarray(values_1d, dtype=float)
+    resolved_plot_bw = resolve_cnv_plot_bin_width(analysis_bin_width, plot_bin_width)
+    x_bp, plot_values = downsample_cnv_for_plot(values, analysis_bin_width, resolved_plot_bw)
+    x_max_mb = len(values) * analysis_bin_width / 1_000_000.0
+    return x_bp / 1_000_000.0, plot_values, x_max_mb
+
+
 def has_reads(bam_file: str) -> bool:
     """Quickly checks if a BAM file has any reads."""
     try:
@@ -693,7 +1097,106 @@ def estimate_sex_from_cnv(cnv_data: Dict, logger) -> str:
         return "Unknown"
 
 
-def detect_breakpoints_from_cnv(cnv_data: Dict, bin_width: int, logger) -> List[Dict]:
+@lru_cache(maxsize=1)
+def _load_centromere_intervals() -> Dict[str, Tuple[Tuple[int, int], ...]]:
+    """Load packaged ``cenSatRegions.bed`` as chrom -> immutable (start, end) tuples."""
+    regions: Dict[str, List[Tuple[int, int]]] = {}
+    try:
+        import importlib.resources as importlib_resources
+
+        res_path = importlib_resources.files("robin.resources") / "cenSatRegions.bed"
+        with res_path.open("r", encoding="utf-8") as handle:
+            for line in handle:
+                parts = line.strip().split("\t")
+                if len(parts) < 3:
+                    continue
+                chrom = parts[0]
+                start = int(parts[1])
+                end = int(parts[2])
+                if end <= start:
+                    continue
+                regions.setdefault(chrom, []).append((start, end))
+    except Exception:
+        return {}
+    return {chrom: tuple(intervals) for chrom, intervals in regions.items()}
+
+
+def _intervals_overlap(a_start: int, a_end: int, b_start: int, b_end: int) -> bool:
+    return a_start < b_end and b_start < a_end
+
+
+def filter_breakpoints_by_centromere_and_telomere(
+    breakpoints: List[Dict],
+    chrom_lengths: Dict[str, int],
+    *,
+    telomere_margin_bp: int = BREAKPOINT_TELOMERE_MARGIN_BP,
+    centromeres: Optional[Dict[str, Tuple[Tuple[int, int], ...]]] = None,
+    logger=None,
+) -> List[Dict]:
+    """Remove breakpoints overlapping centromeres or chromosome-end margins.
+
+    A breakpoint ``[start, end)`` is dropped when it overlaps:
+    - any interval from ``cenSatRegions.bed`` on the same chromosome, or
+    - ``[0, telomere_margin_bp)`` or
+      ``[chrom_length - telomere_margin_bp, chrom_length)`` when length is known.
+    """
+    if not breakpoints:
+        return []
+
+    centro = centromeres if centromeres is not None else _load_centromere_intervals()
+    margin = max(0, int(telomere_margin_bp))
+    kept: List[Dict] = []
+    dropped = 0
+
+    for bp in breakpoints:
+        chrom = bp.get("chromosome") or bp.get("chrom")
+        try:
+            start = int(bp["start"])
+            end = int(bp["end"])
+        except (KeyError, TypeError, ValueError):
+            dropped += 1
+            continue
+        if end <= start or chrom is None:
+            dropped += 1
+            continue
+
+        chrom_length = int(chrom_lengths.get(chrom, 0) or 0)
+        near_telomere = False
+        if margin > 0:
+            if _intervals_overlap(start, end, 0, margin):
+                near_telomere = True
+            elif chrom_length > 0:
+                tip_start = max(0, chrom_length - margin)
+                if _intervals_overlap(start, end, tip_start, chrom_length):
+                    near_telomere = True
+
+        in_centromere = False
+        for cen_start, cen_end in centro.get(chrom, ()):
+            if _intervals_overlap(start, end, int(cen_start), int(cen_end)):
+                in_centromere = True
+                break
+
+        if near_telomere or in_centromere:
+            dropped += 1
+            continue
+        kept.append(bp)
+
+    if logger is not None and dropped:
+        logger.info(
+            "Filtered %s/%s CNV breakpoints in centromeres or within %s bp of chromosome ends",
+            dropped,
+            dropped + len(kept),
+            margin,
+        )
+    return kept
+
+
+def detect_breakpoints_from_cnv(
+    cnv_data: Dict,
+    bin_width: int,
+    logger,
+    penalty_value: Optional[int] = None,
+) -> List[Dict]:
     """
     Detect breakpoints in CNV data using change point detection.
 
@@ -701,21 +1204,31 @@ def detect_breakpoints_from_cnv(cnv_data: Dict, bin_width: int, logger) -> List[
         cnv_data: Dictionary containing CNV data
         bin_width: Width of bins
         logger: Logger instance
+        penalty_value: ruptures KernelCPD penalty. When None, resolves from
+            workflow TOML ``[cnv] penalty_value`` (default 10).
 
     Returns:
-        List of detected breakpoints
+        List of detected breakpoints after centromere / telomere-proximity filtering
     """
     breakpoints = []
 
+    if penalty_value is None:
+        from robin.workflow_config import get_cnv_penalty_value
+
+        penalty_value = get_cnv_penalty_value()
+    penalty_value = int(penalty_value)
+
     try:
-        logger.debug("Detecting breakpoints in CNV data")
+        logger.debug(
+            "Detecting breakpoints in CNV data (penalty_value=%s)", penalty_value
+        )
 
         # Simple sequential processing for all datasets
         for key, data in cnv_data.items():
             if key != "chrM" and len(data) > 3:
                 try:
                     paired_changepoints = run_ruptures(
-                        data, penalty_value=10, bin_width=bin_width
+                        data, penalty_value=penalty_value, bin_width=bin_width
                     )
 
                     for start, end in paired_changepoints:
@@ -731,8 +1244,22 @@ def detect_breakpoints_from_cnv(cnv_data: Dict, bin_width: int, logger) -> List[
                 except Exception as e:
                     logger.debug(f"Error processing chromosome {key}: {e}")
 
-        logger.debug(f"Detected {len(breakpoints)} breakpoints")
-        return breakpoints
+        chrom_lengths = {
+            key: int(len(data) * bin_width)
+            for key, data in cnv_data.items()
+            if key != "chrM"
+        }
+        filtered = filter_breakpoints_by_centromere_and_telomere(
+            breakpoints,
+            chrom_lengths,
+            logger=logger,
+        )
+        logger.debug(
+            "Detected %s breakpoints (%s after centromere/telomere filter)",
+            len(breakpoints),
+            len(filtered),
+        )
+        return filtered
 
     except Exception as e:
         logger.error(f"Error in breakpoint detection: {e}")
@@ -777,6 +1304,18 @@ def calculate_chromosome_stats_from_cnv(cnv_data: Dict, logger) -> Dict:
         return {}
 
 
+def _read_analysis_counter_from_disk(sample_id: str, work_dir: str) -> int:
+    """Read the analysis counter directly from disk (no cache)."""
+    counter_file = os.path.join(work_dir, sample_id, "cnv_analysis_counter.txt")
+    if not os.path.exists(counter_file):
+        return 0
+    try:
+        with open(counter_file, "r") as f:
+            return int(f.read().strip())
+    except (ValueError, IOError):
+        return 0
+
+
 def load_analysis_counter(sample_id: str, work_dir: str, logger) -> int:
     """Load the analysis counter for a sample from disk with caching"""
     # Check cache first
@@ -786,14 +1325,7 @@ def load_analysis_counter(sample_id: str, work_dir: str, logger) -> int:
         return cache['analysis_counter']
     
     # Load from disk
-    counter_file = os.path.join(work_dir, sample_id, "cnv_analysis_counter.txt")
-    result = 0
-    if os.path.exists(counter_file):
-        try:
-            with open(counter_file, "r") as f:
-                result = int(f.read().strip())
-        except (ValueError, IOError) as e:
-            logger.warning(f"Error loading counter for {sample_id}: {e}")
+    result = _read_analysis_counter_from_disk(sample_id, work_dir)
     
     # Cache the result
     cache['analysis_counter'] = result
@@ -817,7 +1349,45 @@ def save_analysis_counter(sample_id: str, counter: int, work_dir: str, logger) -
         logger.error(f"Error saving counter for {sample_id}: {e}")
 
 
-def find_significant_regions(values, chrom, bin_width):
+def allocate_next_analysis_counter(
+    sample_id: str, work_dir: str, logger=None
+) -> int:
+    """
+    Atomically increment the shared BED/CNV analysis counter and return the new value.
+
+    Every BED content update (CNV regions, breakpoints, fusion beds, master BED)
+    should call this so each write gets a new ``*_NNN.bed`` filename instead of
+    overwriting a previous version.
+    """
+    from robin.analysis.master_bed_generator import FileLock
+
+    log = logger or logging.getLogger("robin.cnv")
+    sample_dir = os.path.join(work_dir, sample_id)
+    lock_file = os.path.join(sample_dir, "_locks", "analysis_counter.lock")
+    counter_file = os.path.join(sample_dir, "cnv_analysis_counter.txt")
+
+    with FileLock(lock_file, timeout=60.0):
+        current = _read_analysis_counter_from_disk(sample_id, work_dir)
+        new_counter = current + 1
+        os.makedirs(sample_dir, exist_ok=True)
+        with open(counter_file, "w") as f:
+            f.write(str(new_counter))
+        update_sample_cache(sample_id, analysis_counter=new_counter)
+        log.debug(
+            "Allocated analysis counter %s for %s (was %s)",
+            new_counter,
+            sample_id,
+            current,
+        )
+        return new_counter
+
+
+def find_significant_regions(
+    values,
+    chrom,
+    bin_width,
+    min_contiguous_bins: int = 1,
+):
     """
     Find regions with significant CNV changes and merge adjacent regions.
 
@@ -825,12 +1395,15 @@ def find_significant_regions(values, chrom, bin_width):
         values: CNV values for a chromosome
         chrom: Chromosome name
         bin_width: Width of bins in base pairs
+        min_contiguous_bins: Minimum length of a same-sign significant run
+            (in bins) required to emit a gain/loss region. Default 1.
 
     Returns:
         List of significant regions (merged adjacent regions)
     """
     regions = []
     threshold = 0.5  # CNV change threshold
+    min_bins = max(1, int(min_contiguous_bins))
 
     # Use numpy for better performance
     values_array = np.array(values)
@@ -839,6 +1412,19 @@ def find_significant_regions(values, chrom, bin_width):
     # If no significant regions, return empty list
     if len(significant_indices) == 0:
         return regions
+
+    def _maybe_append(start_idx: int, end_idx: int, region_type: str) -> None:
+        n_bins = int(end_idx) - int(start_idx) + 1
+        if n_bins < min_bins:
+            return
+        regions.append(
+            {
+                "chromosome": chrom,
+                "start": start_idx * bin_width,
+                "end": (end_idx + 1) * bin_width,
+                "type": region_type,
+            }
+        )
 
     # Merge adjacent indices into continuous regions
     current_start_idx = significant_indices[0]
@@ -853,33 +1439,26 @@ def find_significant_regions(values, chrom, bin_width):
         if idx == prev_idx + 1 and idx_type == current_type:
             continue
         else:
-            # Save the previous region
-            regions.append(
-                {
-                    "chromosome": chrom,
-                    "start": current_start_idx * bin_width,
-                    "end": (significant_indices[i - 1] + 1) * bin_width,
-                    "type": current_type,
-                }
-            )
+            _maybe_append(current_start_idx, significant_indices[i - 1], current_type)
             # Start new region
             current_start_idx = idx
             current_type = idx_type
 
     # Don't forget the last region
-    regions.append(
-        {
-            "chromosome": chrom,
-            "start": current_start_idx * bin_width,
-            "end": (significant_indices[-1] + 1) * bin_width,
-            "type": current_type,
-        }
-    )
+    _maybe_append(current_start_idx, significant_indices[-1], current_type)
 
     return regions
 
 
-def generate_bed_files(bed_dir, analysis_counter, breakpoints, cnv_data, bin_width, logger):
+def generate_bed_files(
+    bed_dir,
+    analysis_counter,
+    breakpoints,
+    cnv_data,
+    bin_width,
+    logger,
+    min_contiguous_bins: int = 1,
+):
     """
     Generate BED files for CNV regions and breakpoints.
 
@@ -890,6 +1469,7 @@ def generate_bed_files(bed_dir, analysis_counter, breakpoints, cnv_data, bin_wid
         cnv_data: CNV data
         bin_width: Width of bins in base pairs
         logger: Logger instance
+        min_contiguous_bins: Minimum contiguous significant bins for gain/loss
     """
     try:
         # Generate BED file for CNV regions
@@ -898,7 +1478,12 @@ def generate_bed_files(bed_dir, analysis_counter, breakpoints, cnv_data, bin_wid
             for chrom, values in cnv_data.items():
                 if len(values) > 0:
                     # Find regions with significant CNV changes
-                    significant_regions = find_significant_regions(values, chrom, bin_width)
+                    significant_regions = find_significant_regions(
+                        values,
+                        chrom,
+                        bin_width,
+                        min_contiguous_bins=min_contiguous_bins,
+                    )
                     for region in significant_regions:
                         f.write(
                             f"{chrom}\t{region['start']}\t{region['end']}\t{region['type']}\n"
@@ -935,6 +1520,9 @@ def save_cnv_files(
     logger,
     reference: Optional[str] = None,
     generate_master_bed: bool = False,
+    penalty_value: Optional[int] = None,
+    min_contiguous_bins: Optional[int] = None,
+    target_panel: Optional[str] = None,
 ):
     """
     Save CNV data files in the specified format from the documentation.
@@ -951,6 +1539,11 @@ def save_cnv_files(
         sex_estimate: Sex estimation result
         copy_numbers: Updated copy numbers for this sample (saved separately by caller)
         logger: Logger instance
+        reference: Optional reference genome path
+        generate_master_bed: Whether to trigger master BED generation
+        penalty_value: ruptures penalty used for breakpoint detection (optional)
+        min_contiguous_bins: Minimum contiguous bins for gain/loss regions (optional)
+        target_panel: Workflow target panel for master BED (falls back to fusion metadata)
     """
     try:
         # Save CNV data files as specified in documentation
@@ -964,6 +1557,10 @@ def save_cnv_files(
             "variance": variance,
             "analysis_counter": analysis_counter,
         }
+        if penalty_value is not None:
+            cnv_dict["penalty_value"] = int(penalty_value)
+        if min_contiguous_bins is not None:
+            cnv_dict["min_contiguous_bins"] = int(min_contiguous_bins)
         np.save(os.path.join(sample_dir, "CNV_dict.npy"), cnv_dict)
 
         # Save breakpoint data as structured array
@@ -1002,40 +1599,75 @@ def save_cnv_files(
             "breakpoints_count": len(breakpoints),
             "sex_estimate": sex_estimate,
         }
+        if penalty_value is not None:
+            state_metadata["penalty_value"] = int(penalty_value)
+        if min_contiguous_bins is not None:
+            state_metadata["min_contiguous_bins"] = int(min_contiguous_bins)
         _atomic_pickle_dump(
             state_metadata, os.path.join(state_dir, "tracker_metadata.pkl")
         )
 
-        # Create BED files directory
-        bed_dir = os.path.join(sample_dir, "bed_files")
-        os.makedirs(bed_dir, exist_ok=True)
+        sample_id = os.path.basename(sample_dir)
+        work_dir = os.path.dirname(sample_dir)
+        from robin.readfish.analysis_hook import is_batman_analysis_mode
 
-        # Generate BED files for CNV regions and breakpoints
-        generate_bed_files(bed_dir, analysis_counter, breakpoints, result3_cnv, bin_width, logger)
+        batman_mode = is_batman_analysis_mode(
+            work_dir=work_dir,
+            target_panel=target_panel,
+            reference=reference,
+        )
 
-        # Generate master BED file only if requested (should only be done once per batch at the end)
-        # Use async (non-blocking) generation to avoid blocking the analysis pipeline
-        if generate_master_bed:
+        if batman_mode:
+            # These versioned BED files feed live readfish target updates and are
+            # intentionally omitted from ordinary (non-BATMAN) analyses.
+            bed_dir = os.path.join(sample_dir, "bed_files")
+            os.makedirs(bed_dir, exist_ok=True)
+            resolved_min_bins = (
+                int(min_contiguous_bins) if min_contiguous_bins is not None else 1
+            )
+            generate_bed_files(
+                bed_dir,
+                analysis_counter,
+                breakpoints,
+                result3_cnv,
+                bin_width,
+                logger,
+                min_contiguous_bins=resolved_min_bins,
+            )
+        else:
+            logger.debug(
+                "Skipping CNV adaptive BED outputs for %s: BATMAN mode is disabled",
+                sample_id,
+            )
+
+        # Generate master BED only for BATMAN batch processing.
+        if generate_master_bed and batman_mode:
             try:
                 from robin.analysis.master_bed_generator import (
                     generate_master_bed_async,
                     _try_get_target_panel_from_fusion_metadata,
                 )
                 
-                # Extract sample_id from sample_dir
-                sample_id = os.path.basename(sample_dir)
-                # work_dir is the parent of sample_dir
-                work_dir = os.path.dirname(sample_dir)
-                
-                # Try to get target_panel from fusion metadata if available
-                target_panel = _try_get_target_panel_from_fusion_metadata(sample_id, work_dir)
+                # Prefer the workflow panel passed from cnv_handler; fall back to
+                # fusion metadata only when the caller did not supply one.
+                resolved_panel = target_panel
+                if not resolved_panel:
+                    resolved_panel = _try_get_target_panel_from_fusion_metadata(
+                        sample_id, work_dir
+                    )
+                if not resolved_panel:
+                    logger.warning(
+                        "Generating master BED for %s without a target panel "
+                        "(neither workflow target_panel nor fusion metadata available)",
+                        sample_id,
+                    )
                 
                 # Generate asynchronously (non-blocking)
                 generate_master_bed_async(
                     sample_id=sample_id,
                     work_dir=work_dir,
                     analysis_counter=analysis_counter,
-                    target_panel=target_panel,
+                    target_panel=resolved_panel,
                     logger_instance=logger,
                     reference=reference,
                 )
@@ -1050,7 +1682,15 @@ def save_cnv_files(
 
 
 
-def process_single_bam(bam_path, metadata, work_dir, logger, threads=2, reference: Optional[str] = None):
+def process_single_bam(
+    bam_path,
+    metadata,
+    work_dir,
+    logger,
+    threads=2,
+    reference: Optional[str] = None,
+    target_panel: Optional[str] = None,
+):
     """
     Process a single BAM file for CNV analysis using the complete pipeline.
 
@@ -1060,6 +1700,8 @@ def process_single_bam(bam_path, metadata, work_dir, logger, threads=2, referenc
         work_dir: Working directory
         logger: Logger instance
         threads: Number of threads to use for CNV analysis (default: 2, configurable)
+        reference: Optional reference genome path
+        target_panel: Workflow target panel name for master BED generation
 
     Returns:
         Dictionary with CNV analysis results
@@ -1287,7 +1929,21 @@ def process_single_bam(bam_path, metadata, work_dir, logger, threads=2, referenc
         analysis_result["processing_steps"].append("sex_estimated")
 
         # Detect breakpoints
-        breakpoints = detect_breakpoints_from_cnv(r_cnv, r_bin, logger)
+        from robin.workflow_config import (
+            get_cnv_min_contiguous_bins,
+            get_cnv_penalty_value,
+        )
+
+        penalty_value = get_cnv_penalty_value()
+        min_contiguous_bins = get_cnv_min_contiguous_bins()
+        logger.debug(
+            "CNV settings: penalty_value=%s min_contiguous_bins=%s",
+            penalty_value,
+            min_contiguous_bins,
+        )
+        breakpoints = detect_breakpoints_from_cnv(
+            r_cnv, r_bin, logger, penalty_value=penalty_value
+        )
         analysis_result["breakpoints"] = breakpoints
         analysis_result["processing_steps"].append("breakpoints_detected")
 
@@ -1296,8 +1952,8 @@ def process_single_bam(bam_path, metadata, work_dir, logger, threads=2, referenc
         analysis_result["chromosome_stats"] = chromosome_stats
         analysis_result["processing_steps"].append("chromosome_stats_calculated")
 
-        # Save CNV data in the specified format
-        analysis_counter += 1
+        # Allocate a new counter for this CNV BED write (never overwrite prior versions)
+        analysis_counter = allocate_next_analysis_counter(sample_id, work_dir, logger)
 
         # Save CNV data files as specified in the documentation
         # Don't generate master BED here - it should only be generated once per batch
@@ -1315,17 +1971,17 @@ def process_single_bam(bam_path, metadata, work_dir, logger, threads=2, referenc
             logger,
             reference=reference,
             generate_master_bed=False,  # Single BAM - master BED should be generated at batch end
+            penalty_value=penalty_value,
+            min_contiguous_bins=min_contiguous_bins,
+            target_panel=target_panel,
         )
 
         analysis_result["cnv_data_path"] = os.path.join(
             sample_output_dir, f"{analysis_counter}_cnv_data.json"
         )
         analysis_result["processing_steps"].append("cnv_data_saved")
-
-        # Save updated analysis counter to disk
-        save_analysis_counter(sample_id, analysis_counter, work_dir, logger)
         analysis_result["analysis_counter"] = analysis_counter
-        logger.debug(f"Saved analysis counter: {analysis_counter}")
+        logger.debug(f"Allocated analysis counter for CNV outputs: {analysis_counter}")
 
         # Force garbage collection
         gc.collect()
@@ -1347,7 +2003,16 @@ def process_single_bam(bam_path, metadata, work_dir, logger, threads=2, referenc
         return analysis_result
 
 
-def process_multiple_bams(bam_paths, metadata_list, work_dir, logger, threads=2, reference: Optional[str] = None):
+def process_multiple_bams(
+    bam_paths,
+    metadata_list,
+    work_dir,
+    logger,
+    threads=2,
+    reference: Optional[str] = None,
+    job_id: Optional[int] = None,
+    target_panel: Optional[str] = None,
+):
     """
     Process multiple BAM files for CNV analysis using aggregated CNV data.
     
@@ -1362,6 +2027,9 @@ def process_multiple_bams(bam_paths, metadata_list, work_dir, logger, threads=2,
         work_dir: Working directory
         logger: Logger instance
         threads: Number of threads to use for CNV analysis (default: 2)
+        reference: Optional reference genome path
+        job_id: Optional workflow job id
+        target_panel: Workflow target panel name for master BED generation
 
     Returns:
         Dictionary with aggregated CNV analysis results
@@ -1562,39 +2230,19 @@ def process_multiple_bams(bam_paths, metadata_list, work_dir, logger, threads=2,
                 copy_numbers = updated_copy_numbers
                 
                 logger.info(f"Completed BAM file {i+1}/{len(valid_bam_paths)}: {os.path.basename(bam_path)}")
+                if job_id is not None:
+                    try:
+                        from robin.workflow_ray import notify_coordinator_files_completed
 
-            # After processing all BAM files, get the final aggregated results
-            # We need to run one final analysis to get the aggregated CNV data
+                        notify_coordinator_files_completed("cnv", 1, job_id=job_id)
+                    except Exception:
+                        pass
+
+            # The last loop result already reflects all BAMs accumulated in
+            # copy_numbers. Re-running the final BAM here would add its reads
+            # twice and waste a complete sample/reference analysis pass.
             logger.info("Generating final aggregated CNV results...")
-            
-            # Use the last BAM file to generate final results (copy_numbers now contains aggregated data)
-            final_bam_path = valid_bam_paths[-1]
-            
-            if USE_CNV_SUBPROCESS:
-                # For subprocess mode, we need to run one more analysis to get final results
-                final_result = run_cnv_analysis_subprocess(
-                    final_bam_path,
-                    {},
-                    ref_cnv_path,
-                    temp_dir,
-                    logger,
-                    threads=threads,
-                    mapq_filter=60,
-                    sample_id=sample_id,
-                    copy_numbers_path=copy_numbers_path,
-                    timeout=adaptive_timeout,
-                )
-            else:
-                # For direct mode, run one final analysis to get aggregated results
-                final_result = run_cnv_analysis_direct(
-                    final_bam_path,
-                    copy_numbers,  # This now contains aggregated data from all BAM files
-                    ref_cnv_dict_loaded,
-                    logger,
-                    threads=threads,
-                    mapq_filter=60,
-                    sample_id=sample_id,
-                )
+            final_result = subprocess_result
 
             if final_result is None or not final_result.get("success", False):
                 error_msg = (
@@ -1661,8 +2309,22 @@ def process_multiple_bams(bam_paths, metadata_list, work_dir, logger, threads=2,
         analysis_result["processing_steps"].append("sex_estimated")
 
         # Detect breakpoints from aggregated CNV data
+        from robin.workflow_config import (
+            get_cnv_min_contiguous_bins,
+            get_cnv_penalty_value,
+        )
+
+        penalty_value = get_cnv_penalty_value()
+        min_contiguous_bins = get_cnv_min_contiguous_bins()
+        logger.info(
+            "[cnv] penalty_value=%s min_contiguous_bins=%s",
+            penalty_value,
+            min_contiguous_bins,
+        )
         t0 = time.time()
-        breakpoints = detect_breakpoints_from_cnv(r_cnv, r_bin, logger)
+        breakpoints = detect_breakpoints_from_cnv(
+            r_cnv, r_bin, logger, penalty_value=penalty_value
+        )
         logger.info(f"[cnv] Breakpoint detection completed in {time.time() - t0:.2f}s")
         analysis_result["breakpoints"] = breakpoints
         analysis_result["processing_steps"].append("breakpoints_detected")
@@ -1674,8 +2336,8 @@ def process_multiple_bams(bam_paths, metadata_list, work_dir, logger, threads=2,
         analysis_result["chromosome_stats"] = chromosome_stats
         analysis_result["processing_steps"].append("chromosome_stats_calculated")
 
-        # Save CNV data in the specified format
-        analysis_counter += 1
+        # Allocate a new counter for this CNV BED write (never overwrite prior versions)
+        analysis_counter = allocate_next_analysis_counter(sample_id, work_dir, logger)
 
         # Save CNV data files as specified in the documentation
         # Generate master BED here since this is batch processing (all BAMs processed)
@@ -1694,6 +2356,9 @@ def process_multiple_bams(bam_paths, metadata_list, work_dir, logger, threads=2,
             logger,
             reference=reference,
             generate_master_bed=True,  # Batch processing - generate master BED once at the end
+            penalty_value=penalty_value,
+            min_contiguous_bins=min_contiguous_bins,
+            target_panel=target_panel,
         )
         logger.info(f"[cnv] save_cnv_files (incl. master BED) completed in {time.time() - t0:.2f}s")
 
@@ -1701,13 +2366,11 @@ def process_multiple_bams(bam_paths, metadata_list, work_dir, logger, threads=2,
             sample_output_dir, f"{analysis_counter}_cnv_data.json"
         )
         analysis_result["processing_steps"].append("cnv_data_saved")
-
-        # Save updated analysis counter to disk
-        t0 = time.time()
-        save_analysis_counter(sample_id, analysis_counter, work_dir, logger)
+        # Master BED allocation (if any) may have advanced the counter further; record CNV's number
         analysis_result["analysis_counter"] = analysis_counter
+        t0 = time.time()
         gc.collect()
-        logger.info(f"[cnv] Save analysis counter + gc completed in {time.time() - t0:.2f}s")
+        logger.info(f"[cnv] gc completed in {time.time() - t0:.2f}s")
 
         analysis_result["processing_steps"].append("cnv_analysis_complete")
 
@@ -1815,6 +2478,8 @@ def cnv_handler(job, work_dir=None, target_panel=None, threads=2):
             logger=logger,
             threads=threads,
             reference=reference,
+            job_id=job.job_id,
+            target_panel=target_panel,
         )
         
         # Store batch results in job context (maintain compatibility with existing structure)
@@ -1832,8 +2497,21 @@ def cnv_handler(job, work_dir=None, target_panel=None, threads=2):
         
         if batch_result.get("error_message"):
             logger.error(f"Batch processing completed with errors: {batch_result['error_message']}")
+            job.context.add_error("cnv_analysis", batch_result["error_message"])
         else:
             logger.info("Batch processing completed successfully with aggregated CNV analysis")
+            job.context.add_result(
+                "cnv_analysis",
+                {
+                    "status": "success",
+                    "sample_id": sample_id,
+                    "analysis_time": batch_result.get("analysis_timestamp", 0),
+                    "processing_steps": batch_result.get("processing_steps", []),
+                    "files_processed": batch_result.get("files_processed", batch_size),
+                    "total_files": batch_result.get("total_files", batch_size),
+                    "cnv_data_path": batch_result.get("cnv_data_path", ""),
+                },
+            )
         
         return
         

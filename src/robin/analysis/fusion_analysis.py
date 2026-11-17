@@ -86,6 +86,40 @@ def _get_fusion_batch_size(default: int = 10) -> int:
         return default
 
 
+def _load_supplementary_read_ids(
+    metadata: Dict[str, Any],
+    log,
+) -> List[str]:
+    """Load and validate the complete per-BAM supplementary-read ID set."""
+    supplementary_read_ids = metadata.get("supplementary_read_ids", [])
+    if supplementary_read_ids:
+        return supplementary_read_ids
+
+    supp_ids_path = metadata.get("supplementary_read_ids_path")
+    if not supp_ids_path or not os.path.exists(supp_ids_path):
+        metadata["supplementary_read_ids_complete"] = False
+        return []
+
+    try:
+        with open(supp_ids_path, "r") as f:
+            supplementary_read_ids = [line.strip() for line in f if line.strip()]
+    except Exception as e:
+        log.warning(f"Could not read supplementary_read_ids from {supp_ids_path}: {e}")
+        metadata["supplementary_read_ids_complete"] = False
+        return []
+
+    expected_count = metadata.get("supplementary_read_ids_count")
+    if expected_count is not None and len(supplementary_read_ids) != int(expected_count):
+        log.warning(
+            "Supplementary-read ID count mismatch for %s: expected %s, found %s",
+            supp_ids_path,
+            expected_count,
+            len(supplementary_read_ids),
+        )
+        metadata["supplementary_read_ids_complete"] = False
+    return supplementary_read_ids
+
+
 def _merge_fusion_metadata(
     new_metadata: FusionMetadata, existing_metadata: Optional[Dict]
 ) -> FusionMetadata:
@@ -424,8 +458,6 @@ def process_multiple_files(bam_paths, metadata_list, work_dir, logger, target_pa
         # Process each BAM file individually using staging
         logger.info("Processing files with fusion staging (fast path)")
         processed_files = 0
-        # Collect all supplementary read IDs across all BAM files for consolidated output
-        all_supplementary_read_ids = set()
         staging_batch_size = _get_fusion_batch_size()
         
         for i, (bam_path, metadata) in enumerate(zip(valid_bam_paths, valid_metadata_list)):
@@ -434,22 +466,9 @@ def process_multiple_files(bam_paths, metadata_list, work_dir, logger, target_pa
             try:
                 # Get supplementary read information
                 has_supplementary = metadata.get("has_supplementary_reads", False)
-                supplementary_read_ids = metadata.get("supplementary_read_ids", [])
-                supp_ids_path = metadata.get("supplementary_read_ids_path")
-                
-                # Load supplementary read IDs from file if available
-                if (not supplementary_read_ids) and supp_ids_path and os.path.exists(supp_ids_path):
-                    try:
-                        with open(supp_ids_path, "r") as f:
-                            supplementary_read_ids = [
-                                line.strip() for line in f if line.strip()
-                            ]
-                    except Exception as e:
-                        logger.warning(f"Could not read supplementary_read_ids from {supp_ids_path}: {e}")
-                
-                # Collect supplementary read IDs for consolidated output
-                if supplementary_read_ids:
-                    all_supplementary_read_ids.update(supplementary_read_ids)
+                supplementary_read_ids = _load_supplementary_read_ids(
+                    metadata, logger
+                )
                 
                 # Create fusion metadata
                 fusion_metadata = FusionMetadata(
@@ -482,9 +501,6 @@ def process_multiple_files(bam_paths, metadata_list, work_dir, logger, target_pa
                     processed_files += 1
                     logger.debug(f"Successfully staged file {i+1}: {os.path.basename(bam_path)}")
                     
-                    # Keep supplementary IDs file for later searching/debugging
-                    # File is preserved at: {work_dir}/{sample_id}/supplementary_read_ids.txt
-                
             except Exception as e:
                 logger.warning(f"Error processing {os.path.basename(bam_path)}: {e}")
                 continue
@@ -496,22 +512,6 @@ def process_multiple_files(bam_paths, metadata_list, work_dir, logger, target_pa
 
         analysis_result["files_processed"] = processed_files
         analysis_result["processing_steps"].append("files_staged")
-
-        # Write consolidated supplementary read IDs file (aggregates all BAM files)
-        if all_supplementary_read_ids:
-            try:
-                sample_dir = os.path.join(work_dir, sample_id)
-                os.makedirs(sample_dir, exist_ok=True)
-                supp_output_path = os.path.join(sample_dir, "supplementary_read_ids.txt")
-                # Write one ID per line (sorted for easier searching)
-                tmp_path = supp_output_path + ".tmp"
-                with open(tmp_path, "w") as f:
-                    for rid in sorted(all_supplementary_read_ids):
-                        f.write(f"{rid}\n")
-                os.replace(tmp_path, supp_output_path)
-                logger.info(f"Saved {len(all_supplementary_read_ids)} unique supplementary read IDs to {supp_output_path}")
-            except Exception as e:
-                logger.warning(f"Could not write consolidated supplementary_read_ids file: {e}")
 
         # Force accumulation of all staged files
         # Expand reference path if provided
@@ -531,40 +531,27 @@ def process_multiple_files(bam_paths, metadata_list, work_dir, logger, target_pa
         analysis_result["processing_steps"].append("accumulation_complete")
         logger.info(f"Fusion accumulation completed: {accumulation_result}")
         
-        # Generate final master BED file now that all files are processed
-        try:
-            from robin.analysis.master_bed_generator import generate_master_bed
-            from robin.analysis.fusion_work import _load_analysis_counter
-            
-            # Get analysis counter
-            analysis_counter = _load_analysis_counter(sample_id, work_dir)
-            
-            logger.info(f"Generating final master BED file for sample {sample_id} (counter: {analysis_counter})")
-            master_bed_path = generate_master_bed(
-                sample_id=sample_id,
-                work_dir=work_dir,
-                analysis_counter=analysis_counter,
-                target_panel=target_panel,
-                logger_instance=logger,
-                reference=reference,
-            )
-            if master_bed_path:
-                logger.info(f"Final master BED file generated: {master_bed_path}")
-                analysis_result["processing_steps"].append("master_bed_generated")
-        except Exception as e:
-            logger.warning(f"Could not generate final master BED file: {e}")
-
         # Load final accumulated data for result metadata
         sample_output_dir = os.path.join(work_dir, sample_id)
         
         # Set output file paths
-        analysis_result["target_fusion_path"] = os.path.join(sample_output_dir, "target_fusion.csv")
-        analysis_result["genome_wide_fusion_path"] = os.path.join(sample_output_dir, "genome_wide_fusion.csv")
+        analysis_result["target_fusion_path"] = os.path.join(
+            sample_output_dir, "fusion_candidates_master.csv"
+        )
+        analysis_result["genome_wide_fusion_path"] = os.path.join(
+            sample_output_dir, "fusion_candidates_all.csv"
+        )
         
         # Store final results
         analysis_result["fusion_data"] = {
-            "target_candidates_count": accumulation_result.get("target_candidates_count", 0),
-            "genome_wide_candidates_count": accumulation_result.get("genome_wide_candidates_count", 0),
+            "target_candidates_count": accumulation_result.get(
+                "target_candidates_count",
+                accumulation_result.get("target_candidates", 0),
+            ),
+            "genome_wide_candidates_count": accumulation_result.get(
+                "genome_wide_candidates_count",
+                accumulation_result.get("genome_wide_candidates", 0),
+            ),
             "files_with_supplementary": analysis_result["files_with_supplementary"],
             "files_processed": processed_files,
         }
@@ -727,23 +714,9 @@ def fusion_handler(job, work_dir=None, target_panel=None):
                 logger.info(f"Starting fusion analysis for {file_path}")
                 logger.info(f"Metadata: {metadata}")
 
-                # Prefer disk-based supplementary read IDs if available to avoid large in-memory lists
-                supplementary_read_ids = metadata.get("supplementary_read_ids", [])
-                supp_ids_path = metadata.get("supplementary_read_ids_path")
-                if (
-                    (not supplementary_read_ids)
-                    and supp_ids_path
-                    and os.path.exists(supp_ids_path)
-                ):
-                    try:
-                        with open(supp_ids_path, "r") as f:
-                            supplementary_read_ids = [
-                                line.strip() for line in f if line.strip()
-                            ]
-                    except Exception as e:
-                        logger.warning(
-                            f"Could not read supplementary_read_ids from {supp_ids_path}: {e}"
-                        )
+                supplementary_read_ids = _load_supplementary_read_ids(
+                    metadata, logger
+                )
 
                 # Set default work directory if not provided
                 if work_dir is None:
@@ -820,8 +793,6 @@ def fusion_handler(job, work_dir=None, target_panel=None):
                 if result["success"]:
                     logger.info(f"Fusion analysis completed successfully for {file_path}")
                     logger.info(f"Results: {result}")
-                    # Keep supplementary IDs file for later searching/debugging
-                    # File is preserved at: {work_dir}/{sample_id}/supplementary_read_ids.txt
                 else:
                     error_msg = result.get("error_message", "Unknown error")
                     logger.error(f"Fusion analysis failed for {file_path}: {error_msg}")
@@ -1050,6 +1021,8 @@ Examples:
             "sample_id": sample_id,
             "has_supplementary_reads": has_supplementary,
             "supplementary_read_ids": supplementary_read_ids,
+            "supplementary_read_ids_complete": True,
+            "supplementary_read_ids_count": len(supplementary_read_ids),
             "file_path": bam_path,
         }
         metadata_list.append(metadata)

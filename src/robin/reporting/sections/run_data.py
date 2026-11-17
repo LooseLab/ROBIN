@@ -6,10 +6,14 @@ This module contains the run data summary section of the report.
 
 import logging
 from datetime import datetime
-from reportlab.platypus import Paragraph, Spacer, Table, TableStyle, PageBreak
-from reportlab.lib.units import inch
-from reportlab.lib.styles import ParagraphStyle
+from reportlab.platypus import Paragraph, Spacer, PageBreak
 from .base import ReportSection
+from robin.reporting.components import metadata_table, section_heading, warning_box
+from robin.analysis.bam_preprocessor import (
+    _get_modbase_model_warning,
+    _get_modbase_model_warning_level,
+    _is_unresolved_modbase_model,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -43,50 +47,25 @@ class RunDataSection(ReportSection):
         else:
             return str(value)
 
+    @staticmethod
+    def _master_value(master_data, key):
+        """Return a displayable master.csv value, including for older files."""
+        if key not in master_data.index:
+            return "Missing"
+        value = master_data.get(key)
+        if value is None:
+            return "Missing"
+        try:
+            if value != value:
+                return "Missing"
+        except Exception:
+            pass
+        text = str(value).strip()
+        return text if text else "Missing"
+
     def _create_info_table(self, data, title):
-        """Create a formatted table for information display."""
-        # Create header style
-        header_style = ParagraphStyle(
-            "HeaderStyle",
-            parent=self.styles.styles["Normal"],
-            fontName="Helvetica-Bold",
-            fontSize=8,
-            textColor=self.styles.COLORS["primary"],
-            leading=10,
-            spaceBefore=0,
-            spaceAfter=0,
-        )
-
-        # Create cell style
-        cell_style = ParagraphStyle(
-            "CellStyle",
-            parent=self.styles.styles["Normal"],
-            fontSize=8,
-            leading=10,
-            spaceBefore=0,
-            spaceAfter=0,
-        )
-
-        table_data = [[Paragraph(title, header_style)]]
-
-        for key, value in data:
-            table_data.append(
-                [Paragraph(f"{key}:", cell_style), Paragraph(str(value), cell_style)]
-            )
-
-        table = Table(table_data, colWidths=[2 * inch, 4 * inch])
-        table.setStyle(
-            TableStyle(
-                [
-                    # Inherit modern table style
-                    *self.MODERN_TABLE_STYLE._cmds,
-                    # Preserve specific alignments
-                    ("ALIGN", (0, 0), (0, -1), "LEFT"),  # Labels left-aligned
-                    ("ALIGN", (1, 0), (1, -1), "LEFT"),  # Values left-aligned
-                ]
-            )
-        )
-        return table
+        """Create a formatted metadata table using the shared component."""
+        return metadata_table(data, self.styles, title=title, width=self.report.doc.width)
 
     def add_content(self):
         """Add the run data content to the report."""
@@ -94,9 +73,7 @@ class RunDataSection(ReportSection):
 
         # Add page break before detailed section
         self.elements.append(PageBreak())  # Add section header
-        self.elements.append(
-            Paragraph("Run Data Summary", self.styles.styles["Heading1"])
-        )
+        self.elements.extend(section_heading("Run Data Summary", self.styles))
         self.elements.append(Spacer(1, 6))
 
         # Get master data
@@ -115,6 +92,29 @@ class RunDataSection(ReportSection):
 
             # Get the first row of data (since master.csv has all data in one row)
             master_data = masterdf.iloc[0]
+            modbase_model = self._master_value(master_data, "modbase_models")
+            modbase_model_display = (
+                "Unknown"
+                if _is_unresolved_modbase_model(modbase_model)
+                else modbase_model
+            )
+            modbase_warning = _get_modbase_model_warning(
+                None if modbase_model == "Missing" else modbase_model
+            )
+
+            if modbase_warning:
+                warning_level = _get_modbase_model_warning_level(
+                    None if modbase_model == "Missing" else modbase_model
+                )
+                label = (
+                    "Methylation model note"
+                    if warning_level == "info"
+                    else "Methylation model warning"
+                )
+                warning_text = f"<b>{label}:</b> {modbase_warning}"
+                style_name = "Normal" if warning_level == "info" else "Warning"
+                self.summary_elements.extend(warning_box(warning_text, self.styles, markup=True))
+                self.elements.extend(warning_box(warning_text, self.styles, markup=True))
 
             # Sample Information
             sample_info = [
@@ -122,7 +122,11 @@ class RunDataSection(ReportSection):
                 ("Run Start", self._format_timestamp(master_data["run_time"])),
                 ("Sequencing Device", master_data["devices"]),
                 ("Flowcell ID", master_data["flowcell_ids"]),
-                ("Basecalling Model", master_data["basecall_models"]),
+                (
+                    "Basecalling Model",
+                    self._master_value(master_data, "basecall_models"),
+                ),
+                ("Modbase Model", modbase_model_display),
             ]
             self.elements.append(
                 self._create_info_table(sample_info, "Sample Information")
@@ -141,6 +145,8 @@ class RunDataSection(ReportSection):
                 ]
                 if si.get("nhs_number"):
                     sample_info.append(("Hospital Number", si["nhs_number"]))
+                if si.get("notes"):
+                    sample_info.append(("Notes", si["notes"]))
                 self.elements.append(
                     self._create_info_table(sample_info, "Sample Identifiers")
                 )

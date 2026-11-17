@@ -81,6 +81,62 @@ def _compute_hvpath() -> Optional[str]:
 HVPATH = _compute_hvpath()
 
 
+def parse_rf_feature_count_from_report(report_path: str) -> Optional[int]:
+    """Parse ``Number of features: N`` from a RapidCNS2 calibrated report."""
+    if not os.path.isfile(report_path):
+        return None
+    try:
+        with open(report_path, encoding="utf-8") as handle:
+            for line in handle:
+                stripped = line.strip()
+                if stripped.lower().startswith("number of features:"):
+                    return int(float(stripped.split(":", 1)[1].strip()))
+    except (OSError, ValueError, TypeError):
+        return None
+    return None
+
+
+def parse_rf_feature_count(rcns2folder: str, batch: int) -> Optional[int]:
+    """Read the feature count reported by the RapidCNS2 R script.
+
+    The classifier writes ``Number of features: N`` into
+    ``live_{batch}_calibrated_classification.tsv`` (``rf$num.independent.variables``).
+    If that report is missing, fall back to counting overlapping training probes.
+    """
+    n_features = parse_rf_feature_count_from_report(
+        os.path.join(rcns2folder, f"live_{batch}_calibrated_classification.tsv")
+    )
+    if n_features is not None:
+        return n_features
+
+    probes_path = os.path.join(rcns2folder, f"live_{batch}_probes_for_training.csv")
+    if os.path.isfile(probes_path):
+        try:
+            with open(probes_path, encoding="utf-8") as handle:
+                return sum(1 for line in handle if line.strip())
+        except OSError:
+            return None
+    return None
+
+
+def attach_rf_score_metadata(
+    scores_to_save: pd.DataFrame,
+    *,
+    timestamp_ms: float,
+    n_features: Optional[int],
+) -> pd.DataFrame:
+    """Add timestamp and ``number_probes`` so the GUI can show feature count."""
+    frame = scores_to_save.copy()
+    frame["timestamp"] = timestamp_ms
+    if n_features is not None:
+        frame["number_probes"] = int(n_features)
+    ordered = [
+        col
+        for col in ("timestamp", "number_probes")
+        if col in frame.columns
+    ]
+    ordered.extend(col for col in frame.columns if col not in ordered)
+    return frame[ordered]
 
 
 @dataclass
@@ -327,7 +383,7 @@ class RandomForestAnalysis:
                         "start_pos": "start",
                         "end_pos": "end",
                         "Nvalid": "cov",
-                        "score": "methylation_percent",  # The reconstructed data has 'score' not 'fraction'
+                        "fraction": "methylation_percent",
                     }
                 )
 
@@ -425,15 +481,39 @@ class RandomForestAnalysis:
                     )
                     logger.debug(f"After transpose index: {list(scores_to_save.index)}")
 
-                    # Add timestamp column
-                    scores_to_save["timestamp"] = (
-                        start_time * 1000
-                    )  # Convert to milliseconds
+                    n_features = parse_rf_feature_count(
+                        rcns2folder, self.bambatch[sample_id]
+                    )
+                    if n_features is not None:
+                        logger.info(f"Number of features: {n_features}")
+                    else:
+                        logger.warning(
+                            "Random Forest feature count was not reported by the R script"
+                        )
 
-                    # Reorder columns to put timestamp first
-                    cols = scores_to_save.columns.tolist()
-                    cols.insert(0, cols.pop(cols.index("timestamp")))
-                    scores_to_save = scores_to_save[cols]
+                    scores_to_save = attach_rf_score_metadata(
+                        scores_to_save,
+                        timestamp_ms=start_time * 1000,
+                        n_features=n_features,
+                    )
+
+                    calibrated_report = os.path.join(
+                        rcns2folder,
+                        f"live_{self.bambatch[sample_id]}_calibrated_classification.tsv",
+                    )
+                    if os.path.isfile(calibrated_report):
+                        try:
+                            shutil.copy2(
+                                calibrated_report,
+                                os.path.join(
+                                    sample_dir,
+                                    "random_forest_calibrated_classification.tsv",
+                                ),
+                            )
+                        except OSError as e:
+                            logger.debug(
+                                f"Could not persist calibrated classification report: {e}"
+                            )
 
                     # Load existing results if available and accumulate
                     output_file = os.path.join(sample_dir, "random_forest_scores.csv")
@@ -480,6 +560,7 @@ class RandomForestAnalysis:
                         "scores_file": output_file,
                         "bed_file": randomforest_bed_output,
                         "scores_shape": scores_to_save.shape,
+                        "n_features": n_features,
                         "processing_steps": random_forest_result.processing_steps.copy(),
                     }
 
@@ -513,7 +594,15 @@ class RandomForestAnalysis:
         return random_forest_result
 
 
-def process_multiple_files(parquet_paths, metadata_list, work_dir, logger, threads=4, showerrors=False):
+def process_multiple_files(
+    parquet_paths,
+    metadata_list,
+    work_dir,
+    logger,
+    threads=4,
+    showerrors=False,
+    job_id=None,
+):
     """
     Process multiple parquet files for Random Forest analysis.
     
@@ -609,6 +698,15 @@ def process_multiple_files(parquet_paths, metadata_list, work_dir, logger, threa
                 total_batches += 1
                 logger.debug(f"Successfully processed file {i+1}: {os.path.basename(parquet_path)}")
                 logger.debug(f"Batch number: {rf_result.batch_number}")
+                if job_id is not None:
+                    try:
+                        from robin.workflow_ray import notify_coordinator_files_completed
+
+                        notify_coordinator_files_completed(
+                            "random_forest", 1, job_id=job_id
+                        )
+                    except Exception:
+                        pass
                 
             except Exception as e:
                 logger.warning(f"Error processing {os.path.basename(parquet_path)}: {e}")
@@ -749,7 +847,8 @@ def random_forest_handler(job, work_dir=None):
                 work_dir=batch_work_dir,
                 logger=logger,
                 threads=4,  # Default thread count
-                showerrors=False  # Default error display setting
+                showerrors=False,  # Default error display setting
+                job_id=job.job_id,
             )
             
             # Store batch results in job context (maintain compatibility with existing structure)
@@ -863,6 +962,14 @@ def random_forest_handler(job, work_dir=None):
                 logger.info(
                     f"Random Forest analysis complete for {os.path.basename(parquet_path)}"
                 )
+                try:
+                    from robin.workflow_ray import notify_coordinator_files_completed
+
+                    notify_coordinator_files_completed(
+                        "random_forest", 1, job_id=job.job_id
+                    )
+                except Exception:
+                    pass
                 logger.info(f"Sample ID: {result.sample_id}")
                 logger.info(f"Batch Number: {result.batch_number}")
                 logger.debug(f"Processing steps: {', '.join(result.processing_steps)}")

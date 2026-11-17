@@ -13,6 +13,14 @@ from datetime import datetime
 logger = logging.getLogger(__name__)
 
 
+def normalize_report_progress(progress: Optional[float]) -> Optional[float]:
+    """Clamp report progress to 0–1 and round to whole percent for UI display."""
+    if progress is None:
+        return None
+    percent = max(0, min(100, int(round(float(progress) * 100))))
+    return percent / 100.0
+
+
 class ReportProgressManager:
     """Manages report generation progress using a queue-based system."""
     
@@ -74,7 +82,7 @@ class ReportProgressManager:
                 'sample_id': sample_id,
                 'stage': stage,
                 'message': message,
-                'progress': progress
+                'progress': normalize_report_progress(progress),
             })
         except Exception as e:
             logger.error(f"Error queuing progress update: {e}")
@@ -160,7 +168,7 @@ def create_progress_callback(sample_id: str):
         """Progress callback function."""
         stage = progress_data.get('stage', 'unknown')
         message = progress_data.get('message', '')
-        progress = progress_data.get('progress')
+        progress = normalize_report_progress(progress_data.get('progress'))
         
         progress_manager.update_progress(
             sample_id=sample_id,

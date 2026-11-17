@@ -6,38 +6,94 @@ import asyncio
 import threading
 import json
 import csv
+import time
 from datetime import datetime
 import hashlib
 import logging
+from collections import OrderedDict
 
 try:
-    from nicegui import ui
+    from nicegui import ui, background_tasks
 except ImportError:  # pragma: no cover
     ui = None
+    background_tasks = None
 
 from robin.classification_config import get_confidence_ui_tier
+from robin.analysis.cnv_classification import (
+    detect_cnv_events_for_sample,
+    format_cnv_events_card_lines,
+)
+from robin.analysis.bam_preprocessor import (
+    _get_modbase_model_warning,
+    _get_modbase_model_warning_level,
+    _is_unresolved_modbase_model,
+)
 from robin.gui.config import (
     get_confidence_level as get_classifier_confidence_level,
-    is_section_enabled,
+    is_section_visible,
     get_enabled_classification_steps,
+    get_visible_classification_steps,
+    any_classification_visible,
+    launcher_visibility_context,
     CLASSIFICATION_STEPS,
 )
+from robin.gui.coverage_metrics import (
+    coverage_quality_name,
+    coverage_read_length_export_fields,
+    read_length_summary_line,
+)
+from robin.coverage_metrics import calculate_coverage_metrics
+from robin.gui.plotting_preferences import resolve_plotting_reference_contig_scope
+from robin.analysis.bam_preprocessor import load_on_off_target_length_stats
 
 
-_SUMMARY_CACHE: Dict[str, Dict[str, Any]] = {}
+_SUMMARY_CACHE: "OrderedDict[str, Dict[str, Any]]" = OrderedDict()
 _SUMMARY_CACHE_LOCK = threading.Lock()
+_SUMMARY_CACHE_MAX_SAMPLES = 64
+_SUMMARY_CACHE_MAX_AGE_SECONDS = 15 * 60
+
+
+def _evict_summary_cache_locked(now_ts: Optional[float] = None) -> None:
+    now_ts = now_ts or time.time()
+    stale_keys = [
+        key
+        for key, payload in _SUMMARY_CACHE.items()
+        if (now_ts - float(payload.get("_cached_at", 0.0))) > _SUMMARY_CACHE_MAX_AGE_SECONDS
+    ]
+    for key in stale_keys:
+        _SUMMARY_CACHE.pop(key, None)
+    while len(_SUMMARY_CACHE) > _SUMMARY_CACHE_MAX_SAMPLES:
+        _SUMMARY_CACHE.popitem(last=False)
 
 
 def _get_summary_cache(sample_dir: Path) -> Dict[str, Any]:
     key = str(sample_dir)
     with _SUMMARY_CACHE_LOCK:
-        return dict(_SUMMARY_CACHE.get(key, {}))
+        payload = _SUMMARY_CACHE.get(key)
+        if not payload:
+            return {}
+        now_ts = time.time()
+        if (now_ts - float(payload.get("_cached_at", 0.0))) > _SUMMARY_CACHE_MAX_AGE_SECONDS:
+            _SUMMARY_CACHE.pop(key, None)
+            return {}
+        _SUMMARY_CACHE.move_to_end(key)
+        return {k: v for k, v in payload.items() if k != "_cached_at"}
 
 
 def _set_summary_cache(sample_dir: Path, data: Dict[str, Any]) -> None:
     key = str(sample_dir)
     with _SUMMARY_CACHE_LOCK:
-        _SUMMARY_CACHE[key] = data
+        payload = dict(data)
+        payload["_cached_at"] = time.time()
+        _SUMMARY_CACHE[key] = payload
+        _SUMMARY_CACHE.move_to_end(key)
+        _evict_summary_cache_locked()
+
+
+def _clear_summary_cache(sample_dir: Path) -> None:
+    key = str(sample_dir)
+    with _SUMMARY_CACHE_LOCK:
+        _SUMMARY_CACHE.pop(key, None)
 
 
 def _run_summary_cell(
@@ -48,7 +104,7 @@ def _run_summary_cell(
     col_class: str = "",
     hint: str = "",
 ) -> None:
-    """One Run Summary grid cell; colors from styles.css (§7, .body--dark — not Tailwind dark:)."""
+    """One Run Summary grid cell; colors from pages.css (§7, .body--dark — not Tailwind dark:)."""
     cell = ("run-summary-cell min-w-0 " + col_class).strip()
     with ui.element("div").classes(cell):
         with ui.element("div").classes("run-summary-cell-inner"):
@@ -70,6 +126,7 @@ def _run_info_section(sample_dir: Path, sample_id: str):
         {
             "run_time": "Loading...",
             "model": "Loading...",
+            "modbase_model": "Loading...",
             "device": "Loading...",
             "flow_cell": "Loading...",
             "panel": "Loading...",
@@ -83,7 +140,13 @@ def _run_info_section(sample_dir: Path, sample_id: str):
     )
 
     rt = run_info.get("run_time", "Not available")
-    model = run_info.get("model", "Not available")
+    model = run_info.get("model", "Missing")
+    modbase_model = run_info.get("modbase_model", "Missing")
+    modbase_display = (
+        "Unknown"
+        if _is_unresolved_modbase_model(modbase_model)
+        else modbase_model
+    )
     device = run_info.get("device", "Not available")
     flow = run_info.get("flow_cell", "Not available")
     panel = run_info.get("panel", "Not available")
@@ -95,6 +158,7 @@ def _run_info_section(sample_dir: Path, sample_id: str):
         "Flow cell": "run_info_flow_cell",
         "Analysis panel": "analysis_panel",
         "Basecall model": "run_info_model",
+        "Modbase model": "modbase_models",
         "Sample ID": "Unique sample identifier",
         "BAM passed": "counter_bam_passed",
         "BAM failed": "counter_bam_failed",
@@ -109,6 +173,7 @@ def _run_info_section(sample_dir: Path, sample_id: str):
         ("tag", "Flow cell", flow, ""),
         ("science", "Analysis panel", panel, ""),
         ("settings", "Basecall model", model, "run-summary-cell--basecall"),
+        ("biotech", "Modbase model", modbase_display, "run-summary-cell--basecall"),
         ("pin", "Sample ID", sample_id, "run-summary-cell--sample"),
     ]
     for icn, lab, key in (
@@ -123,7 +188,7 @@ def _run_info_section(sample_dir: Path, sample_id: str):
         if val != "Not available":
             cells.append((icn, lab, val, ""))
 
-    # §7.2 / §7.3 — shell is flex column + full-width grid (see styles.css; avoid ui.column shrink)
+    # §7.2 / §7.3 — shell is flex column + full-width grid (see pages.css; avoid ui.column shrink)
     with ui.element("div").classes("run-summary-shell w-full min-w-0"):
         ui.label("Run summary").classes("run-summary-title text-headline-small")
         with ui.element("div").classes("run-summary-grid"):
@@ -132,6 +197,34 @@ def _run_info_section(sample_dir: Path, sample_id: str):
                 _run_summary_cell(
                     icn, lab, val, col_class=span, hint=ht
                 )
+        modbase_warning = _get_modbase_model_warning(
+            None if modbase_model == "Missing" else modbase_model
+        )
+        if modbase_warning:
+            warning_level = _get_modbase_model_warning_level(
+                None if modbase_model == "Missing" else modbase_model
+            )
+            if warning_level == "info":
+                box_classes = (
+                    "w-full flex items-start gap-2 rounded-lg border border-slate-300 "
+                    "bg-slate-50 px-4 py-3 text-slate-700"
+                )
+                icon_classes = "text-slate-600 mt-0.5"
+                icon_name = "info"
+                title = "Methylation model"
+            else:
+                box_classes = (
+                    "w-full flex items-start gap-2 rounded-lg border border-amber-400 "
+                    "bg-amber-50 px-4 py-3 text-amber-900"
+                )
+                icon_classes = "text-amber-700 mt-0.5"
+                icon_name = "warning"
+                title = "Methylation model warning"
+            with ui.element("div").classes(box_classes):
+                ui.icon(icon_name).classes(icon_classes)
+                with ui.column().classes("gap-0"):
+                    ui.label(title).classes("font-semibold")
+                    ui.label(modbase_warning).classes("text-sm")
 
 
 @ui.refreshable
@@ -165,15 +258,34 @@ def _classification_section(sample_dir: Path, launcher: Any = None):
                 "confidence_level": "Loading...",
                 "features": 0,
             },
+            "marlin": {
+                "classification": "Loading...",
+                "confidence": 0.0,
+                "confidence_level": "Loading...",
+                "features": 0,
+            },
+            "lamprey": {
+                "classification": "Loading...",
+                "confidence": 0.0,
+                "confidence_level": "Loading...",
+                "features": 0,
+            },
+            "tucan": {
+                "classification": "Loading...",
+                "confidence": 0.0,
+                "confidence_level": "Loading...",
+                "features": 0,
+            },
         },
     )
     
     # Get workflow steps from launcher if available
-    workflow_steps = launcher.workflow_steps if launcher and hasattr(launcher, 'workflow_steps') else None
-    enabled_classification_steps = get_enabled_classification_steps(workflow_steps)
+    workflow_steps, display_config, viewer_role = launcher_visibility_context(launcher)
+    enabled_classification_steps = get_visible_classification_steps(
+        workflow_steps, display_config, viewer_role=viewer_role
+    )
     
-    # Only show section if at least one classification step is enabled
-    if workflow_steps and not enabled_classification_steps:
+    if not any_classification_visible(workflow_steps, display_config, viewer_role=viewer_role):
         return
     
     with ui.element("div").classes("classification-insight-shell w-full min-w-0"):
@@ -182,7 +294,7 @@ def _classification_section(sample_dir: Path, launcher: Any = None):
         )
         with ui.element("div").classes("classification-insight-grid"):
             # Sturgeon
-            if not workflow_steps or "sturgeon" in enabled_classification_steps:
+            if "sturgeon" in enabled_classification_steps:
                 sturgeon_data = classification_data.get("sturgeon", {})
                 _create_classification_dashboard_card_with_data(
                     "Sturgeon",
@@ -195,11 +307,11 @@ def _classification_section(sample_dir: Path, launcher: Any = None):
                     "sturgeon",
                 )
 
-            # NanoDX
-            if not workflow_steps or "nanodx" in enabled_classification_steps:
+            # CrossNN
+            if "nanodx" in enabled_classification_steps:
                 nanodx_data = classification_data.get("nanodx", {})
                 _create_classification_dashboard_card_with_data(
-                    "NanoDX",
+                    "CrossNN",
                     nanodx_data.get("classification", "Not available"),
                     nanodx_data.get("confidence", 0.0),
                     nanodx_data.get("confidence_level", "Not available"),
@@ -209,11 +321,11 @@ def _classification_section(sample_dir: Path, launcher: Any = None):
                     "nanodx",
                 )
 
-            # PanNanoDX
-            if not workflow_steps or "pannanodx" in enabled_classification_steps:
+            # PanCrossNN
+            if "pannanodx" in enabled_classification_steps:
                 pannanodx_data = classification_data.get("pannanodx", {})
                 _create_classification_dashboard_card_with_data(
-                    "PanNanoDX",
+                    "PanCrossNN",
                     pannanodx_data.get("classification", "Not available"),
                     pannanodx_data.get("confidence", 0.0),
                     pannanodx_data.get("confidence_level", "Not available"),
@@ -224,7 +336,7 @@ def _classification_section(sample_dir: Path, launcher: Any = None):
                 )
 
             # Random Forest
-            if not workflow_steps or "random_forest" in enabled_classification_steps:
+            if "random_forest" in enabled_classification_steps:
                 rf_data = classification_data.get("random_forest", {})
                 _create_classification_dashboard_card_with_data(
                     "Random Forest",
@@ -237,26 +349,68 @@ def _classification_section(sample_dir: Path, launcher: Any = None):
                     "random_forest",
                 )
 
+            # MARLIN
+            if "marlin" in enabled_classification_steps:
+                marlin_data = classification_data.get("marlin", {})
+                _create_classification_dashboard_card_with_data(
+                    "MARLIN",
+                    marlin_data.get("classification", "Not available"),
+                    marlin_data.get("confidence", 0.0),
+                    marlin_data.get("confidence_level", "Not available"),
+                    marlin_data.get("features", 0),
+                    "bloodtype",
+                    "Acute leukemia methylation classification",
+                    "marlin",
+                )
+
+            # Lamprey (research / evaluation only)
+            if "lamprey" in enabled_classification_steps:
+                lamprey_data = classification_data.get("lamprey", {})
+                _create_classification_dashboard_card_with_data(
+                    "Lamprey (research)",
+                    lamprey_data.get("classification", "Not available"),
+                    lamprey_data.get("confidence", 0.0),
+                    lamprey_data.get("confidence_level", "Not available"),
+                    lamprey_data.get("features", 0),
+                    "biotech",
+                    "Hematological methylation classification (research only)",
+                    "lamprey",
+                )
+
+            # Tucan (pediatric solid tumors / lymphomas)
+            if "tucan" in enabled_classification_steps:
+                tucan_data = classification_data.get("tucan", {})
+                _create_classification_dashboard_card_with_data(
+                    "Tucan",
+                    tucan_data.get("classification", "Not available"),
+                    tucan_data.get("confidence", 0.0),
+                    tucan_data.get("confidence_level", "Not available"),
+                    tucan_data.get("features", 0),
+                    "pets",
+                    "Pediatric solid tumor / lymphoma classification",
+                    "tucan",
+                )
+
 
 @ui.refreshable
 def _analysis_section(sample_dir: Path, launcher: Any = None):
     """Create refreshable analysis section."""
     # Get workflow steps from launcher if available
-    workflow_steps = launcher.workflow_steps if launcher and hasattr(launcher, 'workflow_steps') else None
+    workflow_steps, display_config, viewer_role = launcher_visibility_context(launcher)
     cache = _get_summary_cache(sample_dir)
     analysis_data = cache.get("analysis_data", {})
-    coverage_data = analysis_data.get("coverage", {}) if not workflow_steps or is_section_enabled("target", workflow_steps) else {}
-    cnv_data = analysis_data.get("cnv", {}) if not workflow_steps or is_section_enabled("cnv", workflow_steps) else {}
-    mgmt_data = analysis_data.get("mgmt", {}) if not workflow_steps or is_section_enabled("mgmt", workflow_steps) else {}
-    fusion_data = analysis_data.get("fusion", {}) if not workflow_steps or is_section_enabled("fusion", workflow_steps) else {}
+    _vis = lambda sid: is_section_visible(sid, workflow_steps=workflow_steps, display_config=display_config, viewer_role=viewer_role)
+    coverage_data = analysis_data.get("coverage", {}) if _vis("target") else {}
+    cnv_data = analysis_data.get("cnv", {}) if _vis("cnv") else {}
+    mgmt_data = analysis_data.get("mgmt", {}) if _vis("mgmt") else {}
+    fusion_data = analysis_data.get("fusion", {}) if _vis("fusion") else {}
     
-    # Check if any analysis section should be shown
-    should_show_target = not workflow_steps or is_section_enabled("target", workflow_steps)
-    should_show_cnv = not workflow_steps or is_section_enabled("cnv", workflow_steps)
-    should_show_mgmt = not workflow_steps or is_section_enabled("mgmt", workflow_steps)
-    should_show_fusion = not workflow_steps or is_section_enabled("fusion", workflow_steps)
+    should_show_target = _vis("target")
+    should_show_cnv = _vis("cnv")
+    should_show_mgmt = _vis("mgmt")
+    should_show_fusion = _vis("fusion")
     
-    if workflow_steps and not any([should_show_target, should_show_cnv, should_show_mgmt, should_show_fusion]):
+    if not any([should_show_target, should_show_cnv, should_show_mgmt, should_show_fusion]):
         return
 
     with ui.element("div").classes("classification-insight-shell w-full min-w-0"):
@@ -271,6 +425,7 @@ def _analysis_section(sample_dir: Path, launcher: Any = None):
                     coverage_data.get("target_coverage", "Not available"),
                     coverage_data.get("global_coverage", "Not available"),
                     coverage_data.get("enrichment", "Not available"),
+                    coverage_data.get("read_length_summary", ""),
                     anchor_key="coverage",
                 )
 
@@ -280,8 +435,12 @@ def _analysis_section(sample_dir: Path, launcher: Any = None):
                     cnv_data.get("genetic_sex", "Not available"),
                     cnv_data.get("bin_width", "Not available"),
                     cnv_data.get("variance", "Not available"),
-                    cnv_data.get("gained", 0),
-                    cnv_data.get("lost", 0),
+                    cnv_data.get(
+                        "whole_chromosome_summary", "Whole chromosome: none detected"
+                    ),
+                    cnv_data.get("arm_summary", "Arm-level: none detected"),
+                    int(cnv_data.get("whole_chromosome_count", 0)),
+                    int(cnv_data.get("arm_count", 0)),
                     anchor_key="cnv",
                 )
 
@@ -333,7 +492,12 @@ def add_summary_section(sample_dir: Path, sample_id: str, launcher: Any = None) 
 
     def _schedule_refresh() -> None:
         try:
-            asyncio.create_task(_refresh_summary_cache_async())
+            if background_tasks is None:
+                raise RuntimeError("NiceGUI background tasks unavailable")
+            background_tasks.create(
+                _refresh_summary_cache_async(),
+                name="summary-refresh",
+            )
         except RuntimeError:
             # If no running loop, fall back to sync refresh (still updates cache)
             data = _refresh_summary_cache_sync(sample_dir, sample_id, launcher)
@@ -343,13 +507,19 @@ def add_summary_section(sample_dir: Path, sample_id: str, launcher: Any = None) 
             _analysis_section.refresh()
 
     # Initial async load shortly after page render
-    ui.timer(0.2, _refresh_summary_cache_async, once=True)
+    from robin.gui.theme import client_timer, stop_timer
+
+    client_timer(0.2, _refresh_summary_cache_async, once=True)
     # Periodic refresh timer (every 30 seconds)
-    refresh_timer = ui.timer(
+    refresh_timer = client_timer(
         30.0, _refresh_summary_cache_async, active=True, immediate=False
     )
     try:
-        ui.context.client.on_disconnect(lambda: refresh_timer.deactivate())
+        def _on_disconnect_cleanup() -> None:
+            stop_timer(refresh_timer)
+            _clear_summary_cache(sample_dir)
+
+        ui.context.client.on_disconnect(_on_disconnect_cleanup)
     except Exception:
         pass
 
@@ -358,23 +528,28 @@ def _refresh_summary_cache_sync(
     sample_dir: Path, sample_id: str, launcher: Any = None
 ) -> Dict[str, Any]:
     """Compute summary data in a background thread."""
-    workflow_steps = launcher.workflow_steps if launcher and hasattr(launcher, "workflow_steps") else None
+    workflow_steps, display_config, viewer_role = launcher_visibility_context(launcher)
     data: Dict[str, Any] = {
         "run_info": _extract_run_information(sample_dir, sample_id),
-        "classification_data": _extract_classification_data(sample_dir),
+        "classification_data": _extract_classification_data(
+            sample_dir,
+            active_classifiers=get_enabled_classification_steps(workflow_steps),
+        ),
         "analysis_data": {},
     }
 
     # Analysis data (only compute enabled sections)
     analysis_data: Dict[str, Any] = {}
-    if not workflow_steps or is_section_enabled("target", workflow_steps):
+    if is_section_visible("target", workflow_steps=workflow_steps, display_config=display_config, viewer_role=viewer_role):
         analysis_data["coverage"] = _extract_coverage_data(sample_dir)
-    if not workflow_steps or is_section_enabled("cnv", workflow_steps):
+    if is_section_visible("cnv", workflow_steps=workflow_steps, display_config=display_config, viewer_role=viewer_role):
         analysis_data["cnv"] = _extract_cnv_data(sample_dir)
-    if not workflow_steps or is_section_enabled("mgmt", workflow_steps):
+    if is_section_visible("mgmt", workflow_steps=workflow_steps, display_config=display_config, viewer_role=viewer_role):
         analysis_data["mgmt"] = _extract_mgmt_data(sample_dir)
-    if not workflow_steps or is_section_enabled("fusion", workflow_steps):
+    if is_section_visible("fusion", workflow_steps=workflow_steps, display_config=display_config, viewer_role=viewer_role):
         analysis_data["fusion"] = _extract_fusion_data(sample_dir)
+    if is_section_visible("itd", workflow_steps=workflow_steps, display_config=display_config, viewer_role=viewer_role):
+        analysis_data["itd"] = _extract_itd_data(sample_dir)
 
     data["analysis_data"] = analysis_data
     return data
@@ -428,8 +603,8 @@ def _create_classification_dashboard_card_with_data(
     with (
         ui.element("div")
         .classes(
-            "classification-insight-card w-full min-w-0 "
-            "cursor-pointer transition-all duration-200 select-none"
+            "robin-card robin-card--informational robin-card--interactive "
+            "classification-insight-card w-full min-w-0 select-none"
         )
         .on("click", _on_card_click)
     ):
@@ -462,10 +637,10 @@ def _create_classification_dashboard_card_with_data(
 
 def _create_classification_dashboard_card(title: str, classification: str, icon: str, description: str) -> Dict[str, Any]:
     """Create a compact classification dashboard card with detailed information. Returns labels for updating."""
-    with ui.card().classes("flex-1 bg-white rounded-lg shadow-sm border border-gray-200 p-4"):
+    with ui.card().classes("robin-card flex-1"):
         with ui.row().classes("flex items-center justify-between mb-2"):
             # Title
-            ui.label(title).classes("text-sm font-medium text-gray-600")
+            ui.label(title).classes("robin-card__title")
             
             # Icon in circular background
             with ui.row().classes("w-7 h-7 bg-blue-100 rounded-full flex items-center justify-center"):
@@ -483,7 +658,7 @@ def _create_classification_dashboard_card(title: str, classification: str, icon:
             features_label = ui.label("Features: Loading...").classes("text-xs text-gray-500")
         
         # Description
-        ui.label(description).classes("text-xs text-gray-500")
+        ui.label(description).classes("robin-card__description")
         
         return {
             "classification": classification_label,
@@ -539,6 +714,7 @@ def _create_coverage_dashboard_card_with_data(
     target_coverage: str,
     global_coverage: str,
     enrichment: str,
+    read_length_summary: str = "",
     anchor_key: str = "coverage",
 ) -> None:
     """Coverage insight card — same shell as classification (design.md §9)."""
@@ -555,8 +731,8 @@ def _create_coverage_dashboard_card_with_data(
     with (
         ui.element("div")
         .classes(
-            "classification-insight-card w-full min-w-0 "
-            "cursor-pointer transition-all duration-200 select-none"
+            "robin-card robin-card--informational robin-card--interactive "
+            "classification-insight-card w-full min-w-0 select-none"
         )
         .on("click", _on_click)
     ):
@@ -585,6 +761,8 @@ def _create_coverage_dashboard_card_with_data(
                 ui.label(f"Enrichment: {enrichment}").classes(
                     "classification-insight-meta"
                 )
+                if read_length_summary:
+                    ui.label(read_length_summary).classes("classification-insight-meta")
             with ui.row().classes("gap-1 flex-wrap"):
                 ui.label("≥30x").classes(
                     "analysis-insight-pill analysis-insight-pill--emerald"
@@ -601,10 +779,10 @@ def _create_coverage_dashboard_card_with_data(
 
 def _create_coverage_dashboard_card() -> Dict[str, Any]:
     """Create a compact coverage analysis dashboard card. Returns labels for updating."""
-    with ui.card().classes("flex-1 bg-white rounded-lg shadow-sm border border-gray-200 p-4"):
+    with ui.card().classes("robin-card flex-1"):
         with ui.row().classes("flex items-center justify-between mb-2"):
             # Title
-            ui.label("Coverage Analysis").classes("text-sm font-medium text-gray-600")
+            ui.label("Coverage Analysis").classes("robin-card__title")
             
             # Icon in circular background
             with ui.row().classes("w-7 h-7 bg-blue-100 rounded-full flex items-center justify-center"):
@@ -642,23 +820,24 @@ def _create_cnv_dashboard_card_with_data(
     genetic_sex: str,
     bin_width: str,
     variance: str,
-    gained: int,
-    lost: int,
+    whole_chromosome_summary: str,
+    arm_summary: str,
+    whole_chromosome_count: int = 0,
+    arm_count: int = 0,
     anchor_key: str = "cnv",
 ) -> None:
     """CNV insight card — design.md §9."""
-    total = int(gained) + int(lost)
-    total_denom = str(total) if total > 0 else "—"
-
     def _on_click() -> None:
         _scroll_to_analysis_detail(anchor_key)
 
     _gs = genetic_sex.replace('"', "'")
+    _whole = whole_chromosome_summary.replace('"', "'")
+    _arm = arm_summary.replace('"', "'")
     with (
         ui.element("div")
         .classes(
-            "classification-insight-card w-full min-w-0 "
-            "cursor-pointer transition-all duration-200 select-none"
+            "robin-card robin-card--informational robin-card--interactive "
+            "classification-insight-card w-full min-w-0 select-none"
         )
         .on("click", _on_click)
     ):
@@ -671,18 +850,21 @@ def _create_cnv_dashboard_card_with_data(
             ui.label(genetic_sex).classes("classification-insight-result w-full").props(
                 f'title="{_gs}"'
             )
-            ui.label(f"Gained vs total: {gained} / {total_denom}").classes(
-                "classification-insight-meta w-full"
-            )
+            ui.label(whole_chromosome_summary).classes(
+                "classification-insight-meta w-full truncate"
+            ).props(f'title="{_whole}"')
+            ui.label(arm_summary).classes(
+                "classification-insight-meta w-full truncate"
+            ).props(f'title="{_arm}"')
             with ui.column().classes("w-full gap-1"):
                 ui.label(f"Bin width: {bin_width}").classes("classification-insight-meta")
                 ui.label(f"Variance: {variance}").classes("classification-insight-meta")
             with ui.row().classes("gap-1 flex-wrap"):
-                ui.label(f"Gained: {gained}").classes(
+                ui.label(f"Whole chr: {whole_chromosome_count}").classes(
                     "analysis-insight-pill analysis-insight-pill--emerald"
                 )
-                ui.label(f"Lost: {lost}").classes(
-                    "analysis-insight-pill analysis-insight-pill--rose"
+                ui.label(f"Arm: {arm_count}").classes(
+                    "analysis-insight-pill analysis-insight-pill--sky"
                 )
             ui.label(
                 "Copy number across the genome with breakpoint detection"
@@ -691,10 +873,10 @@ def _create_cnv_dashboard_card_with_data(
 
 def _create_cnv_dashboard_card() -> Dict[str, Any]:
     """Create a compact CNV analysis dashboard card. Returns labels for updating."""
-    with ui.card().classes("flex-1 bg-white rounded-lg shadow-sm border border-gray-200 p-4"):
+    with ui.card().classes("robin-card flex-1"):
         with ui.row().classes("flex items-center justify-between mb-2"):
             # Title
-            ui.label("Copy Number Analysis").classes("text-sm font-medium text-gray-600")
+            ui.label("Copy Number Analysis").classes("robin-card__title")
             
             # Icon in circular background
             with ui.row().classes("w-7 h-7 bg-purple-100 rounded-full flex items-center justify-center"):
@@ -714,7 +896,7 @@ def _create_cnv_dashboard_card() -> Dict[str, Any]:
             lost_badge = ui.label("Lost: --").classes("px-2 py-1 text-xs font-medium rounded-full bg-red-100 text-red-800")
         
         # Description
-        ui.label("Copy number analysis across genome with breakpoint detection").classes("text-xs text-gray-500")
+        ui.label("Copy number analysis across genome with breakpoint detection").classes("robin-card__description")
         
         return {
             "genetic_sex": genetic_sex_label,
@@ -756,8 +938,8 @@ def _create_mgmt_dashboard_card_with_data(
     with (
         ui.element("div")
         .classes(
-            "classification-insight-card w-full min-w-0 "
-            "cursor-pointer transition-all duration-200 select-none"
+            "robin-card robin-card--informational robin-card--interactive "
+            "classification-insight-card w-full min-w-0 select-none"
         )
         .on("click", _on_click)
     ):
@@ -791,10 +973,10 @@ def _create_mgmt_dashboard_card_with_data(
 
 def _create_mgmt_dashboard_card() -> Dict[str, Any]:
     """Create a compact MGMT analysis dashboard card. Returns labels for updating."""
-    with ui.card().classes("flex-1 bg-white rounded-lg shadow-sm border border-gray-200 p-4"):
+    with ui.card().classes("robin-card flex-1"):
         with ui.row().classes("flex items-center justify-between mb-2"):
             # Title
-            ui.label("MGMT Analysis").classes("text-sm font-medium text-gray-600")
+            ui.label("MGMT Analysis").classes("robin-card__title")
             
             # Icon in circular background
             with ui.row().classes("w-7 h-7 bg-orange-100 rounded-full flex items-center justify-center"):
@@ -812,7 +994,7 @@ def _create_mgmt_dashboard_card() -> Dict[str, Any]:
             prediction_score_label = ui.label("Score: Loading...").classes("text-xs text-gray-600")
         
         # Description
-        cpg_sites_label = ui.label("MGMT status determined from methylation analysis of -- CpG sites").classes("text-xs text-gray-500")
+        cpg_sites_label = ui.label("MGMT status determined from methylation analysis of -- CpG sites").classes("robin-card__description")
         
         return {
             "status": status_label,
@@ -853,8 +1035,8 @@ def _create_fusion_dashboard_card_with_data(
     with (
         ui.element("div")
         .classes(
-            "classification-insight-card w-full min-w-0 "
-            "cursor-pointer transition-all duration-200 select-none"
+            "robin-card robin-card--informational robin-card--interactive "
+            "classification-insight-card w-full min-w-0 select-none"
         )
         .on("click", _on_click)
     ):
@@ -882,10 +1064,10 @@ def _create_fusion_dashboard_card_with_data(
 
 def _create_fusion_dashboard_card() -> Dict[str, Any]:
     """Create a compact fusion analysis dashboard card. Returns labels for updating."""
-    with ui.card().classes("flex-1 bg-white rounded-lg shadow-sm border border-gray-200 p-4"):
+    with ui.card().classes("robin-card flex-1"):
         with ui.row().classes("flex items-center justify-between mb-2"):
             # Title
-            ui.label("Fusion Analysis").classes("text-sm font-medium text-gray-600")
+            ui.label("Fusion Analysis").classes("robin-card__title")
             
             # Icon in circular background
             with ui.row().classes("w-7 h-7 bg-green-100 rounded-full flex items-center justify-center"):
@@ -901,7 +1083,7 @@ def _create_fusion_dashboard_card() -> Dict[str, Any]:
             genome_fusions_label = ui.label("-- genome wide fusions").classes("text-xs text-gray-600")
         
         # Description
-        ui.label("Fusion candidates identified from reads with supplementary alignments").classes("text-xs text-gray-500")
+        ui.label("Fusion candidates identified from reads with supplementary alignments").classes("robin-card__description")
         
         return {
             "panel": panel_label,
@@ -937,10 +1119,11 @@ def _get_analysis_panel(sample_dir: Path) -> str:
     try:
         master_csv_path = sample_dir / "master.csv"
         if master_csv_path.exists():
-            import pandas as pd
-            df = pd.read_csv(master_csv_path)
-            if not df.empty and "analysis_panel" in df.columns:
-                panel = df.iloc[0]["analysis_panel"]
+            with master_csv_path.open("r", newline="") as fh:
+                reader = csv.DictReader(fh)
+                row = next(reader, None)
+            if row:
+                panel = row.get("analysis_panel", "")
                 if panel and str(panel).strip() != "":
                     return str(panel).strip()
         # No fallback to rCNS2 - return empty string if not found
@@ -958,10 +1141,12 @@ def _apply_master_csv_to_run_info(sample_dir: Path, run_info: Dict[str, str]) ->
     - ``run_info_run_time`` → run time (local clock, with seconds)
     - ``run_info_device`` / ``devices`` → Device
     - ``run_info_model`` / ``basecall_models`` → Basecall model
+    - ``modbase_models`` → Modbase model
     - ``run_info_flow_cell`` / ``flowcell_ids`` → Flow cell
     - ``analysis_panel`` → Analysis panel
     - ``counter_bam_passed`` / ``counter_bam_failed`` / ``counter_bases_count`` /
-      ``counter_mapped_count`` / ``counter_unmapped_count`` → BAM / bases tiles
+      ``counter_mapped_count`` / ``counter_unmapped_count`` /
+      ``counter_mapped_bases`` / ``counter_unmapped_bases`` → BAM / bases tiles
     - ``bam_tracking_counter`` / ``bam_tracking_total_files`` → BAM batches (current / total)
     """
     master_path = sample_dir / "master.csv"
@@ -984,6 +1169,10 @@ def _apply_master_csv_to_run_info(sample_dir: Path, run_info: Dict[str, str]) ->
         model_val = get_ci(row, "run_info_model") or get_ci(row, "basecall_models")
         if model_val and str(model_val).strip():
             run_info["model"] = str(model_val).strip()
+
+        modbase_model_val = get_ci(row, "modbase_models")
+        if modbase_model_val and str(modbase_model_val).strip():
+            run_info["modbase_model"] = str(modbase_model_val).strip()
 
         device_val = get_ci(row, "run_info_device") or get_ci(row, "devices")
         if device_val and str(device_val).strip():
@@ -1016,6 +1205,8 @@ def _apply_master_csv_to_run_info(sample_dir: Path, run_info: Dict[str, str]) ->
             ("counter_bases_count", "total_bases"),
             ("counter_mapped_count", "mapped_reads"),
             ("counter_unmapped_count", "unmapped_reads"),
+            ("counter_mapped_bases", "mapped_bases"),
+            ("counter_unmapped_bases", "unmapped_bases"),
         ):
             raw = get_ci(row, csv_key)
             if raw is not None and str(raw).strip() != "":
@@ -1043,6 +1234,7 @@ def _extract_run_information(sample_dir: Path, sample_id: str) -> Dict[str, str]
     run_info = {
         "run_time": "Not available",
         "model": "Not available",
+        "modbase_model": "Not available",
         "device": "Not available",
         "flow_cell": "Not available",
         "panel": "Not available",
@@ -1112,6 +1304,10 @@ def _extract_run_information(sample_dir: Path, sample_id: str) -> Dict[str, str]
         pass
 
     _apply_master_csv_to_run_info(sample_dir, run_info)
+    if run_info["model"] == "Not available":
+        run_info["model"] = "Missing"
+    if run_info["modbase_model"] == "Not available":
+        run_info["modbase_model"] = "Missing"
 
     return run_info
 
@@ -1123,6 +1319,8 @@ def _extract_coverage_data(sample_dir: Path) -> Dict[str, Any]:
         "global_coverage": "Not available",
         "target_coverage": "Not available",
         "enrichment": "Not available",
+        "read_length_summary": "",
+        **coverage_read_length_export_fields(None),
     }
 
     try:
@@ -1139,18 +1337,22 @@ def _extract_coverage_data(sample_dir: Path) -> Dict[str, Any]:
             try:
                 import pandas as pd
 
-                cov_df = pd.read_csv(cov_main)
+                cov_df = pd.read_csv(
+                    cov_main,
+                    usecols=lambda c: c in {"#rname", "covbases", "endpos"},
+                    dtype={"covbases": "float64", "endpos": "float64"},
+                )
 
                 # Calculate global coverage using the same formula as coverage component
-                if (
-                    "covbases" in cov_df.columns
-                    and "endpos" in cov_df.columns
-                    and cov_df["endpos"].sum() > 0
-                ):
-                    global_cov = float(cov_df["covbases"].sum()) / float(
-                        cov_df["endpos"].sum()
-                    )
-                    coverage_data["global_coverage"] = f"{global_cov:.2f}x"
+                if "covbases" in cov_df.columns and "endpos" in cov_df.columns:
+                    global_cov = calculate_coverage_metrics(
+                        cov_df,
+                        pd.DataFrame(columns=["bases", "length"]),
+                        resolve_plotting_reference_contig_scope(),
+                    )["global_coverage"]
+                    if global_cov is not None:
+                        global_cov = float(global_cov)
+                        coverage_data["global_coverage"] = f"{global_cov:.2f}x"
             except Exception as e:
                 logging.debug(f"   MGMT: <access denied>: {e}")
                 pass
@@ -1160,31 +1362,28 @@ def _extract_coverage_data(sample_dir: Path) -> Dict[str, Any]:
             try:
                 import pandas as pd
 
-                bed_df = pd.read_csv(bed_cov)
+                bed_df = pd.read_csv(
+                    bed_cov,
+                    usecols=lambda c: c in {"chrom", "bases", "length", "endpos", "startpos"},
+                    dtype={
+                        "bases": "float64",
+                        "length": "float64",
+                        "endpos": "float64",
+                        "startpos": "float64",
+                    },
+                )
 
                 # Calculate target coverage using the same formula as coverage component
                 if "bases" in bed_df.columns:
-                    # Calculate length if not present (same as coverage component)
-                    if "length" not in bed_df.columns:
-                        bed_df["length"] = (
-                            bed_df["endpos"] - bed_df["startpos"] + 1
-                        ).astype(float)
-
-                    if bed_df["length"].sum() > 0:
-                        target_cov_v = float(bed_df["bases"].sum()) / float(
-                            bed_df["length"].sum()
-                        )
+                    target_cov_v = calculate_coverage_metrics(
+                        pd.DataFrame(columns=["covbases", "endpos"]),
+                        bed_df,
+                        resolve_plotting_reference_contig_scope(),
+                    )["target_coverage"]
+                    if target_cov_v is not None:
+                        target_cov_v = float(target_cov_v)
                         coverage_data["target_coverage"] = f"{target_cov_v:.2f}x"
-
-                        # Determine quality based on target coverage (same logic as coverage component)
-                        if target_cov_v >= 30:
-                            coverage_data["quality"] = "Excellent"
-                        elif target_cov_v >= 20:
-                            coverage_data["quality"] = "Good"
-                        elif target_cov_v >= 10:
-                            coverage_data["quality"] = "Moderate"
-                        else:
-                            coverage_data["quality"] = "Insufficient"
+                        coverage_data["quality"] = coverage_quality_name(target_cov_v)
             except Exception as e:
                 logging.debug(f"   MGMT: <access denied>: {e}")
                 pass
@@ -1193,6 +1392,10 @@ def _extract_coverage_data(sample_dir: Path) -> Dict[str, Any]:
         if global_cov is not None and target_cov_v is not None and global_cov > 0:
             enrich_v = target_cov_v / global_cov
             coverage_data["enrichment"] = f"{enrich_v:.2f}x"
+
+        length_stats = load_on_off_target_length_stats(sample_dir)
+        coverage_data["read_length_summary"] = read_length_summary_line(length_stats)
+        coverage_data.update(coverage_read_length_export_fields(length_stats))
 
     except Exception as e:
         logging.debug(f"   MGMT: <access denied>: {e}")
@@ -1203,12 +1406,14 @@ def _extract_coverage_data(sample_dir: Path) -> Dict[str, Any]:
 
 def _extract_cnv_data(sample_dir: Path) -> Dict[str, Any]:
     """Extract CNV analysis data using the same methods as the CNV component."""
-    cnv_data = {
+    cnv_data: Dict[str, Any] = {
         "genetic_sex": "Not available",
         "bin_width": "Not available",
         "variance": "Not available",
-        "gained": 0,
-        "lost": 0,
+        "whole_chromosome_summary": "Whole chromosome: none detected",
+        "arm_summary": "Arm-level: none detected",
+        "whole_chromosome_count": 0,
+        "arm_count": 0,
     }
 
     try:
@@ -1229,7 +1434,7 @@ def _extract_cnv_data(sample_dir: Path) -> Dict[str, Any]:
                         if isinstance(variance, (int, float)):
                             cnv_data["variance"] = f"{variance:.3f}"
             except Exception as e:
-                logging.debug(f"   MGMT: <access denied>: {e}")
+                logging.debug(f"   CNV dict load failed: {e}")
                 pass
 
         # Load XYestimate.pkl for genetic sex (same as CNV component)
@@ -1243,55 +1448,22 @@ def _extract_cnv_data(sample_dir: Path) -> Dict[str, Any]:
                 if xy:
                     cnv_data["genetic_sex"] = str(xy)
             except Exception as e:
-                logging.debug(f"   MGMT: <access denied>: {e}")
+                logging.debug(f"   XY estimate load failed: {e}")
                 pass
 
-        # Look for CNV result files for gained/lost counts
-        cnv_files = [
-            "cnv_analysis_counter.txt",
-            "cnv_results.csv",
-            "cnv_summary.txt",
-            "cnv_analysis_results.pkl",
-        ]
-
-        for cnv_file in cnv_files:
-            file_path = sample_dir / cnv_file
-            if file_path.exists():
-                if cnv_file.endswith(".txt"):
-                    try:
-                        with open(file_path, "r") as f:
-                            content = f.read().strip()
-                            # Parse counter file for basic CNV info
-                            if content.isdigit():
-                                cnv_data["gained"] = int(
-                                    content
-                                )  # Assume this is gained regions
-                                cnv_data["lost"] = 0  # Default value
-                    except Exception as e:
-                        logging.debug(f"   MGMT: <access denied>: {e}")
-                        pass
-                elif cnv_file.endswith(".csv"):
-                    try:
-                        with open(file_path, "r") as f:
-                            reader = csv.DictReader(f)
-                            for row in reader:
-                                if "genetic_sex" in row:
-                                    cnv_data["genetic_sex"] = row["genetic_sex"]
-                                if "bin_width" in row:
-                                    cnv_data["bin_width"] = row["bin_width"]
-                                if "variance" in row:
-                                    cnv_data["variance"] = row["variance"]
-                                if "gained" in row:
-                                    cnv_data["gained"] = int(row["gained"])
-                                if "lost" in row:
-                                    cnv_data["lost"] = int(row["lost"])
-                    except Exception as e:
-                        logging.debug(f"   MGMT: <access denied>: {e}")
-                        pass
-                break
+        events = detect_cnv_events_for_sample(sample_dir)
+        whole_text, arm_text = format_cnv_events_card_lines(events)
+        cnv_data["whole_chromosome_summary"] = whole_text
+        cnv_data["arm_summary"] = arm_text
+        cnv_data["whole_chromosome_count"] = sum(
+            1 for event in events if event.event_type.startswith("WHOLE_CHR_")
+        )
+        cnv_data["arm_count"] = sum(
+            1 for event in events if not event.event_type.startswith("WHOLE_CHR_")
+        )
 
     except Exception as e:
-        logging.debug(f"   MGMT: <access denied>: {e}")
+        logging.debug(f"   CNV summary extraction failed: {e}")
         pass
 
     return cnv_data
@@ -1311,6 +1483,7 @@ def _extract_mgmt_data(sample_dir: Path) -> Dict[str, Any]:
         # Use the same file discovery logic as the MGMT component
         # First check for final_mgmt.csv files (highest priority)
         final_files = list(sample_dir.glob("final_mgmt.csv"))
+        current_count: Optional[int] = None
         if final_files:
             latest_csv = final_files[0]
         else:
@@ -1328,12 +1501,19 @@ def _extract_mgmt_data(sample_dir: Path) -> Dict[str, Any]:
                     return -1
 
             latest_csv = max(csv_files, key=_count_from_name)
+            current_count = _count_from_name(latest_csv)
 
         # Read the latest MGMT CSV file
         try:
             import pandas as pd
 
-            df = pd.read_csv(latest_csv)
+            required_cols = {"status", "pred", "average"}
+            df = pd.read_csv(
+                latest_csv,
+                usecols=lambda c: c in required_cols,
+                nrows=1,
+                dtype=str,
+            )
 
             # Extract data using the same column names as the MGMT component
             if "status" in df.columns:
@@ -1369,15 +1549,21 @@ def _extract_mgmt_data(sample_dir: Path) -> Dict[str, Any]:
                     pass
 
             # Count CPG sites from the BED file if available
-            current_count = _count_from_name(latest_csv)
-            bed_path = sample_dir / f"{current_count}_mgmt.bed"
-            if not bed_path.exists():
-                alt_bed = sample_dir / f"{current_count}_mgmt_mgmt.bed"
-                bed_path = alt_bed if alt_bed.exists() else bed_path
+            if current_count is None:
+                bed_candidates = [
+                    sample_dir / "final_mgmt.bed",
+                    sample_dir / "final_mgmt_mgmt.bed",
+                ]
+            else:
+                bed_candidates = [
+                    sample_dir / f"{current_count}_mgmt.bed",
+                    sample_dir / f"{current_count}_mgmt_mgmt.bed",
+                ]
+            bed_path = next((path for path in bed_candidates if path.exists()), None)
 
-            if bed_path.exists():
+            if bed_path is not None:
                 try:
-                    # Count lines in BED file to estimate CPG sites
+                    # Count lines in BED file to estimate CpG sites.
                     with open(bed_path, "r") as f:
                         line_count = sum(1 for line in f if line.strip())
                     mgmt_data["cpg_sites"] = line_count
@@ -1396,8 +1582,24 @@ def _extract_mgmt_data(sample_dir: Path) -> Dict[str, Any]:
     return mgmt_data
 
 
-def _extract_classification_data(sample_dir: Path) -> Dict[str, Any]:
-    """Extract classification data from various score files."""
+def _extract_classification_data(
+    sample_dir: Path, active_classifiers: Optional[set[str]] = None
+) -> Dict[str, Any]:
+    """Extract classification data and mark classifiers absent from the workflow.
+
+    ``None`` preserves the historical behaviour for direct callers that do not
+    have workflow metadata. The summary/TSV path always passes the active
+    workflow classifiers so an unused model is not confused with a failed or
+    incomplete result.
+    """
+    classifier_names = set(CLASSIFICATION_STEPS)
+    active = classifier_names if active_classifiers is None else set(active_classifiers)
+    not_used = {
+        "classification": "Classifier not used",
+        "confidence": "Classifier not used",
+        "confidence_level": "Classifier not used",
+        "features": "Classifier not used",
+    }
     classification_data = {
         "sturgeon": {
             "classification": "Not available",
@@ -1423,7 +1625,27 @@ def _extract_classification_data(sample_dir: Path) -> Dict[str, Any]:
             "confidence_level": "Not available",
             "features": 0,
         },
+        "marlin": {
+            "classification": "Not available",
+            "confidence": 0.0,
+            "confidence_level": "Not available",
+            "features": 0,
+        },
+        "lamprey": {
+            "classification": "Not available",
+            "confidence": 0.0,
+            "confidence_level": "Not available",
+            "features": 0,
+        },
+        "tucan": {
+            "classification": "Not available",
+            "confidence": 0.0,
+            "confidence_level": "Not available",
+            "features": 0,
+        },
     }
+    for name in classifier_names - active:
+        classification_data[name] = dict(not_used)
 
     try:
         # Extract Sturgeon data
@@ -1533,7 +1755,24 @@ def _extract_classification_data(sample_dir: Path) -> Dict[str, Any]:
                     reader = csv.DictReader(f)
                     for row in reader:
                         # Get the latest row (last one)
-                        features = int(row.get("number_probes", 0))
+                        try:
+                            features = int(float(row.get("number_probes") or 0))
+                        except (TypeError, ValueError):
+                            features = 0
+                        if features <= 0:
+                            from robin.analysis.random_forest_analysis import (
+                                parse_rf_feature_count_from_report,
+                            )
+
+                            features = (
+                                parse_rf_feature_count_from_report(
+                                    str(
+                                        sample_dir
+                                        / "random_forest_calibrated_classification.tsv"
+                                    )
+                                )
+                                or 0
+                            )
                         # Find the highest scoring classification
                         max_score = 0.0
                         best_class = "Unknown"
@@ -1565,8 +1804,151 @@ def _extract_classification_data(sample_dir: Path) -> Dict[str, Any]:
                 logging.debug(f"   Random Forest: <access denied>: {e}")
                 pass
 
+        # Extract MARLIN data
+        marlin_file = sample_dir / "marlin_scores.csv"
+        if marlin_file.exists():
+            try:
+                with open(marlin_file, "r") as f:
+                    reader = csv.DictReader(f)
+                    for row in reader:
+                        features = int(
+                            float(
+                                row.get("covered_cpgs")
+                                or row.get("number_probes")
+                                or 0
+                            )
+                        )
+                        max_score = 0.0
+                        best_class = "Unknown"
+                        for col, value in row.items():
+                            if col not in {
+                                "timestamp",
+                                "number_probes",
+                                "covered_cpgs",
+                            }:
+                                try:
+                                    score = float(value)
+                                    if score > max_score:
+                                        max_score = score
+                                        best_class = col
+                                except Exception as e:
+                                    logging.debug(f"   MARLIN: <access denied>: {e}")
+                                    pass
+
+                        confidence_percent = (
+                            max_score * 100 if max_score <= 1 else max_score
+                        )
+                        classification_data["marlin"] = {
+                            "classification": best_class,
+                            "confidence": confidence_percent,
+                            "confidence_level": _get_confidence_level(
+                                confidence_percent, "marlin"
+                            ),
+                            "features": features,
+                        }
+            except Exception as e:
+                logging.debug(f"   MARLIN: <access denied>: {e}")
+                pass
+
+        # Extract Lamprey data (research / evaluation only)
+        lamprey_file = sample_dir / "lamprey_scores.csv"
+        if lamprey_file.exists():
+            try:
+                with open(lamprey_file, "r") as f:
+                    reader = csv.DictReader(f)
+                    for row in reader:
+                        features = int(
+                            float(
+                                row.get("covered_cpgs")
+                                or row.get("number_probes")
+                                or 0
+                            )
+                        )
+                        max_score = 0.0
+                        best_class = "Unknown"
+                        skip = {
+                            "timestamp",
+                            "number_probes",
+                            "covered_cpgs",
+                            "temperature",
+                            "diagnostic",
+                            "probes",
+                        }
+                        for col, value in row.items():
+                            if col in skip:
+                                continue
+                            try:
+                                score = float(value)
+                                if score > max_score:
+                                    max_score = score
+                                    best_class = col
+                            except Exception as e:
+                                logging.debug(f"   Lamprey: {e}")
+                        confidence_percent = (
+                            max_score * 100 if max_score <= 1 else max_score
+                        )
+                        classification_data["lamprey"] = {
+                            "classification": best_class,
+                            "confidence": confidence_percent,
+                            "confidence_level": _get_confidence_level(
+                                confidence_percent, "lamprey"
+                            ),
+                            "features": features,
+                        }
+            except Exception as e:
+                logging.debug(f"   Lamprey: <access denied>: {e}")
+                pass
+
+        # Extract Tucan data (pediatric solid tumors / lymphomas)
+        tucan_file = sample_dir / "tucan_scores.csv"
+        if tucan_file.exists():
+            try:
+                with open(tucan_file, "r") as f:
+                    reader = csv.DictReader(f)
+                    for row in reader:
+                        features = int(
+                            float(
+                                row.get("covered_cpgs")
+                                or row.get("number_probes")
+                                or row.get("probes")
+                                or 0
+                            )
+                        )
+                        max_score = 0.0
+                        best_class = "Unknown"
+                        skip = {
+                            "timestamp",
+                            "number_probes",
+                            "covered_cpgs",
+                            "probes",
+                        }
+                        for col, value in row.items():
+                            if col in skip:
+                                continue
+                            try:
+                                score = float(value)
+                                if score > max_score:
+                                    max_score = score
+                                    best_class = col
+                            except Exception as e:
+                                logging.debug(f"   Tucan: {e}")
+                        confidence_percent = (
+                            max_score * 100 if max_score <= 1 else max_score
+                        )
+                        classification_data["tucan"] = {
+                            "classification": best_class,
+                            "confidence": confidence_percent,
+                            "confidence_level": _get_confidence_level(
+                                confidence_percent, "tucan"
+                            ),
+                            "features": features,
+                        }
+            except Exception as e:
+                logging.debug(f"   Tucan: <access denied>: {e}")
+                pass
+
     except Exception as e:
-        logging.debug(f"   Random Forest: <access denied>: {e}")
+        logging.debug(f"   Classification extract: {e}")
         pass
 
     return classification_data
@@ -1580,7 +1962,9 @@ def _extract_fusion_data(sample_dir: Path) -> Dict[str, Any]:
         "target_pairs": 0,
         "target_groups": 0,
         "genome_pairs": 0,
-        "genome_groups": 0
+        "genome_groups": 0,
+        "target_pair_list": "",
+        "genome_pair_list": "",
     }
     
     logging.info(f"[Summary] _extract_fusion_data() called with sample_dir: {sample_dir}")
@@ -1651,7 +2035,13 @@ def _extract_fusion_data(sample_dir: Path) -> Dict[str, Any]:
         
         # If still no data, try to load directly from pickle files and count gene_pairs
         try:
-            from robin.gui.components.fusion import _load_processed_pickle, _count_unique_fusion_pairs, _count_unique_fusion_groups
+            from robin.gui.components.fusion import (
+                _count_unique_fusion_groups,
+                _format_fusion_pair_list,
+                _fusion_pair_export_items,
+                _load_processed_pickle,
+                _unique_fusion_pair_labels,
+            )
             target_file = sample_dir / "fusion_candidates_master_processed.pkl"
             genome_file = sample_dir / "fusion_candidates_all_processed.pkl"
             
@@ -1662,15 +2052,23 @@ def _extract_fusion_data(sample_dir: Path) -> Dict[str, Any]:
             
             if target_data and isinstance(target_data, dict):
                 # Use filtered counts to match what's displayed in fusion section
-                fusion_data["target_fusions"] = _count_unique_fusion_pairs(target_data)
-                fusion_data["target_pairs"] = _count_unique_fusion_pairs(target_data)
+                target_pairs = _unique_fusion_pair_labels(target_data)
+                fusion_data["target_fusions"] = len(target_pairs)
+                fusion_data["target_pairs"] = len(target_pairs)
                 fusion_data["target_groups"] = _count_unique_fusion_groups(target_data)
+                fusion_data["target_pair_list"] = _format_fusion_pair_list(
+                    _fusion_pair_export_items(target_data)
+                )
             
             if genome_data and isinstance(genome_data, dict):
                 # Use filtered counts to match what's displayed in fusion section
-                fusion_data["genome_fusions"] = _count_unique_fusion_pairs(genome_data)
-                fusion_data["genome_pairs"] = _count_unique_fusion_pairs(genome_data)
+                genome_pairs = _unique_fusion_pair_labels(genome_data)
+                fusion_data["genome_fusions"] = len(genome_pairs)
+                fusion_data["genome_pairs"] = len(genome_pairs)
                 fusion_data["genome_groups"] = _count_unique_fusion_groups(genome_data)
+                fusion_data["genome_pair_list"] = _format_fusion_pair_list(
+                    _fusion_pair_export_items(genome_data)
+                )
             
             logging.info(f"[Summary] Fusion data loaded directly from pickle files - target: {fusion_data['target_fusions']} fusions, {fusion_data['target_pairs']} pairs, {fusion_data['target_groups']} groups; genome: {fusion_data['genome_fusions']} fusions, {fusion_data['genome_pairs']} pairs, {fusion_data['genome_groups']} groups")
             return fusion_data
@@ -1710,6 +2108,87 @@ def _extract_fusion_data(sample_dir: Path) -> Dict[str, Any]:
         logging.debug(f"   Fusion: <access denied>: {e}")
 
     return fusion_data
+
+
+def _extract_itd_data(sample_dir: Path) -> Dict[str, Any]:
+    """Extract the one-row-per-sample ITD summary used by TSV export."""
+    itd_data: Dict[str, Any] = {
+        "status": "Not analysed",
+        "event_count": 0,
+        "called_genes": 0,
+        "genes": "",
+        "event_list": "",
+        "read_qc_available": False,
+    }
+    events_path = sample_dir / "itd_events.csv"
+    summary_path = sample_dir / "itd_summary.csv"
+    if not events_path.is_file() and not summary_path.is_file():
+        return itd_data
+
+    try:
+        import pandas as pd
+
+        events = pd.DataFrame()
+        summary = pd.DataFrame()
+        if events_path.is_file():
+            from robin.analysis.itd_work import normalize_itd_events_df
+
+            events = normalize_itd_events_df(pd.read_csv(events_path))
+        if summary_path.is_file():
+            summary = pd.read_csv(summary_path)
+
+        if not events.empty:
+            itd_data["event_count"] = int(len(events))
+            if "gene" in events.columns:
+                genes = sorted(
+                    {
+                        str(gene).strip()
+                        for gene in events["gene"].dropna()
+                        if str(gene).strip()
+                    }
+                )
+                itd_data["genes"] = "; ".join(genes)
+                itd_data["called_genes"] = len(genes)
+
+            event_items = []
+            for _, row in events.iterrows():
+                gene = str(row.get("gene", "")).strip()
+                chrom = str(row.get("chrom", "")).strip()
+                position = str(row.get("position", "")).strip()
+                length = str(row.get("length", "")).strip()
+                support = str(row.get("support", "")).strip()
+                vaf = row.get("vaf", "")
+                try:
+                    vaf_text = f"{float(vaf):.4f}"
+                except (TypeError, ValueError):
+                    vaf_text = str(vaf).strip()
+                event_items.append(
+                    f"{gene}|{chrom}:{position}|{length}bp|support={support}|vaf={vaf_text}"
+                )
+            itd_data["event_list"] = "; ".join(event_items)
+        elif not summary.empty and "n_events" in summary.columns:
+            called = summary[summary["n_events"].fillna(0).astype(float) > 0]
+            itd_data["event_count"] = int(summary["n_events"].fillna(0).sum())
+            if "gene" in called.columns:
+                genes = sorted(
+                    {
+                        str(gene).strip()
+                        for gene in called["gene"].dropna()
+                        if str(gene).strip()
+                    }
+                )
+                itd_data["genes"] = "; ".join(genes)
+                itd_data["called_genes"] = len(genes)
+
+        itd_data["status"] = (
+            "Events detected" if itd_data["event_count"] else "No events detected"
+        )
+        itd_data["read_qc_available"] = (sample_dir / "itd_event_qc.csv").is_file()
+    except Exception as exc:
+        logging.debug("ITD summary extraction failed for %s: %s", sample_dir, exc)
+        itd_data["status"] = "Analysis failed"
+
+    return itd_data
 
 
 def _get_confidence_color(confidence_level: str) -> str:
@@ -1793,5 +2272,3 @@ def _get_methylation_badge_color(methylation: str) -> str:
     except Exception as e:
         logging.debug(f"   Methylation: <access denied>: {e}")
         return "grey"
-
-

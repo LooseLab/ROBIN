@@ -1,0 +1,2 @@
+"","SampleID","Classifier","Prediction","Super Family","Score","Family","Score","Class","Score","Subclass","Score","MGMT Status","MGMT Estimated"
+"26D22147.MNPFlex","my sample","Brain v12.8","Glioblastoma, IDH-Wildtype, RTK2 Subtype","Adult-Type Diffuse Gliomas",0.447505850577727,"Glioblastoma, IDH-Wildtype",0.412550623062998,"Glioblastoma, IDH-Wildtype, RTK2 Type",0.254857897758484,"Glioblastoma, IDH-Wildtype, RTK2 Subtype",0.254857897758484,"unmethylated",0.230449264705882

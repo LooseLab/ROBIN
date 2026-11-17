@@ -1,0 +1,564 @@
+/* BATMAN changes the brand chrome, not scientific status semantics. */
+.batman-mode {
+  --robin-brand: #fde311;
+  --robin-surface: #0a0a0a;
+  --robin-surface-muted: #171717;
+  --robin-text: #fafafa;
+  --robin-text-muted: #d4d4d4;
+  --robin-border: #404040;
+  --shell-chrome-top: #000000;
+  --shell-chrome-bottom: #171717;
+}
+
+.batman-mode .robin-card {
+  background: var(--robin-surface);
+  color: var(--robin-text);
+  border-color: var(--robin-border);
+}
+
+.batman-mode .robin-card__title,
+.batman-mode .robin-text-muted,
+.batman-mode .robin-card__description {
+  color: inherit;
+}
+
+/* BATMAN shell chrome: black/yellow branding stays separate from scientific
+   status colours. */
+.batman-mode .q-header,
+.batman-mode .q-footer,
+.q-header.batphone,
+.q-footer.batphone,
+.body--dark .q-header.batphone,
+.body--dark .q-footer.batphone {
+  color: var(--batman-on-black) !important;
+  background: var(--batman-black) !important;
+  background-image: none !important;
+  border-color: var(--batman-yellow) !important;
+}
+
+.batman-mode .q-header,
+.q-header.batphone,
+.body--dark .q-header.batphone {
+  height: 64px;
+  border-bottom: 3px solid var(--batman-yellow) !important;
+  box-shadow: 0 2px 12px rgba(253, 227, 17, 0.25);
+}
+
+.batman-mode .q-footer,
+.q-footer.batphone,
+.body--dark .q-footer.batphone {
+  border-top: 3px solid var(--batman-yellow) !important;
+  box-shadow: 0 -2px 12px rgba(253, 227, 17, 0.2);
+}
+
+.batman-mode .q-header .q-btn,
+.batman-mode .q-header .q-icon,
+.batman-mode .q-header .q-toolbar__title,
+.batman-mode .q-header .text-headline-medium,
+.batman-mode .q-header strong,
+.batman-mode .q-header .q-label,
+.batman-mode .q-header .q-circular-progress__text,
+.q-header.batphone .q-btn,
+.q-header.batphone .q-icon,
+.q-header.batphone .q-toolbar__title,
+.q-header.batphone .text-headline-medium,
+.q-header.batphone strong,
+.q-header.batphone .q-label,
+.q-header.batphone .q-circular-progress__text,
+.batman-mode .q-footer .q-btn,
+.batman-mode .q-footer .q-label,
+.batman-mode .q-footer .q-icon,
+.batman-mode .q-footer .text-body-small,
+.batman-mode .q-footer .text-xs,
+.q-footer.batphone .q-btn,
+.q-footer.batphone .q-label,
+.q-footer.batphone .q-icon,
+.q-footer.batphone .text-body-small,
+.q-footer.batphone .text-xs,
+.batman-mode .q-header .q-btn--flat,
+.batman-mode .q-header .q-btn--flat .q-icon,
+.q-header.batphone .q-btn--flat,
+.q-header.batphone .q-btn--flat .q-icon {
+  color: var(--batman-on-black) !important;
+}
+
+.batman-mode .q-header .q-circular-progress__circle,
+.q-header.batphone .q-circular-progress__circle {
+  color: var(--batman-on-black) !important;
+}
+
+.batman-mode .q-header a:link:not(.browser-window *),
+.batman-mode .q-header a:visited:not(.browser-window *),
+.q-header.batphone a:link:not(.browser-window *),
+.q-header.batphone a:visited:not(.browser-window *) {
+  color: var(--batman-on-black) !important;
+}
+
+.batman-mode .q-header a:hover:not(.browser-window *),
+.q-header.batphone a:hover:not(.browser-window *) {
+  color: var(--batman-black) !important;
+  background-color: var(--batman-yellow) !important;
+}
+
+.batman-mode .q-header.fade,
+.batman-mode .q-footer.fade,
+.q-header.batphone.fade,
+.q-footer.batphone.fade,
+.body--dark .q-header.batphone.fade,
+.body--dark .q-footer.batphone.fade {
+  background: rgba(0, 0, 0, 0.94) !important;
+  backdrop-filter: blur(20px);
+}
+
+
+/* BATMAN mode — LEGO Batman: black chrome, yellow accents, strict contrast */
+.batman-mode {
+  --batman-yellow: #FDE311;
+  --batman-black: #000000;
+  --batman-on-yellow: #000000;
+  --batman-on-black: #FDE311;
+  --batman-page-ink: #171717;
+  --batman-page-muted: #525252;
+  --batman-surface-border: rgba(23, 23, 23, 0.22);
+  --batman-card-border: rgba(23, 23, 23, 0.28);
+  --md-primary-rgb: 0, 0, 0;
+  --md-primary: #000000;
+  --md-primary-container: #FFF9C4;
+  --md-on-primary: #FDE311;
+  --md-on-primary-container: #000000;
+  --md-inverse-primary: #FDE311;
+  --semantic-positive: #000000;
+  --shell-chrome-top: #000000;
+  --shell-chrome-bottom: #000000;
+  --shell-chrome-edge: #FDE311;
+  --app-bg-top: #FFF9E6;
+  --app-bg-bottom: #FFFCF0;
+  --sample-card-gradient-light: linear-gradient(
+    to bottom,
+    rgb(255 249 230) 0%,
+    rgb(255 255 255) 45%,
+    rgb(255 255 255) 100%
+  );
+}
+
+.body--dark.batman-mode,
+.batman-mode.body--dark {
+  --batman-page-ink: #fafafa;
+  --batman-page-muted: #d4d4d4;
+  --batman-surface-border: rgba(253, 227, 17, 0.34);
+  --batman-card-border: rgba(255, 255, 255, 0.16);
+  --shell-page-top: #0a0a0a;
+  --shell-page-bottom: #141414;
+  --md-primary: #000000;
+  --md-on-primary: #FDE311;
+  --app-bg-top: #0a0a0a;
+  --app-bg-bottom: #141414;
+  --sample-card-gradient-dark: linear-gradient(
+    to bottom,
+    rgba(253, 227, 17, 0.08) 0%,
+    rgba(15, 23, 42, 0.4) 100%
+  );
+}
+
+.batman-mode::before {
+  background: radial-gradient(
+    ellipse 120% 50% at 50% -10%,
+    rgba(253, 227, 17, 0.12),
+    transparent 58%
+  ) !important;
+}
+
+/* Primary actions: black field, yellow label (never yellow fill + white text) */
+.batman-mode .q-btn.bg-primary,
+.batman-mode .q-btn--standard.bg-primary,
+.batman-mode .q-btn.bg-primary.text-white,
+.batman-mode .q-btn.bg-primary .q-btn__content,
+.batman-mode .q-btn.bg-primary .q-icon,
+.batman-mode .q-btn.bg-primary .block,
+.batman-mode .q-footer .q-btn--standard,
+.q-footer.batphone .q-btn--standard {
+  background-color: var(--batman-black) !important;
+  color: var(--batman-on-black) !important;
+  border: 2px solid var(--batman-yellow) !important;
+}
+
+/* Yellow-filled controls → black ink */
+.batman-mode .q-btn.bg-secondary,
+.batman-mode .q-btn.bg-accent,
+.batman-mode .q-btn.bg-positive,
+.batman-mode .q-btn.bg-warning {
+  color: var(--batman-on-yellow) !important;
+}
+
+/* Menu chrome (white panel): destructive actions stay readable */
+.batman-mode .q-menu .q-btn.bg-error,
+.batman-mode .q-menu .q-btn.bg-error .q-btn__content,
+.batman-mode .q-menu .q-btn.bg-error .q-icon {
+  background-color: var(--batman-black) !important;
+  color: var(--batman-on-black) !important;
+  border: 1px solid var(--batman-yellow) !important;
+}
+
+/* Page content: keep ordinary text dark in light mode, but preserve yellow
+   action affordances on BATMAN's dark sample header in dark mode. */
+.batman-mode:not(.body--dark) .q-page .text-primary,
+.batman-mode:not(.body--dark) .q-card .text-primary,
+.batman-mode:not(.body--dark) .classification-insight-shell .text-primary {
+  color: var(--batman-page-ink) !important;
+}
+
+.batman-mode:not(.body--dark) .q-page .q-btn--flat.text-primary,
+.batman-mode:not(.body--dark) .q-page .q-btn--outline.text-primary {
+  color: var(--batman-page-ink) !important;
+}
+
+.batman-mode .q-page .q-btn--flat.text-primary:hover,
+.batman-mode .q-page .q-btn--flat.text-primary:focus-visible,
+.batman-mode .q-page .q-btn--outline.text-primary:hover,
+.batman-mode .q-page .q-btn--outline.text-primary:focus-visible {
+  color: var(--batman-black) !important;
+  background: var(--batman-yellow) !important;
+}
+
+.body--dark.batman-mode .q-page .text-primary,
+.body--dark.batman-mode .q-card .text-primary,
+.body--dark.batman-mode .classification-insight-shell .text-primary {
+  color: var(--batman-page-ink) !important;
+}
+
+.body--dark.batman-mode .q-page .q-btn--flat.text-primary,
+.body--dark.batman-mode .q-page .q-btn--outline.text-primary {
+  color: var(--batman-yellow) !important;
+}
+
+.batman-mode .classification-insight-shell {
+  border-color: var(--batman-surface-border);
+  box-shadow: 0 1px 0 rgba(0, 0, 0, 0.12);
+}
+
+.batman-mode .classification-insight-heading {
+  color: var(--batman-black);
+}
+
+.body--dark.batman-mode .classification-insight-heading {
+  color: var(--batman-on-black);
+}
+
+.batman-mode .classification-insight-card {
+  border: 1px solid var(--batman-card-border);
+  box-shadow: none;
+}
+
+.batman-mode .classification-insight-card:hover,
+.batman-mode .classification-insight-card:focus-within {
+  border-color: rgba(253, 227, 17, 0.72);
+  box-shadow: 0 0 0 1px rgba(253, 227, 17, 0.16);
+}
+
+/* Use restrained surfaces so the yellow brand accent remains meaningful. */
+.batman-mode:not(.body--dark) .run-summary-shell,
+.batman-mode:not(.body--dark) .classification-insight-shell,
+.batman-mode:not(.body--dark) .target-coverage-panel {
+  background: #ffffff;
+  background-image: none;
+}
+
+.batman-mode:not(.body--dark) .target-coverage-panel__expansion {
+  background-color: #ffffff;
+}
+
+.batman-mode:not(.body--dark) .run-summary-cell {
+  background: #ffffff;
+  background-image: none;
+  border-color: #e5e7eb;
+}
+
+.batman-mode:not(.body--dark) .classification-insight-card {
+  background: #ffffff;
+  color: var(--batman-page-ink);
+  border-color: #d6d3b8;
+}
+
+.batman-mode:not(.body--dark) .classification-insight-card
+  .classification-insight-model,
+.batman-mode:not(.body--dark) .classification-insight-card
+  .classification-insight-meta,
+.batman-mode:not(.body--dark) .classification-insight-card
+  .classification-insight-foot {
+  color: var(--batman-page-muted);
+}
+
+.batman-mode:not(.body--dark) .classification-insight-card
+  .classification-insight-result {
+  color: var(--batman-page-ink);
+}
+
+.body--dark.batman-mode .run-summary-shell,
+.body--dark.batman-mode .classification-insight-shell,
+.body--dark.batman-mode .target-coverage-panel {
+  background: #151515;
+  background-image: none;
+}
+
+.body--dark.batman-mode .run-summary-cell {
+  background: #20252b;
+  background-image: none;
+  border-color: rgba(148, 163, 184, 0.16);
+}
+
+.body--dark.batman-mode .run-summary-grid {
+  background-color: rgba(148, 163, 184, 0.22);
+}
+
+.batman-mode .q-page .q-btn:focus-visible,
+.batman-mode .q-footer .q-btn:focus-visible {
+  outline: 2px solid var(--batman-yellow);
+  outline-offset: 3px;
+}
+
+.batman-mode .q-footer .q-btn--flat:hover,
+.batman-mode .q-footer .q-btn--flat:focus-visible {
+  background: var(--batman-yellow) !important;
+  color: var(--batman-black) !important;
+}
+
+/* Primary page actions: one clear yellow surface instead of nested black and
+   yellow frames. This keeps the report action prominent in both modes. */
+.batman-mode .q-page .q-btn.bg-primary,
+.batman-mode .q-page .q-btn.bg-primary .q-btn__content,
+.batman-mode .q-page .q-btn.bg-primary .q-icon,
+.batman-mode .q-page .q-btn.bg-primary .block {
+  background: var(--batman-yellow) !important;
+  color: var(--batman-black) !important;
+}
+
+.batman-mode .q-page .q-btn.bg-primary {
+  border: 1px solid var(--batman-black) !important;
+  box-shadow: 0 2px 0 rgba(0, 0, 0, 0.28);
+}
+
+.batman-mode .q-page .q-btn.bg-primary:hover,
+.batman-mode .q-page .q-btn.bg-primary:focus-visible {
+  background: var(--batman-black) !important;
+  color: var(--batman-yellow) !important;
+  box-shadow: 0 0 0 2px var(--batman-yellow);
+}
+
+/* The hamburger is navigation chrome, not a primary action. */
+.batman-mode .q-header .robin-nav-menu,
+.q-header.batphone .robin-nav-menu {
+  width: 44px;
+  min-height: 44px;
+  padding: 0 !important;
+  border: 1px solid var(--batman-yellow) !important;
+  border-radius: 0.625rem;
+  background: rgba(23, 23, 23, 0.9) !important;
+  box-shadow: none !important;
+}
+
+.batman-mode .q-header .robin-nav-menu:hover,
+.batman-mode .q-header .robin-nav-menu:focus-visible,
+.q-header.batphone .robin-nav-menu:hover,
+.q-header.batphone .robin-nav-menu:focus-visible {
+  background: var(--batman-yellow) !important;
+  color: var(--batman-black) !important;
+}
+
+/* Sample actions must remain visible without hover in both themes. */
+.batman-mode:not(.body--dark) .q-page .sample-action-button {
+  color: var(--batman-page-ink) !important;
+}
+
+.body--dark.batman-mode .q-page .sample-action-button {
+  color: var(--batman-yellow) !important;
+}
+
+.batman-mode .q-page .sample-action-button:hover,
+.batman-mode .q-page .sample-action-button:focus-visible {
+  color: var(--batman-black) !important;
+  background: var(--batman-yellow) !important;
+}
+
+/* Coverage is a data surface; it should not inherit the black BATMAN card in
+   light mode. Keep nested chart cards and metric blocks on readable surfaces. */
+.batman-mode:not(.body--dark) #analysis-detail-coverage,
+.batman-mode:not(.body--dark) #analysis-detail-coverage .robin-card {
+  background: #fffdf2;
+  background-image: none;
+  color: var(--batman-page-ink);
+  border-color: #d6d3b8;
+}
+
+.batman-mode:not(.body--dark) #analysis-detail-coverage .robin-card {
+  background: #ffffff;
+}
+
+.batman-mode:not(.body--dark) #analysis-detail-coverage .robin-text-muted,
+.batman-mode:not(.body--dark) #analysis-detail-coverage .text-gray-500,
+.batman-mode:not(.body--dark) #analysis-detail-coverage .text-gray-600,
+.batman-mode:not(.body--dark) #analysis-detail-coverage .text-gray-700 {
+  color: #475569 !important;
+}
+
+/* Login fields need their own contrast treatment because the authentication
+   card is visible before any page-specific content exists. */
+.batman-mode:not(.body--dark) #login-page .classification-insight-card {
+  background: #ffffff;
+  color: var(--batman-page-ink);
+  border-color: #d6d3b8;
+}
+
+.body--dark.batman-mode #login-page .classification-insight-card {
+  background: #20252b;
+  color: var(--batman-page-ink);
+  border-color: rgba(253, 227, 17, 0.34);
+}
+
+.batman-mode #login-page .classification-insight-foot,
+.batman-mode #login-page .classification-insight-model {
+  color: var(--batman-page-muted) !important;
+}
+
+.batman-mode:not(.body--dark) #login-page .q-field__control {
+  background: #ffffff;
+  color: var(--batman-page-ink);
+  border-color: #cbd5e1;
+}
+
+.body--dark.batman-mode #login-page .q-field__control {
+  background: #0f172a;
+  color: #f8fafc;
+  border-color: #475569;
+}
+
+.batman-mode #login-page .q-field__native,
+.batman-mode #login-page .q-field__input,
+.batman-mode #login-page .q-field__label {
+  color: inherit !important;
+}
+
+.batman-mode #login-page input::placeholder {
+  color: #64748b !important;
+  opacity: 1;
+}
+
+.body--dark.batman-mode #login-page input::placeholder {
+  color: #94a3b8 !important;
+}
+
+/* CNV controls sit on a light data surface in light mode; do not let their
+   inherited muted utility colours make labels look disabled. */
+.batman-mode:not(.body--dark) #analysis-detail-cnv .q-field__label,
+.batman-mode:not(.body--dark) #analysis-detail-cnv .q-field__native,
+.batman-mode:not(.body--dark) #analysis-detail-cnv .q-field__input,
+.batman-mode:not(.body--dark) #analysis-detail-cnv .q-toggle__label,
+.batman-mode:not(.body--dark) #analysis-detail-cnv .text-gray-500,
+.batman-mode:not(.body--dark) #analysis-detail-cnv .text-gray-600,
+.batman-mode:not(.body--dark) #analysis-detail-cnv .text-gray-700 {
+  color: #475569 !important;
+}
+
+.batman-mode:not(.body--dark) #analysis-detail-cnv .q-field__control {
+  background: #ffffff;
+  border-color: #cbd5e1;
+}
+
+.body--dark.batman-mode #analysis-detail-cnv .q-field__label,
+.body--dark.batman-mode #analysis-detail-cnv .q-field__native,
+.body--dark.batman-mode #analysis-detail-cnv .q-field__input,
+.body--dark.batman-mode #analysis-detail-cnv .q-toggle__label,
+.body--dark.batman-mode #analysis-detail-cnv .text-gray-400,
+.body--dark.batman-mode #analysis-detail-cnv .text-gray-500,
+.body--dark.batman-mode #analysis-detail-cnv .text-gray-600,
+.body--dark.batman-mode #analysis-detail-cnv .text-gray-700 {
+  color: #cbd5e1 !important;
+}
+
+.batman-mode .classification-insight-icon.q-icon,
+.batman-mode .classification-insight-icon {
+  color: var(--batman-black) !important;
+}
+
+.body--dark.batman-mode .classification-insight-icon.q-icon,
+.body--dark.batman-mode .classification-insight-icon {
+  color: var(--batman-on-black) !important;
+}
+
+/* Confidence bar: yellow fill is OK; label beside it must be black on white cards */
+.batman-mode .classification-insight-bar--high {
+  background-color: var(--batman-yellow) !important;
+}
+
+.batman-mode .classification-insight-level--high {
+  color: var(--batman-black) !important;
+}
+
+.body--dark.batman-mode .classification-insight-level--high {
+  color: var(--batman-on-black) !important;
+}
+
+.batman-mode .run-summary-shell {
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
+}
+
+.batman-mode .run-summary-shell .run-summary-title.q-label,
+.batman-mode .run-summary-shell .run-summary-title {
+  border-bottom-color: rgba(253, 227, 17, 0.35);
+}
+
+.batman-mode .run-summary-icon.q-icon,
+.batman-mode .run-summary-icon {
+  color: var(--batman-page-ink) !important;
+}
+
+.body--dark.batman-mode .run-summary-icon.q-icon,
+.body--dark.batman-mode .run-summary-icon {
+  color: var(--batman-on-black) !important;
+}
+
+/* Threshold pills on cards: yellow tint + black text */
+.batman-mode .analysis-insight-pill--emerald {
+  background-color: var(--batman-yellow) !important;
+  color: var(--batman-on-yellow) !important;
+}
+
+.batman-mode .analysis-insight-pill--sky,
+.batman-mode .analysis-insight-pill--amber,
+.batman-mode .analysis-insight-pill--rose,
+.batman-mode .analysis-insight-pill--violet {
+  color: var(--batman-black) !important;
+}
+
+.body--dark.batman-mode .analysis-insight-pill--emerald {
+  background-color: var(--batman-black) !important;
+  color: var(--batman-on-black) !important;
+  border: 1px solid var(--batman-yellow);
+}
+
+/* Tailwind green accents on light cards → black for contrast */
+.batman-mode .classification-insight-shell .text-green-600,
+.batman-mode .classification-insight-shell .text-green-800,
+.batman-mode .classification-insight-shell .text-emerald-700,
+.batman-mode #analysis-detail-coverage .text-green-500,
+.batman-mode #analysis-detail-coverage .text-green-600,
+.batman-mode #analysis-detail-coverage .text-green-800 {
+  color: var(--batman-black) !important;
+}
+
+.body--dark.batman-mode .classification-insight-shell .text-green-600,
+.body--dark.batman-mode #analysis-detail-coverage .text-green-500,
+.body--dark.batman-mode #analysis-detail-coverage .text-green-600 {
+  color: var(--batman-on-black) !important;
+}
+
+/* Spinners / progress rings outside chrome still need visible yellow */
+.batman-mode .q-page .q-spinner.text-primary,
+.batman-mode .q-page .q-circular-progress.text-primary,
+.batman-mode .q-page .q-linear-progress.text-primary {
+  color: var(--batman-black) !important;
+}
+
+.body--dark.batman-mode .q-page .q-spinner.text-primary,
+.body--dark.batman-mode .q-page .q-circular-progress.text-primary {
+  color: var(--batman-yellow) !important;
+}

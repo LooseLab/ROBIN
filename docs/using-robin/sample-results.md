@@ -1,6 +1,11 @@
 # Reading your results
 
-This page explains **what each part of a sample page means** when you open a library from **All tracked samples** (use **View** on that row). The exact charts and numbers depend on which analyses your team enabled and how far the run has progressed. For a screenshot of the tracking table (with anonymised quality-control examples), see [All samples](pages-and-routes.md#all-samples-sample-list) in the tour.
+!!! abstract "What this page covers"
+    How to read the **sample** page after you click **View** on a row in **All tracked samples**: **Run summary**, **Classification**, **Analysis**, detailed sections, optional **Sample details** / **MNP-Flex**, and **reports**. Content depends on which steps your team enabled.
+
+**Jump to:** [Run summary](#run-summary) · [Classification](#classification-details) · [Analysis](#analysis-details) · [Deep sections](#detailed-results) · [Sample details page](#sample-details-extra) · [MNP-Flex](#mnp-flex) · [Reports](#reports-and-downloads)
+
+For the sample list screenshot, see [All samples](pages-and-routes.md#all-samples) in the tour.
 
 ![Sample page: library header and actions, Run summary tiles, Classification details, Analysis details](../images/RunSummary.png)
 
@@ -8,7 +13,7 @@ This page explains **what each part of a sample page means** when you open a lib
 
 ---
 
-## What you’ll see first: Run summary
+## What you’ll see first: Run summary {#run-summary}
 
 **Run summary** is a block of **tiles** at the top—think of it as a **run card** for the sequencer:
 
@@ -22,9 +27,9 @@ Long values (e.g. a full basecall model name) may wrap across the full width so 
 
 ---
 
-## Classification details
+## Classification details {#classification-details}
 
-**Classification details** shows how different **classifiers** (for example Sturgeon, NanoDX, PanNanoDX, Random Forest) rank possible tumour classes or methylation-based groups.
+**Classification details** shows how different **classifiers** (for example Sturgeon, NanoDX, PanNanoDX, Random Forest, MARLIN, Lamprey) rank possible tumour classes or methylation-based groups.
 
 **How to read it:**
 
@@ -37,7 +42,7 @@ Not every classifier appears for every run; it depends on your pipeline settings
 
 ---
 
-## Analysis details
+## Analysis details {#analysis-details}
 
 **Analysis details** summarises **coverage**, **copy number (CNV)**, **MGMT methylation**, and **fusion** candidates in a **row of cards**.
 
@@ -52,13 +57,13 @@ Not every classifier appears for every run; it depends on your pipeline settings
 
 ---
 
-## Detailed results (full sections)
+## Detailed results (full sections) {#detailed-results}
 
 Below the **Classification details** and **Analysis details** cards, the sample page continues with larger blocks—each tied to the **same topic** as the card above. Your workflow may hide some blocks entirely.
 
 ### Classification
 
-The heading **Classification** groups **Sturgeon**, **NanoDX**, **PanNanoDX**, and **Random Forest** in separate **expandable rows** (click to open).
+The heading **Classification** groups **Sturgeon**, **NanoDX**, **PanNanoDX**, **Random Forest**, **MARLIN**, and **Lamprey (research)** in separate **expandable rows** (click to open). Lamprey is research/evaluation use only.
 
 ![Classification section: summary row, expanded Sturgeon with top-classes bar chart and confidence over time](../images/Classification.png)
 
@@ -149,19 +154,22 @@ CNV here is for **rapid visual screening**; it is **not** a replacement for cert
 - **Candidate summary** — counts for **target panel** vs **genome-wide** pairs and groups.  
 - **Target panel** — tables (and often plots) restricted to fusions involving your **assay panel**.  
 - **Genome-wide** — broader fusion calls outside the panel, if configured.
+- **FusionVis-style model view** — selecting a validated fusion pair displays its parent-gene exon tracks, observed join, breakpoint-local support, and predicted exon-scale fusion products directly above the supporting-read table.
 
 Use the tables to inspect **gene pairs**, support, and grouping; follow your lab’s rules for **confirming** interesting events.
 
+The model is generated from ROBIN's existing fusion alignment rows with the bundled GENCODE annotation; no separate FusionVis installation or service is required. It is an exploratory review view and is not a clinical caller.
+
 ---
 
-## Sample details page (extra tools)
+## Sample details page (extra tools) {#sample-details-extra}
 
-This is a **separate URL** from the main sample dashboard: `/live_data/<library-id>/details`. Open it from **More details** on the main sample page (when shown) or via the [tour → Sample details](pages-and-routes.md#sample-details-extra-tools). The page focuses on **disk paths**, **IGV**, **identifiers**, and **tabular** SNP / fusion / target-gene views—not the large classification and analysis storyboards on `/live_data/<id>`.
+This is a **separate URL** from the main sample dashboard: `/live_data/<library-id>/details`. Open it from **More details** on the main sample page (when shown) or via the [tour → Sample details](pages-and-routes.md#sample-details-tools). The page focuses on **disk paths**, **IGV**, **identifiers**, and **tabular** SNP / fusion / target-gene views—not the large classification and analysis storyboards on `/live_data/<id>`.
 
 ### Page header
 
 - **Sample details** heading with **library ID**; **Test ID** appears when ROBIN can read it from the sample’s **identifier manifest** on disk.  
-- Intro line listing **IGV**, **sample identifiers**, **SNP** tables, **fusion pairs**, and **target genes**.  
+- Intro line listing **IGV**, **sample identifiers**, **SNP** tables, **ITDs / insertions** (when run), **fusion pairs**, and **target genes**.
 - **View sample identifiers** — opens a modal with manifest-derived identifier fields (where configured).  
 - **Back to sample** — returns to the main sample page (`/live_data/<library-id>`).
 
@@ -177,7 +185,7 @@ This is a **separate URL** from the main sample dashboard: `/live_data/<library-
 
 - Embedded **IGV.js** genome browser (**Genome: hg38**): ruler, ideogram, reference sequence, gene annotations, coverage histogram, and read alignments.  
 - **target.bam** must exist in the sample output folder for ROBIN to build the interactive viewer; otherwise you see **IGV requires target.bam** and a reminder to run **target analysis** first. When tracks load, ROBIN uses **target-scoped** indexed BAMs—typically **`target.bam`**, or (when present) files such as **`sorted_targets_exceeding.bam`** / **`sorted_targets_exceeding_rerun.bam`** under **`clair3/`**, or **`igv_ready.bam`** under **`igv/`**. **Only alignments from those target-region BAMs are shown**—this is **not** a whole-genome alignment view.  
-- **SNP table**, **indel table** (when present), and **fusion pairs** table each offer **View in IGV** and/or **row clicks** that **move the browser** to the variant, indel, or fusion breakpoints so you can **inspect pileups** in the loaded BAM. The **Target genes** table does the same for each gene interval.  
+- **SNP table**, **indel table** (when present), **ITD / insertion events** (when present), and **fusion pairs** table each offer **View in IGV** and/or **row clicks** that **move the browser** to the variant, indel, ITD locus, or fusion breakpoints so you can **inspect pileups** in the loaded BAM. The **Target genes** table does the same for each gene interval.
 
 ![IGV browser: hg38 tracks and alignments at a locus opened from the SNP table (View in IGV)](../images/IGVview.png)
 
@@ -186,16 +194,17 @@ This is a **separate URL** from the main sample dashboard: `/live_data/<library-
 ### SNP analysis
 
 - Appears when SNP processing has written **`clair3/snpsift_output_display.json`**.  
-- **Summary** text may include total variants and counts of **pathogenic** variants.  
-- **Filters:** **PASS only** (keep rows with `FILTER` = PASS), **Pathogenic only**, optional **Min QUAL**, and **Reset** to clear filters. A **search** box filters the visible rows. The footer may show how many variants match (e.g. “Showing *n* of *N*”).  
-- The **table** lists columns such as chromosome, position, **REF** / **ALT**, gene, **HGVS.p**, annotation, annotation impact, **ClinVar** significance (**CLNSIG**), **FILTER**, **QUAL**, genotype (**GT**), whether the row is **pathogenic**, **Details** (expand full fields), and **View in IGV**.  
+- **Summary** text may include total variants and counts of **ClinVar significant** variants (germline pathogenic / likely pathogenic, VUS, oncogenic, or somatic tier I/II).  
+- **Filters:** **PASS only** (keep rows with `FILTER` = PASS), **ClinVar significant only**, optional **Min QUAL**, and **Reset** to clear filters. A **search** box filters the visible rows. The footer may show how many variants match (e.g. “Showing *n* of *N*”).  
+- **ClinVar version:** each table shows which **ClinVar release** was used to annotate the sample and which release is **currently installed** in ROBIN. If a newer ClinVar is installed after annotation, a warning is shown and **Re-annotate with current ClinVar** re-runs **snpEff/SnpSift** on the existing Clair3 outputs (no variant re-calling).  
+- The **table** lists columns such as chromosome, position, **REF** / **ALT**, gene, **HGVS.p**, annotation, annotation impact, **CLNSIG** (germline), **ONC** (oncogenic), **SCI** (somatic clinical impact tier), associated disease names (**ONCDN**, **SCIDN**), whether the row is **ClinVar significant**, **FILTER**, **QUAL**, genotype (**GT**), **Details** (expand full fields including germline-only **is_pathogenic** when present), and **View in IGV**.  
 
-![SNP analysis: PASS only and Pathogenic only enabled, filtered table and summary counts](../images/SNPexample.png)
+![SNP analysis: PASS only and ClinVar significant only enabled, filtered table and summary counts](../images/SNPexample.png)
 
 *Example only: variant shown is from anonymised quality-control data; your counts and rows will differ.*
 
 - **View in IGV** centres the embedded **IGV browser** (above on the page) on that variant for **pileup review**.  
-- A separate **indel** table may appear when indel display rows exist, with the same filters; **View in IGV** there jumps the browser to the indel locus in the **same target-scoped BAM**.  
+- A separate **indel** table may appear when indel display rows exist, with the same filters and ClinVar columns; **View in IGV** there jumps the browser to the indel locus in the **same target-scoped BAM**.  
 - If SNP analysis has not finished or the JSON is missing, you see a short **data not found** message instead of the table.
 
 ### Fusion pairs
@@ -214,9 +223,15 @@ Sections appear **only when** the underlying files exist and your **workflow** e
 
 ---
 
-## MNP-Flex (if your site uses it)
+## MNP-Flex (if your site uses it) {#mnp-flex}
 
 **MNP-Flex** is provided commercially by **[Heidelberg Epignostix GmbH](https://epignostix.com/)**. You can only use it under an **agreement with Epignostix**; they supply the **account credentials** ROBIN needs to call their service.
+
+!!! warning "When to run MNP-Flex"
+
+    MNP-Flex is recommended only after at least **12 hours of sequencing data**
+    have been generated for the sample. Running it earlier may provide less
+    reliable or less representative results.
 
 Some sites show an **MNP-Flex results** block in the sample page. It may include:
 
@@ -230,20 +245,22 @@ Some sites show an **MNP-Flex results** block in the sample page. It may include
 
 A toolbar may show whether the integration is **idle**, **busy**, or **running**. If you never see this block, your deployment may not use MNP-Flex, or credentials may not be configured.
 
-**Applying your Epignostix credentials in ROBIN:** The ROBIN process that runs the workflow and web UI reads **environment variables** on the **server** (not in the browser). Set the username and password Epignostix gave you before starting ROBIN, for example:
+**Applying your Epignostix credentials in ROBIN:** The ROBIN process that runs the workflow and web UI reads **environment variables** on the **server** (not in the browser). Set the username and password Epignostix gave you before starting ROBIN:
 
-- **`MNPFLEX_USERNAME`** — your Epignostix user name  
-- **`MNPFLEX_PASSWORD`** — your Epignostix password  
+```bash
+export MNPFLEX_USERNAME="your-epignostix-username"
+export MNPFLEX_PASSWORD="your-epignostix-password"
+```
 
 If either variable is missing, ROBIN does not show the MNP-Flex block and will not run the integration.
 
-How you set them depends on your setup: typically export them in the shell before `robin …` - whoever operates the sequencing machine or server should make them **persistent** and **secure** (never commit them to git).
-
-Your administrator may also tune optional settings (for example **`MNPFLEX_BASE_URL`**, **`MNPFLEX_WORKFLOW_ID`**, OAuth **`MNPFLEX_CLIENT_ID`** / **`MNPFLEX_CLIENT_SECRET`**, **`MNPFLEX_SCOPE`**) if Epignostix instructs you to; defaults match the standard Epignostix app integration.
+For the complete operator guide, including secure persistent configuration,
+optional API settings, data-transfer considerations, bulk operation, output
+files, and troubleshooting, see [MNP-Flex setup](../getting-started/mnpflex.md).
 
 ---
 
-## Reports and downloads
+## Reports and downloads {#reports-and-downloads}
 
 When analysis is far enough along, you can usually **generate a PDF report** for the sample. The file name is typically based on the **sample ID** and is saved under that sample’s output folder.
 

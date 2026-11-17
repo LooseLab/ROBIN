@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
+import asyncio
 import json
 import time
 import os
@@ -12,22 +14,173 @@ import pandas as pd
 import logging
 
 try:
-    from nicegui import ui, app
+    from nicegui import ui, app, background_tasks
 except ImportError:  # pragma: no cover
     ui = None
     app = None
+    background_tasks = None
 
-from robin.gui.theme import styled_table, register_theme_sync_callback
+from robin.gui.theme import (
+    styled_table,
+    register_theme_sync_callback,
+    get_user_dark_mode,
+    client_timer,
+    stop_timer,
+    ui_element_exists,
+)
+from robin.gui.client_notify import run_javascript_when_connected
+from robin.gui.coverage_metrics import coverage_quality_name, format_read_count
+from robin.analysis.bam_preprocessor import (
+    format_read_length,
+    load_on_off_target_length_stats,
+)
 
-# --- Coverage charts (design.md §9.5): on/off colours, mean line, gene palette ---
-_COV_GENE_LINE_PALETTE = [
-    "#06b6d4",  # cyan
-    "#c026d3",  # magenta / fuchsia
-    "#ca8a04",  # gold / amber
-    "#2563eb",  # blue
-    "#db2777",  # rose
+from robin.reference_contigs import is_visible_contig
+
+# Shared paged table renderer to avoid materializing full row lists for large DataFrames.
+def _render_paged_df_table(
+    df: pd.DataFrame,
+    columns: List[Dict[str, Any]],
+    *,
+    pagination_default: int = 100,
+    class_size: str = "table-xs",
+    search_placeholder: str = "Search...",
+) -> Any:
+    """Quasar server-side pagination over a bounded ``source_df`` slice (Python is source of truth)."""
+    from robin.gui.theme import (
+        clamp_qtable_server_pagination,
+        styled_server_paged_table,
+        wire_qtable_server_pagination_handlers,
+    )
+
+    preview_mode = len(df) > 50_000
+    source_df = df.iloc[:5_000].copy() if preview_mode else df
+    n_rows = len(source_df)
+    page_state: Dict[str, Any] = {
+        "filtered_positions": list(range(n_rows)),
+    }
+
+    total0 = len(page_state["filtered_positions"])
+    pd_default = int(pagination_default)
+    init_pagination = clamp_qtable_server_pagination(
+        {
+            "sortBy": None,
+            "descending": False,
+            "page": 1,
+            "rowsPerPage": pd_default,
+            "rowsNumber": total0,
+        },
+        rows_number=total0,
+        rows_per_page_default=pd_default,
+    )
+    _, table = styled_server_paged_table(
+        columns=columns,
+        rows=[],
+        pagination=init_pagination,
+        row_key="__row_idx",
+        class_size=class_size,
+        rows_per_page_options=[25, 50, 100, 250],
+    )
+
+    count_label = ui.label("").classes("text-xs text-gray-500")
+    if preview_mode:
+        ui.label(
+            f"Preview mode: showing first {len(source_df):,} rows of {len(df):,}."
+        ).classes("text-xs text-amber-600")
+
+    def _fill_from_pagination(pag: Dict[str, Any]) -> None:
+        total = len(page_state["filtered_positions"])
+        pag = clamp_qtable_server_pagination(
+            pag,
+            rows_number=total,
+            rows_per_page_default=pd_default,
+        )
+        rpp = int(pag["rowsPerPage"])
+        page = int(pag["page"])
+        start = (page - 1) * rpp
+        end = start + rpp
+        positions = page_state["filtered_positions"]
+        slice_pos = positions[start:end]
+        page_rows = (
+            source_df.iloc[slice_pos].reset_index(drop=True).to_dict("records")
+            if slice_pos
+            else []
+        )
+        for i, pos in enumerate(slice_pos):
+            page_rows[i]["__row_idx"] = int(pos)
+        table.rows = page_rows
+        table.pagination = pag
+        count_label.text = (
+            f"{total} rows match search ({len(df)} total in source)"
+            if total
+            else f"0 rows match ({len(df)} total in source)"
+        )
+        table.update()
+
+    wire_qtable_server_pagination_handlers(table, _fill_from_pagination)
+
+    def _apply_search(term: str) -> None:
+        txt = str(term or "").strip().lower()
+        if not txt:
+            page_state["filtered_positions"] = list(range(n_rows))
+        else:
+            filtered: List[int] = []
+            for pos in range(n_rows):
+                row = source_df.iloc[pos]
+                for col in source_df.columns:
+                    value = row.get(col)
+                    if value is not None and txt in str(value).lower():
+                        filtered.append(pos)
+                        break
+            page_state["filtered_positions"] = filtered
+        pag = clamp_qtable_server_pagination(
+            dict(table.pagination),
+            rows_number=len(page_state["filtered_positions"]),
+            rows_per_page_default=pd_default,
+        )
+        pag["page"] = 1
+        _fill_from_pagination(pag)
+
+    with table.add_slot("top-right"):
+        search_input = ui.input(placeholder=search_placeholder).props(
+            "type=search dense clearable"
+        )
+        search_input.on("update:model-value", lambda e: _apply_search(getattr(e, "value", "")))
+
+    for col in table.columns:
+        col["sortable"] = False
+
+    _fill_from_pagination(init_pagination)
+    try:
+        def _cleanup_table_state() -> None:
+            page_state["filtered_positions"] = []
+            table.rows = []
+
+        ui.context.client.on_disconnect(_cleanup_table_state)
+    except Exception:
+        pass
+    return table
+
+# --- Coverage charts (design.md §9.5): on/off colours, mean line, outlier palette ---
+_COV_OUTLIER_LINE_PALETTE_LIGHT = [
+    "#059669",  # emerald-600
+    "#0891b2",  # cyan-600
+    "#e11d48",  # rose-600
+    "#d97706",  # amber-600
+]
+_COV_OUTLIER_LINE_PALETTE_DARK = [
+    "#34d399",  # emerald-400 (luminous)
+    "#22d3ee",  # cyan-400
+    "#fb7185",  # rose-400
+    "#fbbf24",  # amber-400
 ]
 _COV_MAX_DIM_GENES = 25
+# Ghost in-range traces (design: ~15–20% perceived weight via opacity × muted stroke)
+_COV_GHOST_LINE_OPACITY = 0.18
+# Time-varying ±2σ envelope series (stacked low + span); hide base from legend/tooltip.
+_COV_ENVELOPE_NAME = "±2σ envelope"
+_COV_ENVELOPE_BASE_NAME = "_envelope_base"
+_COV_ENVELOPE_STACK = "cov_envelope"
 
 
 def _cov_dim_muted_line() -> str:
@@ -38,10 +191,150 @@ def _cov_dim_muted_line() -> str:
 
 
 def _cov_band_fill_rgba() -> str:
-    """Mean ±2σ band fill behind target coverage over time."""
+    """Mean ±2σ envelope — design.md §9.5.C (slate-100 / slate-800 opacities)."""
     if _cov_ui_dark():
-        return "rgba(148,163,184,0.18)"
-    return "rgba(148,163,184,0.12)"
+        return "rgba(30,41,59,0.30)"  # #1E293B @ 30%
+    return "rgba(241,245,249,0.50)"  # #F1F5F9 @ 50%
+
+
+def _cov_per_timestamp_envelope(
+    df: "pd.DataFrame",
+    *,
+    num_sd: float = 2.0,
+    min_targets: int = 3,
+) -> tuple[list[list[float]], list[list[float]]]:
+    """Build stacked ECharts series for a time-varying mean ±Nσ envelope.
+
+    At each timestamp, bounds are cross-gene mean ± ``num_sd``·SD — the same
+    basis used for outlier detection. Returns ``(low_data, span_data)`` where
+    each entry is ``[timestamp_ms, value]`` and ``span = max(0, high - low)``
+    after clamping the display floor at 0 (coverage cannot be negative).
+    """
+    low_data: list[list[float]] = []
+    span_data: list[list[float]] = []
+    if df is None or df.empty or "timestamp" not in df.columns or "coverage" not in df.columns:
+        return low_data, span_data
+
+    for ts, timepoint in df.groupby("timestamp", sort=True):
+        n = len(timepoint)
+        if n < 1:
+            continue
+        gmean = float(timepoint["coverage"].mean())
+        if n < min_targets:
+            glow = ghigh = gmean
+        else:
+            gstd = float(timepoint["coverage"].std())
+            if gstd == 0.0 or gstd != gstd:  # zero or NaN
+                glow = ghigh = gmean
+            else:
+                glow = gmean - num_sd * gstd
+                ghigh = gmean + num_sd * gstd
+        display_low = max(0.0, glow)
+        display_high = max(display_low, ghigh)
+        ts_i = float(int(ts))
+        low_data.append([ts_i, display_low])
+        span_data.append([ts_i, display_high - display_low])
+    return low_data, span_data
+
+
+def _cov_envelope_series(band_fill: str, low_data: list, span_data: list) -> list[dict]:
+    """Stacked invisible-line + area pair for the ±2σ envelope."""
+    shared = {
+        "type": "line",
+        "smooth": 0.42,
+        "symbol": "none",
+        "stack": _COV_ENVELOPE_STACK,
+        "silent": True,
+        "tooltip": {"show": False},
+        "lineStyle": {"opacity": 0, "width": 0},
+        "itemStyle": {"opacity": 0},
+        "emphasis": {"disabled": True},
+        "z": 0,
+    }
+    return [
+        {
+            **shared,
+            "name": _COV_ENVELOPE_BASE_NAME,
+            "data": low_data,
+            "showInLegend": False,
+        },
+        {
+            **shared,
+            "name": _COV_ENVELOPE_NAME,
+            "data": span_data,
+            "showInLegend": True,
+            "areaStyle": {"color": band_fill},
+            "z": 1,
+        },
+    ]
+
+
+def _cov_target_time_split() -> str:
+    """Minimal grid for target coverage over time (does not compete with series)."""
+    if _cov_ui_dark():
+        return "rgba(148, 163, 184, 0.12)"
+    return "rgba(51, 65, 85, 0.12)"
+
+
+def _cov_anomaly_pos_color() -> str:
+    """Gain / high outlier markers: emerald-400 dark, emerald-600 light."""
+    return "#34d399" if _cov_ui_dark() else "#059669"
+
+
+def _cov_anomaly_neg_color() -> str:
+    """Loss / low outlier markers: red-400 dark, red-600 light."""
+    return "#f87171" if _cov_ui_dark() else "#dc2626"
+
+
+def _cov_outlier_line_color(idx: int) -> str:
+    """High-saturation outlier traces (emerald / cyan / rose / amber families)."""
+    pal = (
+        _COV_OUTLIER_LINE_PALETTE_DARK
+        if _cov_ui_dark()
+        else _COV_OUTLIER_LINE_PALETTE_LIGHT
+    )
+    return pal[idx % len(pal)]
+
+
+def _echart_target_cov_time_media(palette_axis: str) -> List[Dict[str, Any]]:
+    """Keep the target legend below the plot so it cannot cover data lines."""
+    return [
+        {
+            "query": {"maxWidth": 920},
+            "option": {
+                "legend": {
+                    "type": "scroll",
+                    "orient": "horizontal",
+                    "left": "center",
+                    "right": "auto",
+                    "top": "auto",
+                    "bottom": 4,
+                    "width": "94%",
+                    "itemGap": 8,
+                    "itemWidth": 10,
+                    "itemHeight": 10,
+                    "textStyle": {"fontSize": 10, "color": palette_axis},
+                },
+                "grid": {
+                    "left": "10%",
+                    "right": "6%",
+                    "top": "18%",
+                    "bottom": "30%",
+                    "containLabel": True,
+                },
+            },
+        },
+        {
+            "query": {"maxWidth": 480},
+            "option": {
+                "legend": {
+                    "bottom": 2,
+                    "textStyle": {"fontSize": 9, "color": palette_axis},
+                },
+                "grid": {"bottom": "34%", "left": "12%"},
+            },
+        },
+    ]
 
 
 def _cov_tooltip_option() -> Dict[str, Any]:
@@ -52,6 +345,16 @@ def _cov_tooltip_option() -> Dict[str, Any]:
         "borderColor": p["tooltip_border"],
         "borderWidth": 1,
         "textStyle": {"color": p["tooltip_text"]},
+    }
+
+
+def _cov_target_time_tooltip_option() -> Dict[str, Any]:
+    """Per-series tooltip for target coverage over time (outlier trend)."""
+    return {
+        "trigger": "item",
+        "confine": True,
+        "appendToBody": True,
+        **_cov_tooltip_option(),
     }
 
 
@@ -78,10 +381,7 @@ def _cov_scatter_outlier_style() -> Dict[str, Any]:
 
 
 def _cov_ui_dark() -> bool:
-    try:
-        return bool(app.storage.user.get("dark_mode"))
-    except Exception:
-        return False
+    return get_user_dark_mode(default=False)
 
 
 def _cov_on_off_colors() -> Tuple[str, str]:
@@ -93,8 +393,8 @@ def _cov_on_off_colors() -> Tuple[str, str]:
 
 
 def _cov_mean_line_color() -> str:
-    """Thick dashed mean line: high contrast on plot surface."""
-    return "#f8fafc" if _cov_ui_dark() else "#1e293b"
+    """Reference mean: slate-800 (light) or slate-200 (dark); dark uses line shadow for glow."""
+    return "#e2e8f0" if _cov_ui_dark() else "#1e293b"
 
 
 def _cov_chrome_palette() -> Dict[str, str]:
@@ -141,16 +441,133 @@ def _short_chr_label(name: str) -> str:
     return t
 
 
-def _cov_gene_line_color(idx: int) -> str:
-    return _COV_GENE_LINE_PALETTE[idx % len(_COV_GENE_LINE_PALETTE)]
-
-
 def _cov_legend_label(text: str, max_len: int = 44) -> str:
     """Short label for ECharts legend (JSON-safe options cannot use JS formatters)."""
     t = (text or "").replace("\n", " ").strip()
     if len(t) <= max_len:
         return t
     return t[: max_len - 1] + "…"
+
+
+def _read_length_data_zoom_options(
+    palette: Dict[str, str] | None = None,
+    *,
+    start: float = 0.0,
+    end: float = 100.0,
+) -> List[Dict[str, Any]]:
+    """Inside + slider zoom so the full log-spaced axis can be focused."""
+    p = palette or _cov_chrome_palette()
+    start = max(0.0, min(100.0, float(start)))
+    end = max(start, min(100.0, float(end)))
+    shared = {
+        "xAxisIndex": 0,
+        "filterMode": "filter",
+        "minValueSpan": 5,
+        "start": start,
+        "end": end,
+    }
+    return [
+        {
+            "type": "inside",
+            **shared,
+            "zoomOnMouseWheel": True,
+            "moveOnMouseWheel": False,
+            "moveOnMouseMove": True,
+            "preventDefaultMouseWheel": True,
+        },
+        {
+            "type": "slider",
+            **shared,
+            "show": True,
+            "height": 18,
+            "bottom": 6,
+            "showDetail": False,
+            "brushSelect": True,
+            "borderColor": p["tooltip_border"],
+            "handleStyle": {"color": p["axis"]},
+            "moveHandleStyle": {"color": p["axis"]},
+            "textStyle": {"color": p["axis"], "fontSize": 10},
+            "fillerColor": "rgba(16, 185, 129, 0.18)",
+            "dataBackground": {
+                "lineStyle": {"color": p["axis"]},
+                "areaStyle": {"color": "rgba(148, 163, 184, 0.25)"},
+            },
+            "selectedDataBackground": {
+                "lineStyle": {"color": p["axis"]},
+                "areaStyle": {"color": "rgba(16, 185, 129, 0.35)"},
+            },
+        },
+    ]
+
+
+def _apply_read_length_zoom(chart: Any, start: float, end: float) -> None:
+    """Set both dataZoom windows without dropping the rest of the option."""
+    try:
+        dz_list = chart.options.get("dataZoom")
+        if not isinstance(dz_list, list) or not dz_list:
+            chart.options["dataZoom"] = _read_length_data_zoom_options(
+                start=start, end=end
+            )
+            return
+        for dz in dz_list:
+            if not isinstance(dz, dict):
+                continue
+            dz.pop("startValue", None)
+            dz.pop("endValue", None)
+            dz["start"] = float(start)
+            dz["end"] = float(end)
+    except Exception:
+        pass
+
+
+def _apply_coverage_read_length_chrome(ec: Any) -> None:
+    """On/off-target read-length histogram chrome + series colours."""
+    try:
+        p = _cov_chrome_palette()
+        tt = _cov_tooltip_option()
+        on_c, off_c = _cov_on_off_colors()
+        o = ec.options
+        o["textStyle"] = {"color": p["axis"]}
+        o.setdefault("title", {})
+        o["title"]["textStyle"] = {"fontSize": 15, "color": p["title"]}
+        o["title"]["subtextStyle"] = {"fontSize": 11, "color": p["axis"]}
+        o.setdefault("legend", {})
+        o["legend"]["textStyle"] = {"color": p["legend"]}
+        o["tooltip"] = {
+            "trigger": "axis",
+            "axisPointer": {"type": "shadow"},
+            **tt,
+        }
+        o.setdefault("xAxis", {})
+        o["xAxis"].setdefault("axisLabel", {})
+        o["xAxis"]["axisLabel"]["color"] = p["axis"]
+        o["xAxis"]["axisLabel"]["hideOverlap"] = True
+        o["xAxis"].setdefault("axisLine", {}).setdefault("lineStyle", {})
+        o["xAxis"]["axisLine"]["lineStyle"]["color"] = p["axis"]
+        o["xAxis"]["nameTextStyle"] = {"color": p["axis"]}
+        o.setdefault("yAxis", {})
+        o["yAxis"]["nameTextStyle"] = {"color": p["axis"]}
+        o["yAxis"]["axisLabel"] = {"color": p["axis"]}
+        o["yAxis"]["splitLine"] = {
+            "lineStyle": {"color": p["split"], "type": "dashed"},
+        }
+        start, end = 0.0, 100.0
+        dz_list = o.get("dataZoom")
+        if isinstance(dz_list, list):
+            for dz in dz_list:
+                if isinstance(dz, dict) and dz.get("start") is not None:
+                    try:
+                        start = float(dz.get("start", 0.0) or 0.0)
+                        end = float(dz.get("end", 100.0) or 100.0)
+                    except (TypeError, ValueError):
+                        start, end = 0.0, 100.0
+                    break
+        o["dataZoom"] = _read_length_data_zoom_options(p, start=start, end=end)
+        if o.get("series") and len(o["series"]) >= 2:
+            o["series"][0]["itemStyle"] = {"color": on_c}
+            o["series"][1]["itemStyle"] = {"color": off_c}
+    except Exception:
+        pass
 
 
 def _apply_coverage_target_cov_chrome(ec: Any) -> None:
@@ -282,70 +699,120 @@ def _apply_target_coverage_time_analysis_chrome(ec: Any) -> None:
     """Outlier / mean / band chart — sync chrome and theme-dependent series colours."""
     try:
         p = _cov_chrome_palette()
-        tt = _cov_tooltip_option()
         mean_c = _cov_mean_line_color()
         band_fill = _cov_band_fill_rgba()
         dim_c = _cov_dim_muted_line()
+        split_t = _cov_target_time_split()
+        ghost = _COV_GHOST_LINE_OPACITY
+        hi_mk = _cov_anomaly_pos_color()
+        lo_mk = _cov_anomaly_neg_color()
         o = ec.options
         o["textStyle"] = {"color": p["axis"]}
         o.setdefault("title", {})
         o["title"]["textStyle"] = {"fontSize": 15, "color": p["title"]}
         o["title"]["subtextStyle"] = {"fontSize": 11, "color": p["axis"]}
-        o["tooltip"] = {
-            "trigger": "axis",
-            "axisPointer": {
-                "type": "cross",
-                "lineStyle": {"color": p["axis"], "width": 1},
-                "crossStyle": {"color": p["axis"]},
-            },
-            "confine": True,
-            "appendToBody": True,
-            **tt,
-        }
+        o["tooltip"] = _cov_target_time_tooltip_option()
         o.setdefault("legend", {})
         o["legend"]["pageIconColor"] = p["title"]
         o["legend"]["pageTextStyle"] = {"color": p["axis"]}
-        o["legend"]["textStyle"] = {"fontSize": 11, "color": p["legend"]}
+        leg_ts = o["legend"].get("textStyle") or {}
+        leg_ts["color"] = p["legend"]
+        o["legend"]["textStyle"] = leg_ts
         o.setdefault("xAxis", {})
         o["xAxis"]["axisLabel"] = {"color": p["axis"]}
         o["xAxis"]["axisLine"] = {"lineStyle": {"color": p["axis"]}}
-        o["xAxis"]["splitLine"] = {"lineStyle": {"color": p["split"]}}
+        o["xAxis"]["splitLine"] = {"lineStyle": {"color": split_t}}
         o.setdefault("yAxis", {})
         o["yAxis"]["axisLabel"] = {"color": p["axis"]}
         o["yAxis"]["axisLine"] = {"lineStyle": {"color": p["axis"]}}
         o["yAxis"]["splitLine"] = {
-            "lineStyle": {"color": p["split"], "type": "dashed"},
+            "lineStyle": {"color": split_t, "type": "dashed"},
         }
         o["yAxis"]["nameTextStyle"] = {"color": p["axis"]}
+        _envelope_names = {_COV_ENVELOPE_NAME, _COV_ENVELOPE_BASE_NAME}
         for s in o.get("series") or []:
             name = str(s.get("name") or "")
-            if name == "_band":
-                ma = s.get("markArea") or {}
-                ist = ma.get("itemStyle") or {}
-                ist["color"] = band_fill
-                ma["itemStyle"] = ist
-                s["markArea"] = ma
-            elif name == "Mean (population)":
+            if s.get("type") == "line" and name not in _envelope_names:
+                s["triggerLineEvent"] = True
+            if name == _COV_ENVELOPE_NAME:
+                s["areaStyle"] = {**(s.get("areaStyle") or {}), "color": band_fill}
                 s["lineStyle"] = {
                     **(s.get("lineStyle") or {}),
+                    "opacity": 0,
+                    "width": 0,
+                }
+            elif name == _COV_ENVELOPE_BASE_NAME:
+                s["lineStyle"] = {
+                    **(s.get("lineStyle") or {}),
+                    "opacity": 0,
+                    "width": 0,
+                }
+            elif name == "Mean (population)":
+                mls = {
                     "width": 4,
                     "type": "dashed",
                     "color": mean_c,
                 }
+                if _cov_ui_dark():
+                    mls["shadowBlur"] = 6
+                    mls["shadowColor"] = "rgba(255,255,255,0.22)"
+                s["lineStyle"] = {**(s.get("lineStyle") or {}), **mls}
                 s["itemStyle"] = {**(s.get("itemStyle") or {}), "color": mean_c}
             elif "in-range" in name:
                 s["itemStyle"] = {
                     **(s.get("itemStyle") or {}),
                     "color": dim_c,
-                    "opacity": 0.42,
+                    "opacity": ghost,
                 }
                 s["lineStyle"] = {
                     **(s.get("lineStyle") or {}),
                     "width": 1.5,
                     "type": "dashed",
                     "color": dim_c,
-                    "opacity": 0.42,
+                    "opacity": ghost,
                 }
+            elif s.get("type") == "line" and name not in (
+                *_envelope_names,
+                "Mean (population)",
+            ):
+                # Outlier target lines: solid brand colours + luminous hint (dark)
+                lc = (s.get("lineStyle") or {}).get("color") or (
+                    (s.get("itemStyle") or {}).get("color"))
+                ols = {
+                    "width": 2,
+                    "type": "solid",
+                    "color": lc,
+                }
+                if _cov_ui_dark() and lc:
+                    ols["shadowBlur"] = 10
+                    ols["shadowColor"] = "rgba(255,255,255,0.14)"
+                s["lineStyle"] = {**(s.get("lineStyle") or {}), **ols}
+                s["itemStyle"] = {**(s.get("itemStyle") or {}), "color": lc}
+                s["emphasis"] = {
+                    **(s.get("emphasis") or {}),
+                    "focus": "series",
+                    "lineStyle": {"width": 3},
+                }
+                s["blur"] = {"lineStyle": {"opacity": 0.1}}
+                mp = s.get("markPoint") or {}
+                for pt in mp.get("data") or []:
+                    if not isinstance(pt, dict):
+                        continue
+                    rot = int(pt.get("symbolRotate") or 0)
+                    ist = dict(pt.get("itemStyle") or {})
+                    ist["color"] = hi_mk if rot == 0 else lo_mk
+                    pt["itemStyle"] = ist
+                    em = dict(pt.get("emphasis") or {})
+                    eist = dict(em.get("itemStyle") or {})
+                    eist["shadowBlur"] = 14
+                    eist["shadowColor"] = (
+                        "rgba(52, 211, 153, 0.55)"
+                        if rot == 0
+                        else "rgba(248, 113, 113, 0.55)"
+                    )
+                    em["itemStyle"] = eist
+                    pt["emphasis"] = em
+                s["markPoint"] = mp
     except Exception:
         pass
 
@@ -402,9 +869,356 @@ def _apply_lga_gene_bar_chrome(ec: Any) -> None:
         pass
 
 
+def load_target_gene_table_rows(
+    coverage_file: Path,
+) -> Tuple[List[Dict[str, Any]], Dict[str, str]]:
+    """Load target-gene coverage rows for the More Details table.
+
+    Returns ``(table_rows, gene_name_to_igv_region)``. Uses column-wise pandas
+    conversion instead of ``iterrows``.
+    """
+    coverage_file = Path(coverage_file)
+    df = pd.read_csv(
+        coverage_file,
+        usecols=lambda c: c
+        in {
+            "chrom",
+            "startpos",
+            "endpos",
+            "name",
+            "coverage",
+            "length",
+            "bases",
+        },
+        dtype={
+            "chrom": "string",
+            "name": "string",
+            "startpos": "float64",
+            "endpos": "float64",
+            "coverage": "float64",
+            "length": "float64",
+            "bases": "float64",
+        },
+    )
+    required_cols = ["chrom", "startpos", "endpos", "name"]
+    if not all(col in df.columns for col in required_cols):
+        return [], {}
+    if "coverage" not in df.columns:
+        if "length" in df.columns and "bases" in df.columns:
+            df["coverage"] = df["bases"] / df["length"]
+        elif "startpos" in df.columns and "endpos" in df.columns:
+            length = df["endpos"] - df["startpos"] + 1
+            df["coverage"] = (df["bases"] / length) if "bases" in df.columns else 0
+        else:
+            df["coverage"] = 0
+    df = df.dropna(subset=["chrom", "name", "startpos", "endpos"])
+    chroms = df["chrom"].astype(str)
+    names = df["name"].astype(str)
+    starts = df["startpos"].astype(int)
+    ends = df["endpos"].astype(int)
+    coverages = df["coverage"].fillna(0).astype(float)
+    padding = 10000
+    table_data: List[Dict[str, Any]] = []
+    gene_regions_by_name: Dict[str, str] = {}
+    for gene_name, chrom, startpos_raw, endpos_raw, coverage in zip(
+        names, chroms, starts, ends, coverages
+    ):
+        startpos_nav = max(1, int(startpos_raw) - padding)
+        endpos_nav = int(endpos_raw) + padding
+        gene_regions_by_name[gene_name] = f"{chrom}:{startpos_nav}-{endpos_nav}"
+        table_data.append(
+            {
+                "chrom": chrom,
+                "startpos": f"{int(startpos_raw):,}",
+                "endpos": f"{int(endpos_raw):,}",
+                "name": gene_name,
+                "coverage": float(coverage),
+                "__row_idx": len(table_data),
+                "action": "",
+            }
+        )
+    return table_data, gene_regions_by_name
+
+
+def _navigate_igv_to_region(region: str) -> None:
+    if ui is None or not region:
+        return
+    escaped_region = str(region).replace("\\", "\\\\").replace("'", "\\'").replace('"', '\\"')
+    run_javascript_when_connected(
+        f"""
+        (function() {{
+            try {{
+                if (window.lj_igv && window.lj_igv_browser_ready) {{
+                    window.lj_igv.search('{escaped_region}');
+                    return;
+                }}
+                setTimeout(function() {{
+                    if (window.lj_igv && window.lj_igv_browser_ready) {{
+                        window.lj_igv.search('{escaped_region}');
+                    }}
+                }}, 500);
+            }} catch (error) {{
+                console.error('[IGV] Navigation error:', error);
+            }}
+        }})();
+        """
+    )
+
+
+def add_sample_details_target_genes(launcher: Any, sample_dir: Path) -> None:
+    """Mount the More Details target-gene table without blocking first paint."""
+    from robin.gui.client_notify import schedule_after_page_sent
+    from robin.gui.theme import (
+        clamp_qtable_server_pagination,
+        styled_server_paged_table,
+        wire_qtable_server_pagination_handlers,
+    )
+
+    sample_dir = Path(sample_dir)
+    target_coverage_file = sample_dir / "target_coverage.csv"
+    bed_coverage_file = sample_dir / "bed_coverage_main.csv"
+    coverage_file = None
+    if target_coverage_file.exists():
+        coverage_file = target_coverage_file
+    elif bed_coverage_file.exists():
+        coverage_file = bed_coverage_file
+    if coverage_file is None:
+        return
+
+    sample_key = str(sample_dir)
+    coverage_state = getattr(launcher, "_coverage_state", None)
+    if not isinstance(coverage_state, dict):
+        coverage_state = {}
+        launcher._coverage_state = coverage_state
+    cache_entry = coverage_state.setdefault(sample_key, {})
+    file_sig = coverage_file.stat().st_mtime if coverage_file.exists() else None
+    cached_rows = cache_entry.get("details_gene_rows")
+    cached_regions = cache_entry.get("details_gene_regions")
+    cache_hit = (
+        isinstance(cached_rows, list)
+        and isinstance(cached_regions, dict)
+        and cache_entry.get("details_gene_sig") == file_sig
+    )
+
+    host = ui.column().classes("w-full min-w-0")
+
+    def _mount(table_data: List[Dict[str, Any]], gene_regions_by_name: Dict[str, str]) -> None:
+        host.clear()
+        if not table_data:
+            with host:
+                with ui.element("div").classes("classification-insight-shell w-full min-w-0"):
+                    ui.label("Target genes").classes(
+                        "classification-insight-heading text-headline-small"
+                    )
+                    ui.label("No target gene coverage rows were found.").classes(
+                        "classification-insight-meta"
+                    )
+            return
+        with host:
+            with ui.element("div").classes("classification-insight-shell w-full min-w-0"):
+                ui.label("Target genes").classes(
+                    "classification-insight-heading text-headline-small"
+                )
+                ui.label("Click a gene row to open the region in IGV.").classes(
+                    "classification-insight-meta w-full mb-2"
+                )
+                columns = [
+                    {"name": "name", "label": "Gene Name", "field": "name", "sortable": False},
+                    {"name": "chrom", "label": "Chromosome", "field": "chrom", "sortable": False},
+                    {"name": "startpos", "label": "Start", "field": "startpos", "sortable": False},
+                    {"name": "endpos", "label": "End", "field": "endpos", "sortable": False},
+                    {"name": "coverage", "label": "Coverage (x)", "field": "coverage", "sortable": False},
+                    {"name": "action", "label": "View in IGV", "field": "action", "sortable": False},
+                ]
+                gene_preview_mode = len(table_data) > 50_000
+                gene_rows_source = table_data[:5_000] if gene_preview_mode else list(table_data)
+                gene_page_state: Dict[str, Any] = {
+                    "filtered_positions": list(range(len(gene_rows_source))),
+                }
+                gene_total_matches = len(gene_page_state["filtered_positions"])
+                gene_init_pagination = clamp_qtable_server_pagination(
+                    {
+                        "sortBy": None,
+                        "descending": False,
+                        "page": 1,
+                        "rowsPerPage": 100,
+                        "rowsNumber": gene_total_matches,
+                    },
+                    rows_number=gene_total_matches,
+                    rows_per_page_default=100,
+                )
+                _, gene_table = styled_server_paged_table(
+                    columns=columns,
+                    rows=[],
+                    pagination=gene_init_pagination,
+                    row_key="__row_idx",
+                    class_size="table-xs",
+                )
+                if gene_preview_mode:
+                    ui.label(
+                        f"Preview mode: showing first {len(gene_rows_source):,} rows of {len(table_data):,}."
+                    ).classes(
+                        "classification-insight-level classification-insight-level--low w-full"
+                    )
+
+                def _fill_gene_from_pagination(pag: Dict[str, Any]) -> None:
+                    total = len(gene_page_state["filtered_positions"])
+                    pag = clamp_qtable_server_pagination(
+                        pag, rows_number=total, rows_per_page_default=100
+                    )
+                    rpp = int(pag["rowsPerPage"])
+                    page = int(pag["page"])
+                    start = (page - 1) * rpp
+                    positions = gene_page_state["filtered_positions"][start : start + rpp]
+                    gene_table.rows = [gene_rows_source[i] for i in positions]
+                    gene_table.pagination = pag
+                    gene_table.update()
+
+                wire_qtable_server_pagination_handlers(gene_table, _fill_gene_from_pagination)
+
+                def _apply_gene_search(term: str) -> None:
+                    txt = str(term or "").strip().lower()
+                    if not txt:
+                        gene_page_state["filtered_positions"] = list(
+                            range(len(gene_rows_source))
+                        )
+                    else:
+                        gene_page_state["filtered_positions"] = [
+                            i
+                            for i, row in enumerate(gene_rows_source)
+                            if txt in str(row.get("name", "")).lower()
+                            or txt in str(row.get("chrom", "")).lower()
+                        ]
+                    pag = clamp_qtable_server_pagination(
+                        dict(gene_table.pagination),
+                        rows_number=len(gene_page_state["filtered_positions"]),
+                        rows_per_page_default=100,
+                    )
+                    pag["page"] = 1
+                    _fill_gene_from_pagination(pag)
+
+                _fill_gene_from_pagination(gene_init_pagination)
+                try:
+                    with gene_table.add_slot("top-right"):
+                        gene_search_input = ui.input(placeholder="Search genes...").props(
+                            "type=search dense clearable"
+                        )
+                        gene_search_input.on(
+                            "update:model-value",
+                            lambda e: _apply_gene_search(getattr(e, "value", "")),
+                        )
+                        with gene_search_input.add_slot("append"):
+                            ui.icon("search")
+                except Exception:
+                    pass
+                try:
+                    gene_table.add_slot(
+                        "body-cell-coverage",
+                        """
+<q-td key="coverage" :props="props">
+  <q-badge :color="props.value >= 30 ? 'green' : props.value >= 20 ? 'blue' : props.value >= 10 ? 'orange' : 'red'">
+    {{ Number(props.value).toFixed(2) }}
+  </q-badge>
+</q-td>
+""",
+                    )
+                except Exception:
+                    pass
+                gene_table.add_slot(
+                    "body-cell-action",
+                    """
+<q-td key="action" :props="props">
+  <q-btn icon="visibility" size="sm" dense flat color="primary"
+    @click="$parent.$emit('gene-view-igv', props.row.__row_idx)"
+    title="View in IGV" />
+</q-td>
+""",
+                )
+
+                def _region_for_name(gene_name: str) -> str:
+                    return str(gene_regions_by_name.get(gene_name, "") or "")
+
+                def on_gene_view_igv(e: Any) -> None:
+                    try:
+                        row_idx = int(getattr(e, "args", None))
+                    except (TypeError, ValueError):
+                        return
+                    if 0 <= row_idx < len(gene_rows_source):
+                        gene_name = str(gene_rows_source[row_idx].get("name", ""))
+                        region = _region_for_name(gene_name)
+                        if region:
+                            _navigate_igv_to_region(region)
+
+                gene_table.on("gene-view-igv", on_gene_view_igv)
+
+                def on_gene_row_click(e: Any) -> None:
+                    args = getattr(e, "args", None)
+                    row = None
+                    if isinstance(args, dict):
+                        row = args
+                    elif isinstance(args, (list, tuple)):
+                        if args and isinstance(args[0], dict):
+                            row = args[0]
+                        elif len(args) > 1 and isinstance(args[1], dict):
+                            row = args[1]
+                    if not isinstance(row, dict):
+                        return
+                    gene_name = str(row.get("name", ""))
+                    region = _region_for_name(gene_name)
+                    if region:
+                        _navigate_igv_to_region(region)
+
+                try:
+                    gene_table.on("rowClick", on_gene_row_click)
+                except Exception:
+                    pass
+                ui.label(f"Total target genes: {len(table_data)}").classes(
+                    "classification-insight-foot"
+                )
+
+    if cache_hit:
+        _mount(list(cached_rows), dict(cached_regions))
+        return
+
+    with host:
+        with ui.element("div").classes("classification-insight-shell w-full min-w-0"):
+            ui.label("Target genes").classes(
+                "classification-insight-heading text-headline-small"
+            )
+            ui.label("Loading target genes…").classes("classification-insight-meta")
+
+    def _load_sync() -> Tuple[List[Dict[str, Any]], Dict[str, str]]:
+        return load_target_gene_table_rows(coverage_file)
+
+    async def _load_async() -> None:
+        try:
+            table_data, regions = await asyncio.to_thread(_load_sync)
+        except Exception as exc:
+            logging.warning("Could not load target gene table: %s", exc)
+            table_data, regions = [], {}
+        cache_entry["details_gene_sig"] = (
+            coverage_file.stat().st_mtime if coverage_file.exists() else None
+        )
+        cache_entry["details_gene_rows"] = [dict(r) for r in table_data]
+        cache_entry["details_gene_regions"] = dict(regions)
+        _mount(table_data, regions)
+
+    def _start_load() -> None:
+        if background_tasks is not None:
+            background_tasks.create(_load_async())
+            return
+        table_data, regions = _load_sync()
+        cache_entry["details_gene_sig"] = file_sig
+        cache_entry["details_gene_rows"] = [dict(r) for r in table_data]
+        cache_entry["details_gene_regions"] = dict(regions)
+        _mount(table_data, regions)
+
+    schedule_after_page_sent(_start_load)
+
+
 def add_igv_viewer(launcher: Any, sample_dir: Path) -> None:
     """Add the IGV viewer section to a page.
-    
+
     Args:
         launcher: The GUI launcher instance for state management
         sample_dir: Path to the sample directory
@@ -439,19 +1253,22 @@ def add_igv_viewer(launcher: Any, sample_dir: Path) -> None:
         ui.label("Genome: hg38 · Interactive alignment view").classes(
             "classification-insight-meta mb-2"
         )
-        igv_div = ui.element("div").classes(
-            "w-full h-[900px] border border-slate-200/90 rounded-lg overflow-hidden "
-            "dark:border-slate-700/80"
-        )
-        igv_div._props["id"] = "igv-container"
-        igv_status = ui.label("Initializing IGV viewer…").classes(
-            "classification-insight-meta"
-        )
+        with ui.column().classes("igv-light-island w-full min-w-0 gap-2 p-2 md:p-3"):
+            igv_div = ui.element("div").classes(
+                "igv-light-island__viewer w-full h-[900px] rounded-lg overflow-hidden"
+            )
+            igv_div._props["id"] = "igv-container"
+            igv_status = ui.label("Initializing IGV viewer…").classes(
+                "classification-insight-meta"
+            )
 
-        igv_lib_status = ui.label("IGV library: checking…").classes(
-            "classification-insight-foot"
-        )
-        
+            igv_lib_status = ui.label("IGV library: checking…").classes(
+                "classification-insight-foot"
+            )
+            ui.label(
+                "IGV is intentionally displayed in light mode for optimal genomic track readability."
+            ).classes("igv-light-island-note text-xs")
+
         # Initialize IGV browser immediately on page load
         def _initialize_igv_browser():
             """Initialize the IGV browser immediately."""
@@ -487,7 +1304,7 @@ def add_igv_viewer(launcher: Any, sample_dir: Path) -> None:
                             showRuler: true,
                             showNavigation: true,
                             showCenterGuide: true,
-                            defaultLocus: 'chr1:1-500000'
+                            locus: 'all'
                         };
 
                         igv.createBrowser(el, options)
@@ -525,24 +1342,15 @@ def add_igv_viewer(launcher: Any, sample_dir: Path) -> None:
                 })();
             """
             try:
-                init_result = ui.run_javascript(js_init, timeout=5.0)
-                if init_result == "missing-element":
-                    igv_status.set_text("IGV container element not found.")
-                elif init_result == "error":
-                    igv_status.set_text("IGV initialization failed (see console).")
-                elif init_result == "started":
-                    igv_status.set_text("IGV browser initialization started...")
-                elif init_result == "initializing":
-                    igv_status.set_text("IGV browser is still initializing...")
-                elif init_result == "already-ready":
-                    igv_status.set_text("IGV browser already ready.")
+                run_javascript_when_connected(js_init)
+                igv_status.set_text("IGV browser initialization started...")
             except Exception as e:
                 print(f"Error initializing IGV browser: {e}")
                 igv_status.set_text(f"Error initializing IGV: {e}")
-        
+
         # Add data attribute for status updates
         igv_status._props["data-igv-status"] = True
-        
+
         # Initialize browser after a short delay to ensure DOM is ready
         ui.timer(0.5, _initialize_igv_browser, once=True)
 
@@ -590,25 +1398,8 @@ def add_igv_viewer(launcher: Any, sample_dir: Path) -> None:
             state["igv_loading"] = False
 
         # Check for existing IGV BAM files and load them
-        def _check_existing_igv_bam():
+        def _check_existing_igv_bam(attempt: int = 0):
             try:
-                # Wait a bit for browser to be ready
-                js_check_ready = """
-                    return window.lj_igv && window.lj_igv_browser_ready === true && 
-                           typeof window.lj_igv.loadTrack === 'function';
-                """
-                
-                # Poll for browser readiness
-                max_attempts = 10
-                for attempt in range(max_attempts):
-                    try:
-                        result = ui.run_javascript(js_check_ready, timeout=2.0)
-                        if result is True:
-                            break
-                    except Exception:
-                        pass
-                    time.sleep(0.5)
-                
                 # Determine candidate BAMs (prefer standardized IGV path)
                 igv_dir = sample_dir / "igv"
                 clair_dir = sample_dir / "clair3"
@@ -630,14 +1421,15 @@ def add_igv_viewer(launcher: Any, sample_dir: Path) -> None:
                     igv_status.set_text(f"Found BAM: {bam_path.name}, loading...")
                     # Load the BAM file
                     _load_bam_track_simple(bam_path)
-                else:
-                    igv_status.set_text(
-                        "IGV browser ready. No BAM files found yet."
-                    )
+                    return
+
+                igv_status.set_text(
+                    "No BAM files found yet. IGV will load alignments when available."
+                )
 
             except Exception as e:
                 igv_status.set_text(f"Error checking for BAM files: {e}")
-        
+
         # Simple function to load BAM track
         def _load_bam_track_simple(bam_path: Path):
             """Simple function to load a BAM track into IGV."""
@@ -658,7 +1450,7 @@ def add_igv_viewer(launcher: Any, sample_dir: Path) -> None:
 
                 bam_url = f"{mount}/{bam_path.name}"
                 bai_url = f"{mount}/{bam_path.name}.bai"
-                
+
                 js_load = f"""
                     (function loadBamTrack() {{
                         try {{
@@ -667,7 +1459,7 @@ def add_igv_viewer(launcher: Any, sample_dir: Path) -> None:
                                 setTimeout(loadBamTrack, 500);
                                 return;
                             }}
-                            
+
                             // Verify browser has loadTrack method
                             if (typeof window.lj_igv.loadTrack !== 'function') {{
                                 console.error('[IGV] Browser does not have loadTrack method');
@@ -677,11 +1469,11 @@ def add_igv_viewer(launcher: Any, sample_dir: Path) -> None:
                                 }}
                                 return;
                             }}
-                            
+
                             console.log('[IGV] Loading BAM track:', '{bam_path.name}');
                             console.log('[IGV] BAM URL:', '{bam_url}');
                             console.log('[IGV] BAI URL:', '{bai_url}');
-                            
+
                             const trackConfig = {{
                                 name: '{sample_dir.name}',
                                 url: '{bam_url}',
@@ -689,37 +1481,28 @@ def add_igv_viewer(launcher: Any, sample_dir: Path) -> None:
                                 format: 'bam',
                                 type: 'alignment',
                                 order: Number.MAX_VALUE,
-                                visibilityWindow: 500000,
+                                visibilityWindow: 30000,
                                 height: 600,
                                 autoScale: true,
                                 colorBy: 'tag',
                                 tag: 'SA'
                             }};
-                            
+
                             console.log('[IGV] Track config:', trackConfig);
-                            
+
                             window.lj_igv.loadTrack(trackConfig)
                                 .then(function(trackView) {{
                                     console.log('[IGV] Track loaded successfully:', trackView);
-                                    
-                                    // Navigate to a region to make data visible (IGV needs to be zoomed in)
-                                    // Navigate to chr1:1-500000 to match visibility window
-                                    try {{
-                                        window.lj_igv.search('chr1:1-500000');
-                                        console.log('[IGV] Navigated to chr1:1-500000');
-                                    }} catch (navError) {{
-                                        console.log('[IGV] Could not navigate, user can zoom manually');
-                                    }}
-                                    
+
                                     const statusEl = document.querySelector('[data-igv-status]');
                                     if (statusEl) {{
-                                        statusEl.textContent = 'BAM loaded: {bam_path.name} - Zoom in to see alignments';
+                                        statusEl.textContent = 'BAM loaded: {bam_path.name} - Click a table row to jump to a locus';
                                     }}
                                 }})
                                 .catch(function(error) {{
                                     console.error('[IGV] Track load failed:', error);
                                     console.error('[IGV] Error details:', error.message, error.stack);
-                                    
+
                                     const statusEl = document.querySelector('[data-igv-status]');
                                     if (statusEl) {{
                                         statusEl.textContent = 'Failed to load BAM: ' + (error.message || String(error));
@@ -734,8 +1517,8 @@ def add_igv_viewer(launcher: Any, sample_dir: Path) -> None:
                         }}
                     }})();
                 """
-                ui.run_javascript(js_load, timeout=60.0)
-                
+                run_javascript_when_connected(js_load)
+
             except Exception as e:
                 igv_status.set_text(f"Error loading BAM: {e}")
                 print(f"Error in _load_bam_track_simple: {e}")
@@ -750,13 +1533,13 @@ def add_igv_viewer(launcher: Any, sample_dir: Path) -> None:
                             console.error('IGV library not loaded');
                             return false;
                         }
-                
+
                         // Check if IGV is fully initialized
                         if (typeof igv.createBrowser !== 'function') {
                             console.error('IGV library not fully initialized');
                             return false;
                         }
-                
+
                         console.log('IGV library is available and ready');
                         return true;
                     } catch (e) {
@@ -766,15 +1549,9 @@ def add_igv_viewer(launcher: Any, sample_dir: Path) -> None:
                 """
 
                 try:
-                    result = ui.run_javascript(js_check, timeout=10.0)
-                    # Update the status indicator
-                    if result:
-                        igv_lib_status.set_text("IGV library: ✓ Loaded and ready")
-                        igv_lib_status.classes("text-xs text-green-600")
-                    else:
-                        igv_lib_status.set_text("IGV library: ✗ Not ready")
-                        igv_lib_status.classes("text-xs text-red-600")
-                    return result
+                    run_javascript_when_connected(js_check)
+                    igv_lib_status.set_text("IGV library: checking in browser…")
+                    return True
                 except Exception as e:
                     igv_lib_status.set_text("IGV library: ✗ Error checking")
                     igv_lib_status.classes("text-xs text-red-600")
@@ -803,12 +1580,12 @@ def add_igv_viewer(launcher: Any, sample_dir: Path) -> None:
                         reject(new Error('Element not found'));
                         return;
                     }
-            
+
                     if (el.offsetWidth > 0 && el.offsetHeight > 0) {
                         resolve(true);
                         return;
                     }
-            
+
                     // Wait for element to be ready
                     const checkReady = () => {
                         if (el.offsetWidth > 0 && el.offsetHeight > 0) {
@@ -871,6 +1648,54 @@ def add_igv_viewer(launcher: Any, sample_dir: Path) -> None:
                 bam_url = f"{mount}/{bam_path.name}"
                 bai_url = f"{mount}/{bam_path.name}.bai"
 
+                def _finish_new_browser_setup() -> None:
+                    _set_igv_ready(bam_url)
+                    igv_status.set_text(f"IGV browser ready with {bam_path.name}")
+                    state["igv_loading"] = False
+                    js_add_track = f"""
+                        if (window.lj_igv && window.lj_igv_browser_ready) {{
+                            console.log('[DEBUG] Adding track to newly created browser...');
+                            const track = {{ name: '{sample_dir.name}', url: '{bam_url}', indexURL: '{bai_url}', format: 'bam', type: 'alignment', height: 600, autoScale: true, colorBy: 'tag', tag: 'SA' }};
+                            window.lj_igv.loadTrack(track).then(() => {{
+                                console.log('[DEBUG] Track loaded successfully');
+                            }}).catch(error => {{
+                                console.error('[DEBUG] Error loading track:', error);
+                            }});
+                        }}
+                    """
+                    ui.run_javascript(js_add_track, timeout=30.0)
+
+                def _poll_new_browser_ready(attempt: int = 0) -> None:
+                    max_poll_attempts = 20
+                    poll_interval = 1.0
+                    js_check_ready = """
+                        return window.lj_igv && window.lj_igv_browser_ready === true &&
+                               typeof window.lj_igv.loadTrack === 'function';
+                    """
+                    try:
+                        result = ui.run_javascript(js_check_ready, timeout=5.0)
+                    except Exception:
+                        result = False
+
+                    if result is True:
+                        _finish_new_browser_setup()
+                        return
+
+                    if attempt >= max_poll_attempts:
+                        igv_status.set_text("IGV browser creation timed out")
+                        state["igv_loading"] = False
+                        ui.timer(2.0, lambda: _retry_igv_creation(bam_path), once=True)
+                        _clear_igv_state()
+                        return
+
+                    ui.timer(
+                        poll_interval,
+                        lambda next_attempt=attempt + 1: _poll_new_browser_ready(
+                            next_attempt
+                        ),
+                        once=True,
+                    )
+
                 # Check if we need to create a new browser or just add tracks
                 if not state.get("igv_initialized") or not state.get(
                     "igv_browser_ready"
@@ -904,8 +1729,6 @@ def add_igv_viewer(launcher: Any, sample_dir: Path) -> None:
                     try:
                         existing = ui.run_javascript(js_check_existing, timeout=5.0)
                         if existing:
-                            # Browser might already exist, check Python state after a delay
-                            time.sleep(0.5)
                             if state.get("igv_initialized") and state.get("igv_browser_ready"):
                                 # Browser is ready, just add the track
                                 pass  # Will fall through to track loading
@@ -924,19 +1747,19 @@ def add_igv_viewer(launcher: Any, sample_dir: Path) -> None:
                             if (!el) {
                                 throw new Error('Target element not found');
                             }
-                            
+
                             // Check again if browser already exists
                             if (window.lj_igv && window.lj_igv_browser_ready === true) {
                                 console.log('[DEBUG] Browser already exists, skipping creation');
                                 return;
                             }
-                            
+
                             const options = { genome: 'hg38' };
                             console.log('[DEBUG] IGV options:', options);
-                            
+
                             window.lj_igv_browser_ready = false;
                             igv.createBrowser(el, options).then(b => {
-                                window.lj_igv = b; 
+                                window.lj_igv = b;
                                 window.lj_igv_browser_ready = true;
                                 console.log('[DEBUG] IGV browser created successfully');
                             }).catch(error => {
@@ -952,54 +1775,10 @@ def add_igv_viewer(launcher: Any, sample_dir: Path) -> None:
                     try:
                         ui.run_javascript(js_create, timeout=30.0)
                         igv_status.set_text("Creating IGV browser...")
-                        
-                        # Wait a bit for the async browser creation to start
-                        time.sleep(0.5)
-                        
-                        # Poll for browser readiness
-                        max_poll_attempts = 20
-                        poll_interval = 1.0
-                        browser_ready = False
-                        
-                        for attempt in range(max_poll_attempts):
-                            js_check_ready = """
-                                return window.lj_igv && window.lj_igv_browser_ready === true && 
-                                       typeof window.lj_igv.loadTrack === 'function';
-                            """
-                            try:
-                                result = ui.run_javascript(js_check_ready, timeout=5.0)
-                                if result is True:
-                                    browser_ready = True
-                                    break
-                            except Exception:
-                                pass
-                            
-                            time.sleep(poll_interval)
-                        
-                        if browser_ready:
-                            _set_igv_ready(bam_url)
-                            igv_status.set_text(f"IGV browser ready with {bam_path.name}")
-                            state["igv_loading"] = False
-                            
-                            # Now load the track
-                            js_add_track = f"""
-                                if (window.lj_igv && window.lj_igv_browser_ready) {{
-                                    console.log('[DEBUG] Adding track to newly created browser...');
-                                    const track = {{ name: '{sample_dir.name}', url: '{bam_url}', indexURL: '{bai_url}', format: 'bam', type: 'alignment', height: 600, autoScale: true, colorBy: 'tag', tag: 'SA' }};
-                                    window.lj_igv.loadTrack(track).then(() => {{
-                                        console.log('[DEBUG] Track loaded successfully');
-                                    }}).catch(error => {{
-                                        console.error('[DEBUG] Error loading track:', error);
-                                    }});
-                                }}
-                            """
-                            ui.run_javascript(js_add_track, timeout=30.0)
-                        else:
-                            igv_status.set_text("IGV browser creation timed out")
-                            state["igv_loading"] = False
-                            ui.timer(2.0, lambda: _retry_igv_creation(bam_path), once=True)
-                            _clear_igv_state()
-                            
+                        # Poll with ui.timer to avoid blocking the shared event loop.
+                        ui.timer(0.5, lambda: _poll_new_browser_ready(0), once=True)
+                        return
+
                     except Exception as e:
                         igv_status.set_text(f"Failed to create IGV browser: {e}")
                         print(f"IGV browser creation error: {e}")
@@ -1011,10 +1790,10 @@ def add_igv_viewer(launcher: Any, sample_dir: Path) -> None:
                     js_add_track = f"""
                         if (window.lj_igv && window.lj_igv_browser_ready) {{
                             console.log('Adding track to existing IGV browser...');
-                    
+
                             const track = {{ name: '{sample_dir.name}', url: '{bam_url}', indexURL: '{bai_url}', format: 'bam', type: 'alignment', height: 600, autoScale: true }};
                             console.log('Track to load:', track);
-                    
+
                             try {{
                             window.lj_igv.loadTrack(track);
                             console.log('Track loaded successfully');
@@ -1086,11 +1865,11 @@ def add_igv_viewer(launcher: Any, sample_dir: Path) -> None:
                 js_clear = """
                     try {
                         console.log('Attempting to clear IGV tracks...');
-                
+
                         if (window.lj_igv && typeof window.lj_igv.getTracks === 'function') {
                             const tracks = window.lj_igv.getTracks();
                             console.log('Found tracks:', tracks.length);
-                    
+
                             if (tracks.length > 0) {
                             tracks.forEach((track, index) => {
                                 try {
@@ -1135,20 +1914,20 @@ def add_igv_viewer(launcher: Any, sample_dir: Path) -> None:
             Returns True if file is ready, False if timeout.
             """
             import time
-    
+
             start_time = time.time()
             last_size = -1
             stable_count = 0
             required_stable_checks = 2  # Need 2 consecutive checks with same size
-    
+
             while time.time() - start_time < max_wait_time:
                 try:
                     if not bam_path.exists():
                         time.sleep(0.5)
                         continue
-                
+
                     current_size = bam_path.stat().st_size
-                
+
                     # Check if file size has changed
                     if current_size == last_size:
                         stable_count += 1
@@ -1157,20 +1936,20 @@ def add_igv_viewer(launcher: Any, sample_dir: Path) -> None:
                             return True
                     else:
                         stable_count = 0  # Reset counter if size changed
-                
+
                     last_size = current_size
                     time.sleep(0.5)
-                
+
                 except (OSError, IOError):
                     # File might be temporarily unavailable
                     time.sleep(0.5)
                     continue
-        
+
             # Timeout reached
             return False
 
         # Function to reload BAM data into existing IGV browser
-        def _reload_bam_track():
+        async def _reload_bam_track():
             # Initialize state variable
             state = None
             try:
@@ -1185,14 +1964,14 @@ def add_igv_viewer(launcher: Any, sample_dir: Path) -> None:
                         clair_dir / "sorted_targets_exceeding.bam",
                         sample_dir / "target.bam",
                     ]
-                    
+
                     bam_path = None
                     for p in candidates:
                         bai = Path(f"{p}.bai")
                         if p.exists() and bai.exists():
                             bam_path = p
                             break
-                    
+
                     if bam_path:
                         igv_status.set_text("IGV not ready, initializing...")
                         _load_igv_bam(bam_path)
@@ -1213,7 +1992,7 @@ def add_igv_viewer(launcher: Any, sample_dir: Path) -> None:
 
                 # Extract BAM name for display
                 bam_name = current_bam_url.split("/")[-1]
-        
+
                 # Determine the actual BAM file path
                 bam_path = None
                 if current_bam_url.startswith("/samples/"):
@@ -1223,19 +2002,19 @@ def add_igv_viewer(launcher: Any, sample_dir: Path) -> None:
                         sample_dir_name = parts[2]
                         bam_file_name = parts[3]
                         bam_path = sample_dir / bam_file_name
-        
+
                 # Wait for BAM file to be ready if it exists
                 if bam_path and bam_path.exists():
                     igv_status.set_text("Checking if BAM file is ready...")
-                    if not _wait_for_bam_ready(bam_path):
+                    if not await asyncio.to_thread(_wait_for_bam_ready, bam_path):
                         igv_status.set_text("BAM file is still being updated. Please wait and try again.")
                         ui.notify("BAM file is still being updated. Please wait and try again.", type="warning")
                         return
-                
+
                     # Also check if BAI file is ready
                     bai_path = bam_path.with_suffix(bam_path.suffix + ".bai")
                     if bai_path.exists():
-                        if not _wait_for_bam_ready(bai_path):
+                        if not await asyncio.to_thread(_wait_for_bam_ready, bai_path):
                             igv_status.set_text("BAM index is still being updated. Please wait and try again.")
                             ui.notify("BAM index is still being updated. Please wait and try again.", type="warning")
                             return
@@ -1266,7 +2045,7 @@ def add_igv_viewer(launcher: Any, sample_dir: Path) -> None:
                             }}
                         }}
                     }}
-                
+
                     // Remove alignment tracks
                     for (let track of tracks) {{
                         try {{
@@ -1286,7 +2065,7 @@ def add_igv_viewer(launcher: Any, sample_dir: Path) -> None:
                     }} catch (e) {{
                     // Ignore errors
                     }}
-            
+
                     // Create the track configuration
                     const trackConfig = {{
                     name: '{bam_name}',
@@ -1300,7 +2079,7 @@ def add_igv_viewer(launcher: Any, sample_dir: Path) -> None:
                     colorBy: 'tag',
                     tag: 'SA'
                     }};
-            
+
                     // Add the track to the browser
                     if (typeof window.lj_igv.loadTrack === 'function') {{
                     window.lj_igv.loadTrack(trackConfig);
@@ -1310,7 +2089,7 @@ def add_igv_viewer(launcher: Any, sample_dir: Path) -> None:
                         window.lj_igv.addTrack(trackConfig);
                     }}
                     }}
-            
+
                     // Force a redraw
                     if (typeof window.lj_igv.redraw === 'function') {{
                     window.lj_igv.redraw();
@@ -1327,14 +2106,14 @@ def add_igv_viewer(launcher: Any, sample_dir: Path) -> None:
 
                 # Update status
                 igv_status.set_text(f"Loading BAM track: {bam_name}")
-        
+
                 # Change button text to "Reload BAM" after first load
                 reload_bam_button.set_text("Reload BAM")
 
                 # Mark that data tracks are no longer cleared
                 if state:
                     state["data_tracks_cleared"] = False
-                
+
                 # Auto-load the BED file after BAM is loaded
                 _load_target_bed()
 
@@ -1353,11 +2132,11 @@ def add_igv_viewer(launcher: Any, sample_dir: Path) -> None:
 
                 # Get the target panel information
                 state = _get_igv_state()
-        
+
                 # Check if BED file has already been loaded
                 if state.get("bed_file_loaded", False):
                     return  # BED file already loaded, don't load again
-        
+
                 # Try to read the panel from master.csv
                 target_panel = None
                 bed_file_path = None
@@ -1368,16 +2147,16 @@ def add_igv_viewer(launcher: Any, sample_dir: Path) -> None:
                         df = pd.read_csv(master_csv_path)
                         if not df.empty and "analysis_panel" in df.columns:
                             target_panel = str(df.iloc[0]["analysis_panel"]).strip()
-                    
+
                             # Map panel to BED filename
                             bed_file_mapping = {
                             "rCNS2": "rCNS2_panel_name_uniq.bed",
                             "AML": "AML_panel_name_uniq.bed",
                             "Sarcoma": "Sarcoma_panel_name_uniq.bed"
                             }
-                    
+
                             bed_filename = bed_file_mapping.get(target_panel, f"{target_panel}_panel_name_uniq.bed")
-                    
+
                             # Try to find the BED file in robin resources
                             try:
                                 from robin import resources
@@ -1389,7 +2168,7 @@ def add_igv_viewer(launcher: Any, sample_dir: Path) -> None:
                                     bed_file_path = None
                             except Exception:
                                 pass
-                    
+
                             # Fallback paths
                             if not bed_file_path:
                                 possible_paths = [
@@ -1413,7 +2192,7 @@ def add_igv_viewer(launcher: Any, sample_dir: Path) -> None:
                 bed_dir = os.path.dirname(bed_file_path)
                 bed_name = os.path.basename(bed_file_path)
                 bed_url = f"/robin_resources/{bed_name}"
-        
+
                 try:
                     if app is not None:
                         app.add_static_files("/robin_resources", bed_dir)
@@ -1435,7 +2214,7 @@ def add_igv_viewer(launcher: Any, sample_dir: Path) -> None:
                             height: 40,
                             color: '#0072B2'
                             }};
-                    
+
                             // Load the track into IGV
                             if (typeof window.lj_igv.loadTrack === 'function') {{
                             window.lj_igv.loadTrack(trackConfig);
@@ -1452,10 +2231,10 @@ def add_igv_viewer(launcher: Any, sample_dir: Path) -> None:
                 """
 
                 ui.run_javascript(js_load_bed, timeout=20.0)
-        
+
                 # Mark that BED file has been loaded
                 state["bed_file_loaded"] = True
-        
+
                 # Update status
                 igv_status.set_text(f"Loaded BED file: {bed_name}")
                 ui.notify(f"Target BED file loaded: {bed_name}", type="positive")
@@ -1479,7 +2258,7 @@ def add_igv_viewer(launcher: Any, sample_dir: Path) -> None:
                 } else {
                     errors.push(`IGV version: ${igv.version || 'unknown'}`);
                 }
-        
+
                 return errors;
             } catch (e) {
                 return ['Error checking console: ' + e.message];
@@ -1509,11 +2288,11 @@ def add_igv_viewer(launcher: Any, sample_dir: Path) -> None:
                 js_find_element = """
                     console.log('Looking for IGV div element...');
                     console.log('Expected ID: igv-container');
-            
+
                     // List all divs on the page
                     const allDivs = document.querySelectorAll('div');
                     console.log('Total divs found:', allDivs.length);
-            
+
                     allDivs.forEach((div, i) => {
                         console.log(`Div ${i}:`, {
                             id: div.id,
@@ -1523,7 +2302,7 @@ def add_igv_viewer(launcher: Any, sample_dir: Path) -> None:
                             offsetHeight: div.offsetHeight
                         });
                     });
-            
+
                     // Try to find our specific element
                     let el = document.getElementById('igv-container');
                     if (!el) {
@@ -1535,7 +2314,7 @@ def add_igv_viewer(launcher: Any, sample_dir: Path) -> None:
                             console.log('Using first candidate by class');
                         }
                     }
-            
+
                     if (el) {
                         console.log('Element found:', el);
                         console.log('Element dimensions:', el.offsetWidth, 'x', el.offsetHeight);
@@ -1559,22 +2338,22 @@ def add_igv_viewer(launcher: Any, sample_dir: Path) -> None:
                 js_empty = """
                     try {
                         console.log('Creating empty IGV browser...');
-                
+
                         // Find the element again
                         let el = document.getElementById('igv-container');
                         if (!el) {
                             el = document.querySelector('.w-full.h-\\[600px\\].border');
                         }
-                
+
                         if (!el) {
                             throw new Error('Element still not found');
                         }
-                
+
                         const options = { genome: 'hg38' };
                         console.log('Creating empty IGV browser with options:', options);
-                
+
                         igv.createBrowser(el, options).then(b => {
-                            window.lj_igv = b; 
+                            window.lj_igv = b;
                             window.lj_igv_browser_ready = true;
                             console.log('Empty IGV browser created successfully');
                         }).catch(error => {
@@ -1600,14 +2379,14 @@ def add_igv_viewer(launcher: Any, sample_dir: Path) -> None:
                 console.log('=== IGV Debug Info ===');
                 console.log('window.lj_igv:', window.lj_igv);
                 console.log('window.lj_igv_browser_ready:', window.lj_igv_browser_ready);
-        
+
                 if (window.lj_igv) {
                     console.log('IGV browser exists');
                     console.log('Available methods:', Object.getOwnPropertyNames(window.lj_igv));
                 } else {
                     console.log('No IGV browser found');
                 }
-        
+
                 console.log('Python state check requested');
                 """
 
@@ -1626,12 +2405,12 @@ def add_igv_viewer(launcher: Any, sample_dir: Path) -> None:
         def _simple_reload_bam():
             """Simple reload function."""
             _check_existing_igv_bam()
-        
+
         reload_bam_button = ui.button("Load BAM", on_click=_simple_reload_bam)
 
         # Add IGV library status check timer once after a delay
         ui.timer(3.0, _check_igv_library, once=True)
-        
+
         # Check for existing BAM files after browser is initialized (give it time to create)
         ui.timer(3.0, _check_existing_igv_bam, once=True)
 
@@ -1738,6 +2517,528 @@ def add_igv_viewer(launcher: Any, sample_dir: Path) -> None:
                     pass
 
 
+def _echarts_option_to_json(obj: Any) -> Any:
+    """Convert ECharts option fragments to JSON-serializable form (numpy types, NaN)."""
+    if isinstance(obj, dict):
+        return {k: _echarts_option_to_json(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_echarts_option_to_json(x) for x in obj]
+    if isinstance(obj, (np.floating, np.integer)):
+        v = float(obj) if isinstance(obj, np.floating) else int(obj)
+        return None if (isinstance(obj, np.floating) and np.isnan(obj)) else v
+    if isinstance(obj, float) and np.isnan(obj):
+        return None
+    return obj
+
+
+def _compute_target_cov_series_data(
+    cov_df: pd.DataFrame,
+    bed_df: pd.DataFrame,
+    reference_contig_scope: str,
+) -> Dict[str, Any]:
+    """Pandas work for on/off target bar chart (no UI). Safe for asyncio.to_thread."""
+
+    def chr_key(label: str) -> int:
+        s = str(label)
+        if s.startswith("chr"):
+            s = s[3:]
+        mapping = {"X": 23, "Y": 24}
+        try:
+            return int(s)
+        except Exception:
+            return mapping.get(s, 1000)
+
+    try:
+        bed_df = bed_df.copy()
+        bed_df["length"] = (bed_df["endpos"] - bed_df["startpos"] + 1).astype(float)
+        grouped = (
+            bed_df.groupby("chrom")
+            .agg({"bases": "sum", "length": "sum"})
+            .reset_index()
+        )
+        grouped["meandepth"] = grouped["bases"] / grouped["length"]
+        name_col = "#rname" if "#rname" in cov_df.columns else "rname"
+        temp_df = cov_df[
+            cov_df[name_col]
+            .astype(str)
+            .map(lambda v: is_visible_contig(v, reference_contig_scope))
+        ]
+        names = sorted(temp_df[name_col].astype(str).unique(), key=chr_key)
+
+        if not names:
+            return {
+                "ok": False,
+                "error": "No valid chromosome data found for target coverage chart",
+            }
+
+        names_short = [_short_chr_label(n) for n in names]
+        grouped = grouped.set_index("chrom").reindex(names).reset_index()
+
+        temp_df_grouped = temp_df.groupby(name_col)["meandepth"].mean()
+        off_target_data = [
+            float(temp_df_grouped.get(chrom, 0.0))
+            if pd.notna(temp_df_grouped.get(chrom, 0.0))
+            else 0.0
+            for chrom in names
+        ]
+
+        on_target_data = [
+            float(v) if pd.notna(v) else 0.0
+            for v in grouped["meandepth"].fillna(0).tolist()
+        ]
+
+        return {
+            "ok": True,
+            "names_short": names_short,
+            "on_target": on_target_data,
+            "off_target": off_target_data,
+        }
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+def _compute_boxplot_chart_data(
+    bed_df: pd.DataFrame,
+    panel_display_name: str,
+    reference_contig_scope: str,
+) -> Dict[str, Any]:
+    """Pandas work for target coverage boxplot (no UI). Safe for asyncio.to_thread."""
+    try:
+        df = bed_df.copy()
+        if "coverage" not in df.columns:
+            df["length"] = (df["endpos"] - df["startpos"] + 1).astype(float)
+            df["coverage"] = df["bases"] / df["length"]
+        chrom_str = df["chrom"].astype(str).str.strip()
+        df["chrom"] = chrom_str.where(chrom_str.str.startswith("chr"), "chr" + chrom_str)
+        df = df[
+            df["chrom"]
+            .astype(str)
+            .map(lambda v: is_visible_contig(v, reference_contig_scope))
+        ]
+        chroms = natsort.natsorted(df["chrom"].unique())
+        if not chroms:
+            return {
+                "ok": False,
+                "error": "No visible chromosome data found for target coverage chart",
+            }
+        chrom_lookup = {chrom: idx for idx, chrom in enumerate(chroms)}
+        df["chrom_index"] = df["chrom"].map(chrom_lookup)
+        agg = (
+            df.groupby("chrom")
+            .agg(
+                min=("coverage", "min"),
+                Q1=("coverage", lambda x: float(np.percentile(x, 25))),
+                median=("coverage", "median"),
+                Q3=("coverage", lambda x: float(np.percentile(x, 75))),
+                max=("coverage", "max"),
+                chrom_index=("chrom_index", "first"),
+            )
+            .reset_index()
+        )
+        agg["chrom"] = pd.Categorical(agg["chrom"], categories=chroms, ordered=True)
+        agg = agg.sort_values("chrom").reset_index(drop=True)
+        result = (
+            [["chrom", "min", "Q1", "median", "Q3", "max", "chrom_index"]]
+            + agg.values.tolist()
+        )
+
+        def iqr_bounds(sub: pd.DataFrame) -> Tuple[float, float]:
+            q1 = np.percentile(sub["coverage"], 25)
+            q3 = np.percentile(sub["coverage"], 75)
+            iqr = q3 - q1
+            return q1 - 1.5 * iqr, q3 + 1.5 * iqr
+
+        out_rows: List[Any] = []
+        for c in chroms:
+            sub = df[df["chrom"].astype(str) == c]
+            lb, ub = iqr_bounds(sub)
+            out = sub[(sub["coverage"] < lb) | (sub["coverage"] > ub)]
+            out_rows += out[["chrom", "coverage", "name"]].values.tolist()
+        lb_g, ub_g = iqr_bounds(df)
+        glob = df[(df["coverage"] < lb_g) | (df["coverage"] > ub_g)]
+        glob_rows = glob[["chrom", "coverage", "name"]].values.tolist()
+
+        return {
+            "ok": True,
+            "panel_display_name": panel_display_name,
+            "result": _echarts_option_to_json(result),
+            "raw_source": _echarts_option_to_json(
+                df[["chrom", "coverage", "name"]].values.tolist()
+            ),
+            "out_rows": _echarts_option_to_json(out_rows),
+            "glob_rows": _echarts_option_to_json(glob_rows),
+            "chroms": [str(c) for c in chroms],
+        }
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+def _compute_target_cov_table_rows(
+    df: pd.DataFrame,
+    reference_contig_scope: str,
+) -> Dict[str, Any]:
+    """Pandas work for target coverage table (no UI). Safe for asyncio.to_thread."""
+    try:
+        dfx = df.copy()
+        if "coverage" not in dfx.columns:
+            dfx["length"] = (dfx["endpos"] - dfx["startpos"] + 1).astype(float)
+            dfx["coverage"] = dfx["bases"] / dfx["length"]
+        dfx["coverage"] = dfx["coverage"].astype(float).round(2)
+        if "chrom" in dfx.columns:
+            dfx = dfx[
+                dfx["chrom"]
+                .astype(str)
+                .map(lambda v: is_visible_contig(v, reference_contig_scope))
+            ]
+
+        outlier_status: List[str] = []
+        if len(dfx) >= 3:
+            mean_cov = dfx["coverage"].mean()
+            std_cov = dfx["coverage"].std()
+            if std_cov > 0:
+                lower = mean_cov - 2.0 * std_cov
+                upper = mean_cov + 2.0 * std_cov
+                for cov in dfx["coverage"]:
+                    if cov > upper:
+                        outlier_status.append("High")
+                    elif cov < lower:
+                        outlier_status.append("Low")
+                    else:
+                        outlier_status.append("")
+            else:
+                outlier_status = [""] * len(dfx)
+        else:
+            outlier_status = [""] * len(dfx)
+
+        dfx["outlier_status"] = outlier_status
+        rows = dfx[
+            ["chrom", "startpos", "endpos", "name", "coverage", "outlier_status"]
+        ].to_dict(orient="records")
+        return {"ok": True, "rows": _echarts_option_to_json(rows)}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+def _load_coverage_time_series_points(npy_path: Path) -> Dict[str, Any]:
+    """Load coverage-over-time numpy array (no UI). Safe for asyncio.to_thread."""
+    try:
+        arr = np.load(npy_path)
+        raw = arr.tolist()
+        return {"ok": True, "points": _echarts_option_to_json(raw)}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+def _read_length_chart_payload(stats: Dict[str, Any]) -> Dict[str, Any]:
+    """Build JSON-safe ECharts series for on/off-target length histograms."""
+    from robin.gui.coverage_metrics import read_length_histogram_series
+
+    return read_length_histogram_series(stats)
+
+
+def _coverage_load_refresh_data(
+    sample_dir: Path, prev_meta: Dict[str, Any]
+) -> Dict[str, Any]:
+    """Load coverage CSVs/npy and compute summary metrics. No UI calls.
+
+    Intended for ``asyncio.to_thread`` so file I/O and pandas do not block the
+    NiceGUI event loop. Callers merge ``state_updates`` and apply UI on the main
+    thread only.
+    """
+    errors: List[Dict[str, Any]] = []
+    state_updates: Dict[str, Any] = {}
+
+    is_fresh_visit = not prev_meta.get("has_last_visit", False)
+
+    cov_main = sample_dir / "coverage_main.csv"
+    bed_cov = sample_dir / "bed_coverage_main.csv"
+    target_cov = sample_dir / "target_coverage.csv"
+    cov_time = sample_dir / "coverage_time_chart.npy"
+    target_cov_time_csv = sample_dir / "target_coverage_time.csv"
+    master_csv = sample_dir / "master.csv"
+
+    cov_main_mtime = cov_main.stat().st_mtime if cov_main.exists() else 0
+    bed_cov_mtime = bed_cov.stat().st_mtime if bed_cov.exists() else 0
+    target_cov_mtime = target_cov.stat().st_mtime if target_cov.exists() else 0
+    cov_time_mtime = cov_time.stat().st_mtime if cov_time.exists() else 0
+    target_cov_time_csv_mtime = (
+        target_cov_time_csv.stat().st_mtime if target_cov_time_csv.exists() else 0
+    )
+    master_csv_mtime = master_csv.stat().st_mtime if master_csv.exists() else 0
+
+    prev_cov_main_mtime = prev_meta.get("cov_main_mtime", 0)
+    prev_bed_cov_mtime = prev_meta.get("bed_cov_mtime", 0)
+    prev_target_cov_mtime = prev_meta.get("target_cov_mtime", 0)
+    prev_cov_time_mtime = prev_meta.get("cov_time_mtime", 0)
+    prev_target_cov_time_csv_mtime = prev_meta.get("target_cov_time_csv_mtime", 0)
+    prev_master_csv_mtime = prev_meta.get("master_csv_mtime", 0)
+
+    cov_main_changed = prev_cov_main_mtime != cov_main_mtime
+    bed_cov_changed = prev_bed_cov_mtime != bed_cov_mtime
+    target_cov_changed = prev_target_cov_mtime != target_cov_mtime
+    cov_time_changed = prev_cov_time_mtime != cov_time_mtime
+    target_cov_time_csv_changed = (
+        prev_target_cov_time_csv_mtime != target_cov_time_csv_mtime
+    )
+    master_csv_changed = prev_master_csv_mtime != master_csv_mtime
+
+    data_missing = (cov_main.exists() and not prev_meta.get("has_cov_df", False)) or (
+        bed_cov.exists() and not prev_meta.get("has_bed_df", False)
+    )
+
+    needs_update = (
+        is_fresh_visit
+        or cov_main_changed
+        or bed_cov_changed
+        or target_cov_changed
+        or cov_time_changed
+        or target_cov_time_csv_changed
+        or master_csv_changed
+        or data_missing
+    )
+
+    mtimes = {
+        "cov_main": cov_main_mtime,
+        "bed_cov": bed_cov_mtime,
+        "target_cov": target_cov_mtime,
+        "cov_time": cov_time_mtime,
+        "target_cov_time_csv": target_cov_time_csv_mtime,
+        "master_csv": master_csv_mtime,
+    }
+
+    if not needs_update:
+        return {
+            "needs_update": False,
+            "is_fresh_visit": is_fresh_visit,
+            "state_updates": {},
+            "loaded_cov_df": False,
+            "loaded_bed_df": False,
+            "loaded_target_df": False,
+            "cov_time_refresh": False,
+            "cov_time_path": None,
+            "target_cov_time_analysis_refresh": False,
+            "target_df": None,
+            "mtimes": mtimes,
+            "errors": [],
+            "summary": None,
+        }
+
+    loaded_cov_df = False
+    loaded_bed_df = False
+    loaded_target_df = False
+    cov_time_refresh = False
+    target_df: Any = None
+    cov_time_path: Path | None = None
+
+    cov_df: Any = None
+    bed_df: Any = None
+
+    if cov_main.exists():
+        if is_fresh_visit or cov_main_changed or not prev_meta.get("has_cov_df", False):
+            try:
+                cov_df = pd.read_csv(cov_main)
+                if "meandepth" not in cov_df.columns and {
+                    "covbases",
+                    "endpos",
+                }.issubset(set(cov_df.columns)):
+                    cov_df = cov_df.copy()
+                    with np.errstate(divide="ignore", invalid="ignore"):
+                        cov_df["meandepth"] = (
+                            cov_df["covbases"]
+                            / cov_df["endpos"].replace(0, np.nan)
+                        ).fillna(0)
+                state_updates["cov_df"] = cov_df
+                loaded_cov_df = True
+            except Exception as e:
+                errors.append(
+                    {
+                        "message": f"Failed to read coverage_main.csv: {e}",
+                        "level": "error",
+                        "notify": True,
+                    }
+                )
+    else:
+        errors.append(
+            {
+                "message": "coverage_main.csv not found",
+                "level": "debug",
+                "notify": False,
+            }
+        )
+
+    if bed_cov.exists():
+        if is_fresh_visit or bed_cov_changed or not prev_meta.get("has_bed_df", False):
+            try:
+                bed_df = pd.read_csv(bed_cov)
+                state_updates["bed_df"] = bed_df
+                loaded_bed_df = True
+            except Exception as e:
+                errors.append(
+                    {
+                        "message": f"Failed to read bed_coverage_main.csv: {e}",
+                        "level": "error",
+                        "notify": True,
+                    }
+                )
+    else:
+        errors.append(
+            {
+                "message": "bed_coverage_main.csv not found",
+                "level": "debug",
+                "notify": False,
+            }
+        )
+
+    if target_cov.exists():
+        if is_fresh_visit or target_cov_changed:
+            try:
+                target_df = pd.read_csv(target_cov)
+                loaded_target_df = True
+            except Exception as e:
+                errors.append(
+                    {
+                        "message": f"Failed to read target_coverage.csv: {e}",
+                        "level": "error",
+                        "notify": True,
+                    }
+                )
+    else:
+        errors.append(
+            {
+                "message": "target_coverage.csv not found",
+                "level": "debug",
+                "notify": False,
+            }
+        )
+
+    if cov_time.exists():
+        if is_fresh_visit or cov_time_changed:
+            cov_time_refresh = True
+            cov_time_path = cov_time
+    else:
+        errors.append(
+            {
+                "message": "coverage_time_chart.npy not found",
+                "level": "debug",
+                "notify": False,
+            }
+        )
+
+    # Target Coverage Over Time Analysis (target_coverage_time.csv): replot from the
+    # periodic refresh when the file changes. Initial paint is handled by
+    # _plot_target_coverage_over_time() on section load; exclude is_fresh_visit here
+    # so we do not double-plot on the first _refresh_coverage_async tick.
+    target_cov_time_analysis_refresh = bool(
+        target_cov_time_csv.exists()
+        and target_cov_time_csv_changed
+        and not is_fresh_visit
+    )
+
+    summary: Dict[str, Any] | None = None
+    try:
+        global_cov = None
+        target_cov_v = None
+        enrich_v = None
+        updated_cov_df = state_updates.get("cov_df")
+        updated_bed_df = state_updates.get("bed_df")
+        eff_cov_df = (
+            updated_cov_df
+            if updated_cov_df is not None
+            else prev_meta.get("cov_df_ref")
+        )
+        eff_bed_df = (
+            updated_bed_df
+            if updated_bed_df is not None
+            else prev_meta.get("bed_df_ref")
+        )
+
+        if eff_cov_df is not None:
+            cdf = eff_cov_df
+            if (
+                "covbases" in cdf.columns
+                and "endpos" in cdf.columns
+                and cdf["endpos"].sum() > 0
+            ):
+                global_cov = float(cdf["covbases"].sum()) / float(cdf["endpos"].sum())
+        if eff_bed_df is not None:
+            bdf = eff_bed_df.copy()
+            if "length" not in bdf.columns:
+                bdf["length"] = (bdf["endpos"] - bdf["startpos"] + 1).astype(float)
+            if bdf["length"].sum() > 0:
+                target_cov_v = float(bdf["bases"].sum()) / float(bdf["length"].sum())
+        if (
+            global_cov is not None
+            and target_cov_v is not None
+            and global_cov > 0
+        ):
+            enrich_v = target_cov_v / global_cov
+
+        quality: Dict[str, Any] | None = None
+        if target_cov_v is not None:
+            q_text = coverage_quality_name(target_cov_v)
+            if q_text == "Excellent":
+                q_cls, q_bg = (
+                    "text-emerald-700",
+                    "bg-emerald-100",
+                )
+            elif q_text == "Good":
+                q_cls, q_bg = (
+                    "text-sky-700",
+                    "bg-sky-100",
+                )
+            elif q_text == "Moderate":
+                q_cls, q_bg = (
+                    "text-amber-700",
+                    "bg-amber-100",
+                )
+            else:
+                q_cls, q_bg = (
+                    "text-rose-700",
+                    "bg-rose-100",
+                )
+            quality = {
+                "q_text": q_text,
+                "q_cls": q_cls,
+                "q_bg": q_bg,
+                "badge_text": f"{target_cov_v:.2f}x",
+            }
+
+        summary = {
+            "global_cov": global_cov,
+            "target_cov_v": target_cov_v,
+            "enrich_v": enrich_v,
+            "quality": quality,
+            "read_lengths": load_on_off_target_length_stats(sample_dir),
+        }
+    except Exception as e:
+        errors.append(
+            {
+                "message": f"Failed to calculate coverage summary metrics: {e}",
+                "level": "warning",
+                "notify": False,
+            }
+        )
+        summary = {
+            "read_lengths": load_on_off_target_length_stats(sample_dir),
+        }
+
+    return {
+        "needs_update": True,
+        "is_fresh_visit": is_fresh_visit,
+        "state_updates": state_updates,
+        "loaded_cov_df": loaded_cov_df,
+        "loaded_bed_df": loaded_bed_df,
+        "loaded_target_df": loaded_target_df,
+        "cov_time_refresh": cov_time_refresh,
+        "cov_time_path": cov_time_path,
+        "target_cov_time_analysis_refresh": target_cov_time_analysis_refresh,
+        "target_df": target_df,
+        "mtimes": mtimes,
+        "errors": errors,
+        "summary": summary,
+    }
+
+
 def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
     """Build the Coverage UI section and attach refresh timers.
 
@@ -1745,31 +3046,169 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
     """
     # Check for development environment variable to show/hide testing features
     is_development_mode = os.environ.get("ROBIN_DEV_MODE", "").lower() in ("1", "true", "yes", "on")
-    
-    with ui.card().classes("w-full").props("id=analysis-detail-coverage"):
-        ui.label("Coverage").classes("text-lg font-semibold mb-2")
+
+    from robin.gui.plotting_preferences import resolve_plotting_reference_contig_scope
+
+    reference_contig_scope = resolve_plotting_reference_contig_scope(
+        getattr(launcher, "plotting_preferences", None)
+    )
+
+    with ui.card().classes("robin-card w-full").props("id=analysis-detail-coverage"):
+        ui.label("Coverage").classes("robin-card__title mb-2")
         # Summary row (quality + metrics)
         with ui.row().classes("w-full items-center justify-between mb-2"):
             with ui.column().classes("gap-1"):
                 ui.label("Coverage Analysis").classes("text-sm font-medium")
                 with ui.row().classes("items-center gap-2"):
                     cov_quality_label = ui.label("Quality: --").classes(
-                        "text-gray-600 font-medium"
+                        "robin-text-muted font-medium"
                     )
                     cov_quality_badge = ui.label("--x").classes(
-                        "px-2 py-1 rounded bg-gray-100 text-gray-600"
+                        "robin-status-badge bg-gray-100 text-gray-600"
                     )
             with ui.column().classes("gap-1 items-end"):
                 cov_global_lbl = ui.label("Global Estimated Coverage: --x").classes(
-                    "text-sm text-gray-600"
+                    "robin-text-muted text-sm"
                 )
                 cov_target_lbl = ui.label("Targets Estimated Coverage: --x").classes(
-                    "text-sm text-gray-600"
+                    "robin-text-muted text-sm"
                 )
                 cov_enrich_lbl = ui.label("Estimated enrichment: --x").classes(
-                    "text-sm text-gray-600"
+                    "robin-text-muted text-sm"
                 )
-        with ui.card().classes("w-full"):
+        read_length_metrics = ui.row().classes("w-full gap-4 flex-wrap mt-2")
+        with read_length_metrics:
+            with ui.column().classes("gap-0 min-w-[12rem]"):
+                ui.label("On-target read length").classes("text-xs font-medium text-gray-500")
+                cov_on_len_lbl = ui.label("Mean — · Median —").classes(
+                    "text-sm text-gray-700"
+                )
+                cov_on_n_lbl = ui.label("0 primary reads").classes(
+                    "text-xs text-gray-500"
+                )
+            with ui.column().classes("gap-0 min-w-[12rem]"):
+                ui.label("Off-target read length").classes("text-xs font-medium text-gray-500")
+                cov_off_len_lbl = ui.label("Mean — · Median —").classes(
+                    "text-sm text-gray-700"
+                )
+                cov_off_n_lbl = ui.label("0 primary reads").classes(
+                    "text-xs text-gray-500"
+                )
+        read_length_chart_card = ui.card().classes("robin-card w-full")
+        read_length_zoom_state: Dict[str, Any] = {
+            "n_bins": 0,
+            "first_occupied": 0,
+            "last_occupied": 0,
+            "initialized": False,
+        }
+        with read_length_chart_card:
+            _cp_len = _cov_chrome_palette()
+            _on_c, _off_c = _cov_on_off_colors()
+            echart_read_len = ui.echart(
+                {
+                    "backgroundColor": "transparent",
+                    "textStyle": {"color": _cp_len["axis"]},
+                    "title": {
+                        "text": "On / off-target read length",
+                        "subtext": (
+                            "Primary mapped reads classified by panel overlap"
+                            " · log-spaced bins, 50 bp–500 kb"
+                        ),
+                        "left": "center",
+                        "top": 8,
+                        "textStyle": {"fontSize": 15, "color": _cp_len["title"]},
+                        "subtextStyle": {"fontSize": 11, "color": _cp_len["axis"]},
+                    },
+                    "legend": {
+                        "data": ["On target", "Off target"],
+                        "top": 46,
+                        "textStyle": {"color": _cp_len["legend"]},
+                    },
+                    "tooltip": {
+                        "trigger": "axis",
+                        "axisPointer": {"type": "shadow"},
+                        **_cov_tooltip_option(),
+                    },
+                    "grid": {
+                        "left": "8%",
+                        "right": "8%",
+                        "bottom": 72,
+                        "top": "28%",
+                        "containLabel": True,
+                    },
+                    "xAxis": {
+                        "type": "category",
+                        "name": "Read length",
+                        "nameLocation": "end",
+                        "nameGap": 8,
+                        "nameTextStyle": {"color": _cp_len["axis"]},
+                        "data": [],
+                        "axisLabel": {
+                            "rotate": 45,
+                            "fontSize": 10,
+                            "color": _cp_len["axis"],
+                            "hideOverlap": True,
+                        },
+                        "axisLine": {"lineStyle": {"color": _cp_len["axis"]}},
+                    },
+                    "yAxis": {
+                        "type": "value",
+                        "name": "% of reads",
+                        "nameTextStyle": {"color": _cp_len["axis"]},
+                        "axisLabel": {"color": _cp_len["axis"]},
+                        "splitLine": {
+                            "lineStyle": {"color": _cp_len["split"], "type": "dashed"},
+                        },
+                    },
+                    "dataZoom": _read_length_data_zoom_options(_cp_len),
+                    "series": [
+                        {
+                            "name": "On target",
+                            "type": "bar",
+                            "data": [],
+                            "itemStyle": {"color": _on_c},
+                        },
+                        {
+                            "name": "Off target",
+                            "type": "bar",
+                            "data": [],
+                            "itemStyle": {"color": _off_c},
+                        },
+                    ],
+                }
+            ).classes("w-full h-80")
+
+            def _zoom_read_length(mode: str) -> None:
+                from robin.gui.coverage_metrics import read_length_histogram_zoom_window
+
+                window = read_length_histogram_zoom_window(
+                    read_length_zoom_state, mode=mode
+                )
+                _apply_read_length_zoom(
+                    echart_read_len, window["start"], window["end"]
+                )
+                try:
+                    echart_read_len.update()
+                except Exception:
+                    pass
+
+            with ui.row().classes(
+                "w-full items-center justify-between gap-2 mt-1 flex-wrap"
+            ):
+                ui.label(
+                    "Empty bins are kept so spacing stays log-proportional. "
+                    "Drag the slider, click Fit data, or scroll on the chart to zoom."
+                ).classes("text-xs text-gray-500")
+                with ui.row().classes("gap-1 shrink-0"):
+                    ui.button(
+                        "Fit data", on_click=lambda: _zoom_read_length("data")
+                    ).props("flat dense no-caps size=sm")
+                    ui.button(
+                        "Full range", on_click=lambda: _zoom_read_length("full")
+                    ).props("flat dense no-caps size=sm")
+        read_length_metrics.set_visibility(False)
+        read_length_chart_card.set_visibility(False)
+        with ui.card().classes("robin-card w-full"):
             # Per Chromosome Target Coverage (grouped bar — design.md §9.5)
             _cp0 = _cov_chrome_palette()
             echart_target_cov = ui.echart(
@@ -1826,8 +3265,8 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                     }
                 ).classes("w-full h-64")
 
-        with ui.card().classes("w-full"):
-            ui.label("Coverage Over Time").classes("text-lg font-semibold mb-2")
+        with ui.card().classes("robin-card w-full"):
+            ui.label("Coverage Over Time").classes("robin-card__title mb-2")
             _cp1 = _cov_chrome_palette()
             _ln = _cov_line_primary()
             _fill = _cov_area_fill_primary()
@@ -1890,13 +3329,14 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
             ).classes("w-full h-72")
 
         # Target Coverage Over Time Analysis
-        with ui.card().classes("w-full mt-4"):
-            ui.label("Target Coverage Over Time Analysis").classes("text-lg font-semibold mb-2")
+        with ui.card().classes("robin-card w-full mt-4"):
+            ui.label("Target Coverage Over Time Analysis").classes("robin-card__title mb-2")
             ui.label(
-                "Analyze mean target coverage over time and identify significant outliers. "
-                "Outliers are detected using standard deviation method: values more than 2 SD above or below the mean for each gene."
+                "Signal-first view of target coverage over time: a population mean and ±2σ envelope, "
+                "ghosted in-range targets, and highlighted outliers. Outliers are points where a target’s "
+                "coverage is more than 2 SD from the cross-gene mean at that timestamp."
             ).classes("text-sm text-gray-600 mb-4")
-            
+
             def _get_coverage_state():
                 key = str(sample_dir)
                 if hasattr(launcher, "_coverage_state"):
@@ -1906,7 +3346,7 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                 launcher._coverage_state = {}
                 launcher._coverage_state[key] = {}
                 return launcher._coverage_state[key]
-            
+
             coverage_state = _get_coverage_state()
             stored_outlier_limit = coverage_state.get("target_cov_outlier_limit", 10)
             try:
@@ -1914,103 +3354,113 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
             except (TypeError, ValueError):
                 stored_outlier_limit = 10
 
-            # Chart container
-            target_coverage_time_chart_state = {"container": None, "chart": None}
+            # Chart container (created during page build so refresh timers have a
+            # stable target without inventing UI from an empty slot stack).
+            target_coverage_time_chart_state = {
+                "container": ui.column().classes("w-full"),
+                "chart": None,
+            }
             outlier_limit_state = {"value": max(1, stored_outlier_limit)}
-            
+
             def _plot_target_coverage_over_time():
                 """Load target_coverage_time.csv and plot mean coverage with outlier detection"""
+                container = target_coverage_time_chart_state["container"]
+                if container is None or not ui_element_exists(container):
+                    return
                 try:
                     time_coverage_file = sample_dir / "target_coverage_time.csv"
                     if not time_coverage_file.exists():
-                        if target_coverage_time_chart_state["container"]:
-                            with target_coverage_time_chart_state["container"]:
-                                ui.label("No target_coverage_time.csv file found.").classes("text-gray-600")
+                        with container:
+                            container.clear()
+                            ui.label("No target_coverage_time.csv file found.").classes("text-gray-600")
                         return
-                    
+
                     # Load data
                     df = pd.read_csv(time_coverage_file)
                     if df.empty:
-                        if target_coverage_time_chart_state["container"]:
-                            with target_coverage_time_chart_state["container"]:
-                                ui.label("No data available in target_coverage_time.csv").classes("text-gray-600")
+                        with container:
+                            container.clear()
+                            ui.label("No data available in target_coverage_time.csv").classes("text-gray-600")
                         return
                     if not {'chrom', 'startpos', 'endpos', 'name'}.issubset(df.columns):
-                        if target_coverage_time_chart_state["container"]:
-                            with target_coverage_time_chart_state["container"]:
-                                ui.label("target_coverage_time.csv missing chrom/startpos/endpos/name columns").classes("text-gray-600")
+                        with container:
+                            container.clear()
+                            ui.label("target_coverage_time.csv missing chrom/startpos/endpos/name columns").classes("text-gray-600")
                         return
-                    
+
                     # Convert timestamp to datetime (milliseconds to datetime)
                     df['datetime'] = pd.to_datetime(df['timestamp'], unit='ms')
-                    
-                    # Create unique target identifier (chrom, startpos, endpos) - distinguishes multiple regions with same gene name
-                    df['target_key'] = df.apply(
-                        lambda r: (str(r['chrom']), int(r['startpos']), int(r['endpos'])),
-                        axis=1
+
+                    # Create unique target identifier (chrom, startpos, endpos) — vectorized
+                    df["target_key"] = list(
+                        zip(
+                            df["chrom"].astype(str),
+                            df["startpos"].astype(np.int64),
+                            df["endpos"].astype(np.int64),
+                        )
                     )
-                    # Build display labels: include chromosome and position (Mb) when gene name appears multiple times
-                    name_counts = df.groupby('name').size()
-                    def _target_label(row):
-                        name = row['name']
-                        chrom = str(row['chrom'])
-                        start_mb = row['startpos'] / 1e6
-                        if name_counts.get(name, 0) > 1:
-                            return f"{name} ({chrom} {start_mb:.2f} Mb)"
-                        return f"{name} ({chrom} {start_mb:.2f} Mb)"
-                    df['target_label'] = df.apply(_target_label, axis=1)
-                    
+                    # Display labels (same format for all rows; avoids slow df.apply)
+                    _start_mb = (df["startpos"].astype(np.float64) / 1e6).round(2)
+                    df["target_label"] = (
+                        df["name"].astype(str)
+                        + " ("
+                        + df["chrom"].astype(str)
+                        + " "
+                        + _start_mb.astype(str)
+                        + " Mb)"
+                    )
+
                     # Calculate mean coverage per timepoint
                     mean_coverage = df.groupby('timestamp')['coverage'].mean().reset_index()
                     mean_coverage['datetime'] = pd.to_datetime(mean_coverage['timestamp'], unit='ms')
-                    
+
                     # Detect outliers using standard deviation method (Z-score)
                     def detect_outliers_sd(series, num_sd=2.0):
                         """Detect outliers using standard deviation method (Z-score)
-                        
+
                         Args:
                             series: Pandas Series of values
                             num_sd: Number of standard deviations from mean (default: 2.0)
-                        
+
                         Returns:
                             Boolean Series indicating which values are outliers
                         """
                         mean = series.mean()
                         std = series.std()
-                        
+
                         # Handle case where std is 0 (all values are the same)
                         if std == 0:
                             return pd.Series([False] * len(series), index=series.index)
-                        
+
                         lower_bound = mean - num_sd * std
                         upper_bound = mean + num_sd * std
                         return (series < lower_bound) | (series > upper_bound)
-                    
+
                     # Detect outliers: compare each gene's coverage to the distribution of ALL genes
                     # This detects genes that are outliers compared to other genes, not just timepoints
                     outliers = []
-                    
+
                     # Calculate global statistics across all genes at each timepoint
                     # This allows us to detect genes that are outliers relative to the population
                     for timestamp in df['timestamp'].unique():
                         timepoint_data = df[df['timestamp'] == timestamp].copy()
                         if len(timepoint_data) < 3:  # Need at least 3 genes to calculate SD
                             continue
-                        
+
                         # Calculate mean and SD across all genes at this timepoint
                         global_mean = timepoint_data['coverage'].mean()
                         global_std = timepoint_data['coverage'].std()
-                        
+
                         if global_std == 0:  # All genes have same coverage
                             continue
-                        
+
                         # Detect outliers: genes > 2 SD from global mean at this timepoint
                         lower_bound = global_mean - 2.0 * global_std
                         upper_bound = global_mean + 2.0 * global_std
-                        
+
                         outlier_mask = (timepoint_data['coverage'] < lower_bound) | (timepoint_data['coverage'] > upper_bound)
                         outlier_points = timepoint_data[outlier_mask]
-                        
+
                         for _, row in outlier_points.iterrows():
                             tk = row['target_key']
                             tk = (str(tk[0]), int(tk[1]), int(tk[2])) if isinstance(tk, (list, tuple)) else (str(row['chrom']), int(row['startpos']), int(row['endpos']))
@@ -2027,9 +3477,9 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                                 'global_mean': global_mean,
                                 'global_std': global_std
                             })
-                    
+
                     outliers_df = pd.DataFrame(outliers) if outliers else pd.DataFrame()
-                    
+
                     # Identify unique outlier targets (regions that are outliers at any timepoint)
                     outlier_targets = []
                     if not outliers_df.empty:
@@ -2042,13 +3492,13 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                             if key not in seen:
                                 seen.add(key)
                                 outlier_targets.append((key, row['target_label']))
-                    
+
                     try:
                         outlier_limit = int(outlier_limit_state["value"])
                     except (TypeError, ValueError):
                         outlier_limit = 10
                     outlier_limit = max(1, outlier_limit)
-                    
+
                     # Prepare data for ECharts (design.md §9.5 — mean, ±2 SD band, dim in-range, outliers)
                     outlier_key_set = set()
                     for k, _ in outlier_targets:
@@ -2062,36 +3512,28 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                         )
                     ]
 
-                    mc_vals = mean_coverage["coverage"].astype(float)
-                    m_mu = float(mc_vals.mean())
-                    m_sd = float(mc_vals.std()) if len(mc_vals) > 1 else 0.0
-                    band_low = max(0.0, m_mu - 2.0 * m_sd)
-                    band_high = max(band_low + 1e-9, m_mu + 2.0 * m_sd)
+                    # Time-varying ±2σ across genes at each timestamp (same basis as outliers)
                     band_fill = _cov_band_fill_rgba()
-
-                    band_series = {
-                        "name": "_band",
-                        "type": "line",
-                        "data": [],
-                        "silent": True,
-                        "showInLegend": False,
-                        "z": 0,
-                        "markArea": {
-                            "silent": True,
-                            "itemStyle": {"color": band_fill},
-                            "data": [[{"yAxis": band_low}, {"yAxis": band_high}]],
-                        },
-                    }
+                    env_low, env_span = _cov_per_timestamp_envelope(df)
+                    envelope_series = _cov_envelope_series(band_fill, env_low, env_span)
 
                     mean_c = _cov_mean_line_color()
+                    mean_ls: Dict[str, Any] = {
+                        "width": 4,
+                        "type": "dashed",
+                        "color": mean_c,
+                    }
+                    if _cov_ui_dark():
+                        mean_ls["shadowBlur"] = 6
+                        mean_ls["shadowColor"] = "rgba(255,255,255,0.22)"
                     mean_series = {
                         "name": "Mean (population)",
                         "type": "line",
-                        "smooth": True,
+                        "smooth": 0.42,
                         "data": mean_coverage_data,
                         "symbol": "none",
                         "z": 80,
-                        "lineStyle": {"width": 4, "type": "dashed", "color": mean_c},
+                        "lineStyle": mean_ls,
                         "itemStyle": {"color": mean_c},
                     }
 
@@ -2144,34 +3586,68 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                                     == key
                                 )
                             ]
-                            is_high = (
-                                out_sub["type"].value_counts().get("high", 0)
-                                > out_sub["type"].value_counts().get("low", 0)
-                            )
-                            gc = _cov_gene_line_color(idx)
-                            outlier_gene_series.append(
-                                {
-                                    "name": _cov_legend_label(target_label),
-                                    "type": "line",
-                                    "smooth": True,
-                                    "data": series_data,
-                                    "symbol": "none",
-                                    "z": 12,
-                                    "itemStyle": {"color": gc},
-                                    "lineStyle": {
-                                        "width": 2.5,
-                                        "type": "dashed" if not is_high else "solid",
-                                        "color": gc,
-                                    },
-                                    "label": {"show": False},
-                                    "labelLayout": {"hideOverlap": True},
-                                    "emphasis": {
-                                        "focus": "series",
-                                        "lineStyle": {"width": 4},
-                                    },
-                                    "blur": {"lineStyle": {"opacity": 0.15}},
+                            gc = _cov_outlier_line_color(idx)
+                            ols: Dict[str, Any] = {
+                                "width": 2,
+                                "type": "solid",
+                                "color": gc,
+                            }
+                            if _cov_ui_dark():
+                                ols["shadowBlur"] = 10
+                                ols["shadowColor"] = "rgba(255,255,255,0.14)"
+                            hi_c = _cov_anomaly_pos_color()
+                            lo_c = _cov_anomaly_neg_color()
+                            mp_data: List[Dict[str, Any]] = []
+                            for _, r in out_sub.iterrows():
+                                is_gain = str(r.get("type") or "") == "high"
+                                mp_data.append(
+                                    {
+                                        "coord": [
+                                            int(r["timestamp"]),
+                                            float(r["coverage"]),
+                                        ],
+                                        "symbol": "triangle",
+                                        "symbolRotate": 0 if is_gain else 180,
+                                        "symbolSize": 9,
+                                        "itemStyle": {
+                                            "color": hi_c if is_gain else lo_c,
+                                        },
+                                        "emphasis": {
+                                            "itemStyle": {
+                                                "shadowBlur": 14,
+                                                "shadowColor": (
+                                                    "rgba(52, 211, 153, 0.55)"
+                                                    if is_gain
+                                                    else "rgba(248, 113, 113, 0.55)"
+                                                ),
+                                            }
+                                        },
+                                    }
+                                )
+                            ospec: Dict[str, Any] = {
+                                "name": _cov_legend_label(target_label),
+                                "type": "line",
+                                "smooth": 0.42,
+                                "data": series_data,
+                                "symbol": "none",
+                                "z": 12,
+                                "itemStyle": {"color": gc},
+                                "lineStyle": ols,
+                                "label": {"show": False},
+                                "labelLayout": {"hideOverlap": True},
+                                "emphasis": {
+                                    "focus": "series",
+                                    "lineStyle": {"width": 3},
+                                },
+                                "blur": {"lineStyle": {"opacity": 0.1}},
+                            }
+                            if mp_data:
+                                ospec["markPoint"] = {
+                                    "symbol": "triangle",
+                                    "animation": False,
+                                    "data": mp_data,
                                 }
-                            )
+                            outlier_gene_series.append(ospec)
 
                     dim_gene_series: List[Dict[str, Any]] = []
                     for tkey, group in df.groupby("target_key", sort=False):
@@ -2199,51 +3675,49 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                                     f"{target_label} · in-range"
                                 ),
                                 "type": "line",
-                                "smooth": True,
+                                "smooth": 0.42,
                                 "data": series_data,
                                 "symbol": "none",
                                 "z": 4,
                                 "itemStyle": {
                                     "color": _cov_dim_muted_line(),
-                                    "opacity": 0.42,
+                                    "opacity": _COV_GHOST_LINE_OPACITY,
                                 },
                                 "lineStyle": {
                                     "width": 1.5,
                                     "type": "dashed",
                                     "color": _cov_dim_muted_line(),
-                                    "opacity": 0.42,
+                                    "opacity": _COV_GHOST_LINE_OPACITY,
                                 },
                                 "label": {"show": False},
                                 "emphasis": {
                                     "focus": "series",
-                                    "lineStyle": {"width": 3, "opacity": 1},
+                                    "lineStyle": {"width": 2.5, "opacity": 0.55},
                                 },
-                                "blur": {"lineStyle": {"opacity": 0.08}},
+                                "blur": {"lineStyle": {"opacity": 0.06}},
                             }
                         )
 
-                    # Create/update chart
-                    if target_coverage_time_chart_state["container"] is None:
-                        target_coverage_time_chart_state["container"] = ui.column().classes("w-full")
-                    
-                    with target_coverage_time_chart_state["container"]:
+                    # Update chart in the page-built container
+                    with container:
                         # Clear existing content
-                        target_coverage_time_chart_state["container"].clear()
-                        
+                        container.clear()
+
                         # Summary statistics
                         with ui.row().classes("w-full mb-4 gap-3"):
                             ui.label(f"Total timepoints: {len(mean_coverage)}").classes("text-sm")
                             ui.label(f"Total targets: {len(df['target_key'].unique())}").classes("text-sm")
                             ui.label(f"Outliers detected: {len(outliers_df)}").classes("text-sm")
-                        
-                        # Chart
+
+                        # Chart (design.md §9.5.C — signal-first trend, vertical scrubber, right legend)
                         _cp_t = _cov_chrome_palette()
+                        _split_tt = _cov_target_time_split()
                         chart_config = {
                             "backgroundColor": "transparent",
                             "textStyle": {"color": _cp_t["axis"]},
                             "title": {
-                                "text": "Individual target coverage (outlier analysis)",
-                                "subtext": "Mean ±2σ band; in-range targets dimmed; outliers in colour",
+                                "text": "Target coverage over time (outlier trend)",
+                                "subtext": "Mean ±2σ envelope; ghosted in-range targets; triangle markers = anomalies",
                                 "left": "center",
                                 "top": 6,
                                 "textStyle": {
@@ -2255,51 +3729,43 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                                     "color": _cp_t["axis"],
                                 },
                             },
-                            # No JS formatter here — options are JSON-serialied; functions
-                            # become strings and break the tooltip (see classification charts).
-                            "tooltip": {
-                                "trigger": "axis",
-                                "axisPointer": {
-                                    "type": "cross",
-                                    "lineStyle": {"color": _cp_t["axis"], "width": 1},
-                                    "crossStyle": {"color": _cp_t["axis"]},
-                                },
-                                "confine": True,
-                                "appendToBody": True,
-                                **_cov_tooltip_option(),
-                            },
+                            # Item trigger: one target per hover (not all series at x).
+                            "tooltip": _cov_target_time_tooltip_option(),
                             "legendHoverLink": True,
-                            # Legend below plot (horizontal scroll) — avoids overlapping Y-axis / grid.
                             "legend": {
                                 "type": "scroll",
                                 "orient": "horizontal",
                                 "left": "center",
-                                "bottom": 2,
-                                "itemGap": 10,
+                                "right": "auto",
+                                "top": "auto",
+                                "bottom": 4,
+                                "width": "92%",
+                                "height": 42,
+                                "itemGap": 8,
                                 "itemWidth": 10,
                                 "itemHeight": 10,
-                                "width": "96%",
                                 "pageIconColor": _cp_t["title"],
                                 "pageTextStyle": {"color": _cp_t["axis"]},
                                 "textStyle": {
-                                    "fontSize": 11,
+                                    "fontSize": 10,
                                     "color": _cp_t["legend"],
                                 },
                             },
                             "grid": {
                                 "left": "10%",
                                 "right": "6%",
-                                "top": "18%",
-                                "bottom": "32%",
+                                "top": "16%",
+                                "bottom": "22%",
                                 "containLabel": True,
                             },
+                            "media": _echart_target_cov_time_media(_cp_t["axis"]),
                             "xAxis": {
                                 "type": "time",
                                 "name": "Time",
                                 "nameGap": 30,
                                 "axisLabel": {"color": _cp_t["axis"]},
                                 "axisLine": {"lineStyle": {"color": _cp_t["axis"]}},
-                                "splitLine": {"lineStyle": {"color": _cp_t["split"]}},
+                                "splitLine": {"lineStyle": {"color": _split_tt}},
                             },
                             "yAxis": {
                                 "type": "value",
@@ -2308,40 +3774,44 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                                 "axisLabel": {"color": _cp_t["axis"]},
                                 "axisLine": {"lineStyle": {"color": _cp_t["axis"]}},
                                 "splitLine": {
-                                    "lineStyle": {"color": _cp_t["split"], "type": "dashed"},
+                                    "lineStyle": {
+                                        "color": _split_tt,
+                                        "type": "dashed",
+                                    },
                                 },
                             },
-                            "series": [band_series]
+                            "series": envelope_series
                             + dim_gene_series
                             + outlier_gene_series
                             + [mean_series],
                         }
-                        
+
                         target_coverage_time_chart_state["chart"] = ui.echart(
                             chart_config
                         ).classes("w-full min-h-[420px] h-[480px]")
                         _apply_target_coverage_time_analysis_chrome(
                             target_coverage_time_chart_state["chart"]
                         )
-                        
+
                         # Show summary of outlier targets
                         if outlier_targets:
                             outlier_count = len(outlier_targets)
                             ui.label(f"Showing profiles for {min(outlier_count, outlier_limit)} outlier targets (out of {outlier_count} total)").classes("text-sm text-gray-600 mt-2")
                         else:
                             ui.label("No significant outliers detected.").classes("text-gray-600 mt-2")
-                
+
                 except Exception as e:
                     logging.error(f"Error plotting target coverage over time: {e}")
                     import traceback
                     logging.error(traceback.format_exc())
-                    if target_coverage_time_chart_state["container"]:
-                        with target_coverage_time_chart_state["container"]:
+                    if ui_element_exists(container):
+                        with container:
+                            container.clear()
                             ui.label(f"Error: {str(e)}").classes("text-red-600")
-            
-            # Auto-plot on load
-            _plot_target_coverage_over_time()
-            
+
+            # Defer plot work so the sample page shell and websocket can finish first
+            client_timer(0.05, _plot_target_coverage_over_time, once=True)
+
             def _set_outlier_limit(e) -> None:
                 try:
                     outlier_limit_state["value"] = int(e.value)
@@ -2350,8 +3820,8 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                 outlier_limit_state["value"] = max(1, outlier_limit_state["value"])
                 coverage_state["target_cov_outlier_limit"] = outlier_limit_state["value"]
                 _plot_target_coverage_over_time()
-            
-            # Refresh button + outlier limit control
+
+            # Outlier limit (plot updates automatically when target_coverage_time.csv changes)
             with ui.row().classes("w-full mt-4 items-center gap-3"):
                 ui.label("Outliers to show").classes("text-sm text-gray-600")
                 ui.number(
@@ -2362,10 +3832,6 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                     format="%.0f",
                     on_change=_set_outlier_limit,
                 ).props("dense").classes("w-24")
-                ui.button(
-                    "Refresh Analysis",
-                    on_click=_plot_target_coverage_over_time
-                ).classes("ml-2")
 
         with ui.column().classes("w-full target-coverage-panel").props(
             "id=analysis-detail-target-coverage"
@@ -2383,7 +3849,7 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                             panel = df.iloc[0]["analysis_panel"]
                             if panel and str(panel).strip() != "" and str(panel).strip().lower() != "nan":
                                 return str(panel).strip()
-                    
+
                     # Fallback 1: Try to detect panel from BED files in the sample directory
                     bed_files = list(sample_dir.glob("*.bed"))
                     if bed_files:
@@ -2396,29 +3862,29 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                                 return "AML"
                             elif "sarcoma" in bed_name:
                                 return "Sarcoma"
-                    
+
                     # Fallback 2: Try to detect from target analysis output files
                     target_files = list(sample_dir.glob("*target*.csv")) + list(sample_dir.glob("*coverage*.csv"))
                     if target_files:
-                        # This is a heuristic - if we have target analysis files, 
+                        # This is a heuristic - if we have target analysis files,
                         # we can assume it's likely a known panel
                         return "Unknown Panel"
-                    
+
                     return ""  # No panel found
                 except Exception as e:
                     _log_notify(f"Exception in _get_target_panel_info: {e}", level="error", notify=False)
                     return ""  # No default fallback
-            
+
             target_panel = _get_target_panel_info()
-            
+
             # Panel legend with color coding
             panel_colors = {
                 "rCNS2": ("bg-blue-100", "text-blue-800", "rCNS2 Panel"),
-                "AML": ("bg-green-100", "text-green-800", "AML Panel"), 
+                "AML": ("bg-green-100", "text-green-800", "AML Panel"),
                 "Sarcoma": ("bg-orange-100", "text-orange-800", "Sarcoma Panel"),
                 "Unknown Panel": ("bg-yellow-100", "text-yellow-800", "Unknown Panel")
             }
-            
+
             if not target_panel:
                 # No panel found - show warning
                 panel_color_classes, panel_text_classes, panel_display_name = ("bg-red-100", "text-red-800", "Panel Not Found")
@@ -2426,7 +3892,7 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                 panel_color_classes, panel_text_classes, panel_display_name = panel_colors.get(
                     target_panel, ("bg-gray-100", "text-gray-800", f"{target_panel} Panel")
                 )
-            
+
             # Store panel information in state for use by other functions
             key = str(sample_dir)
             if key not in launcher._coverage_state:
@@ -2447,11 +3913,11 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                 ui.label(panel_display_name).classes(f"px-2 py-1 rounded text-sm font-medium {panel_color_classes} {panel_text_classes}")
                 ui.label("•").classes("text-gray-400")
                 ui.label("Target regions defined by gene panel").classes("text-xs text-gray-500")
-            
+
             # Add detailed panel information in an expansion
             with ui.expansion().classes("w-full mb-2").props("icon=info dense"):
                 ui.label("Panel Details").classes("text-sm font-medium mb-2")
-                
+
                 # Get the BED file name for the current panel
                 # Use the same logic as target_analysis._find_target_bed to determine BED filename
                 bed_filename = None
@@ -2464,7 +3930,7 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                     bed_filename = f"{target_panel}_panel_name_uniq.bed"
                 else:
                     bed_filename = "Unknown"
-                
+
                 # Verify the BED file exists in robin.resources
                 if bed_filename and bed_filename != "Unknown":
                     try:
@@ -2478,26 +3944,26 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                     except Exception:
                         # If we can't verify, still show the expected filename
                         pass
-                
+
                 with ui.column().classes("gap-1 text-sm"):
                     with ui.row().classes("items-center gap-2"):
                         ui.label("Panel:").classes("font-medium w-20")
                         ui.label(target_panel).classes("font-mono")
-                    
+
                     with ui.row().classes("items-center gap-2"):
                         ui.label("BED File:").classes("font-medium w-20")
                         ui.label(bed_filename).classes("font-mono text-xs")
-                    
+
                     with ui.row().classes("items-center gap-2"):
                         ui.label("Description:").classes("font-medium w-20")
                         panel_descriptions = {
                             "rCNS2": "Central Nervous System genes (244 regions)",
-                            "AML": "Acute Myeloid Leukemia genes (1,181 regions)", 
+                            "AML": "Acute Myeloid Leukemia genes (1,181 regions)",
                             "Sarcoma": "Sarcoma-specific gene panel",
                             "Unknown Panel": "Panel type could not be determined"
                         }
                         ui.label(panel_descriptions.get(target_panel, "Custom gene panel")).classes("text-xs")
-            
+
             # Define helper functions before chart creation
             def _show_chromosome_scatter(chromosome: str) -> None:
                 """Show scatter plot for individual genes on a specific chromosome"""
@@ -2507,23 +3973,23 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                     if not bed_cov.exists():
                         ui.notify("No coverage data available", type="warning")
                         return
-                    
+
                     # Read the data
                     df = pd.read_csv(bed_cov)
                     if "coverage" not in df.columns:
                         df["length"] = (df["endpos"] - df["startpos"] + 1).astype(float)
                         df["coverage"] = df["bases"] / df["length"]
-                    
+
                     # Filter for the selected chromosome
                     chrom_data = df[df["chrom"].astype(str) == chromosome].copy()
-                    
+
                     if chrom_data.empty:
                         ui.notify(f"No data found for chromosome {chromosome}", type="warning")
                         return
-                    
+
                     # Sort by position for better visualization
                     chrom_data = chrom_data.sort_values("startpos")
-                    
+
                     # Build unique display labels for genes that appear multiple times (same name, different regions)
                     name_counts = chrom_data["name"].value_counts()
                     scatter_data = []
@@ -2540,11 +4006,11 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                         else:
                             label = name
                         scatter_data.append([label, row["coverage"], row["startpos"], row["endpos"]])
-                    
+
                     # Update chart to show scatter plot
                     target_boxplot.options["title"]["text"] = f"Gene Coverage - {chromosome}"
                     target_boxplot.options["title"]["subtext"] = f"{len(scatter_data)} targets"
-                    
+
                     # Update x-axis to show gene names (with position when duplicated)
                     gene_names = [d[0] for d in scatter_data]
                     target_boxplot.options["xAxis"]["data"] = gene_names
@@ -2553,7 +4019,7 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                     target_boxplot.options["xAxis"]["name"] = "Gene / region"
                     target_boxplot.options["xAxis"]["nameLocation"] = "middle"
                     target_boxplot.options["xAxis"]["nameGap"] = 44
-                    
+
                     # Update series to show scatter plot
                     _cp_sc = _cov_chrome_palette()
                     target_boxplot.options["series"] = [
@@ -2589,46 +4055,78 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                             }
                         }
                     ]
-                    
+
                     # Hide legend for scatter view
                     target_boxplot.options["legend"]["show"] = False
                     _apply_coverage_boxplot_chrome(target_boxplot)
                     target_boxplot.update()
-                    
+
                     # Show back button (remove Tailwind hidden — classes("", replace="") is unreliable)
                     try:
                         target_coverage_back_button.classes(remove="hidden")
                     except Exception:
                         target_coverage_back_button.set_visibility(True)
-                    
+
                     _log_notify(f"Showing gene coverage for {chromosome}", level="info", notify=False)
-                    
+
                 except Exception as e:
                     _log_notify(f"Failed to show chromosome scatter: {e}", level="error", notify=True)
-            
-            def _show_target_coverage_overview() -> None:
-                """Return to the original box plot overview"""
+
+            async def _show_target_coverage_overview_async() -> None:
+                """Return to the original box plot overview (CSV + chart off event loop)."""
                 try:
-                    # Reload the original box plot data by calling _update_boxplot
                     bed_cov = sample_dir / "bed_coverage_main.csv"
-                    if bed_cov.exists():
-                        df = pd.read_csv(bed_cov)
-                        _update_boxplot(df, panel_display_name)
-                    else:
+                    if not bed_cov.exists():
                         ui.notify("No coverage data available", type="warning")
                         return
-                    
-                    # Hide back button
+                    df = await asyncio.to_thread(pd.read_csv, bed_cov)
+                    await _apply_boxplot_async(df, panel_display_name)
                     try:
                         target_coverage_back_button.classes("hidden")
                     except Exception:
                         target_coverage_back_button.set_visibility(False)
-                    
-                    _log_notify("Returned to target coverage overview", level="info", notify=False)
-                    
+                    _log_notify(
+                        "Returned to target coverage overview",
+                        level="info",
+                        notify=False,
+                    )
                 except Exception as e:
-                    _log_notify(f"Failed to show overview: {e}", level="error", notify=True)
-            
+                    _log_notify(
+                        f"Failed to show overview: {e}", level="error", notify=True
+                    )
+
+            def _show_target_coverage_overview() -> None:
+                """Return to the original box plot overview"""
+                try:
+                    asyncio.get_running_loop()
+                except RuntimeError:
+                    try:
+                        bed_cov = sample_dir / "bed_coverage_main.csv"
+                        if bed_cov.exists():
+                            df = pd.read_csv(bed_cov)
+                            _apply_boxplot_payload(
+                                _compute_boxplot_chart_data(
+                                    df, panel_display_name, reference_contig_scope
+                                )
+                            )
+                            try:
+                                target_coverage_back_button.classes("hidden")
+                            except Exception:
+                                target_coverage_back_button.set_visibility(False)
+                            _log_notify(
+                                "Returned to target coverage overview",
+                                level="info",
+                                notify=False,
+                            )
+                        else:
+                            ui.notify("No coverage data available", type="warning")
+                    except Exception as e:
+                        _log_notify(
+                            f"Failed to show overview: {e}", level="error", notify=True
+                        )
+                    return
+                asyncio.create_task(_show_target_coverage_overview_async())
+
             # Define click handler function before chart creation
             def handle_boxplot_click(params):
                 """Handle clicks on the ECharts box plot and show chromosome scatter"""
@@ -2640,7 +4138,7 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                         _show_chromosome_scatter(chromosome)
                 except Exception as e:
                     _log_notify(f"Error handling chart click: {e}", level="warning", notify=False)
-            
+
             _cp_bp = _cov_chrome_palette()
             target_boxplot = ui.echart(
                 {
@@ -2947,13 +4445,13 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                                     console.error('IGV library not loaded');
                                     return false;
                                 }
-                        
+
                                 // Check if IGV is fully initialized
                                 if (typeof igv.createBrowser !== 'function') {
                                     console.error('IGV library not fully initialized');
                                     return false;
                                 }
-                        
+
                                 console.log('IGV library is available and ready');
                                 return true;
                             } catch (e) {
@@ -3000,12 +4498,12 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                             reject(new Error('Element not found'));
                             return;
                         }
-                
+
                         if (el.offsetWidth > 0 && el.offsetHeight > 0) {
                             resolve(true);
                             return;
                         }
-                
+
                         // Wait for element to be ready
                         const checkReady = () => {
                             if (el.offsetWidth > 0 && el.offsetHeight > 0) {
@@ -3086,12 +4584,12 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                                     if (!el) {
                                     throw new Error('Target element not found');
                                     }
-                            
+
                                     const options = { genome: 'hg38' };
                                     console.log('IGV options:', options);
-                            
+
                                     igv.createBrowser(el, options).then(b => {
-                                    window.lj_igv = b; 
+                                    window.lj_igv = b;
                                     window.lj_igv_browser_ready = true;
                                     console.log('IGV browser created successfully');
                                     }).catch(error => {
@@ -3123,10 +4621,10 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                             js_add_track = f"""
                                 if (window.lj_igv && window.lj_igv_browser_ready) {{
                                     console.log('Adding track to existing IGV browser...');
-                            
+
                                     const track = {{ name: '{sample_dir.name}', url: '{bam_url}', indexURL: '{bai_url}', format: 'bam', type: 'alignment', height: 600, autoScale: true, colorBy: 'tag', tag: 'SA' }};
                                     console.log('Track to load:', track);
-                            
+
                                     try {{
                                     window.lj_igv.loadTrack(track);
                                     console.log('Track loaded successfully');
@@ -3201,11 +4699,11 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                         js_clear = """
                             try {
                                 console.log('Attempting to clear IGV tracks...');
-                        
+
                                 if (window.lj_igv && typeof window.lj_igv.getTracks === 'function') {
                                     const tracks = window.lj_igv.getTracks();
                                     console.log('Found tracks:', tracks.length);
-                            
+
                                     if (tracks.length > 0) {
                                     tracks.forEach((track, index) => {
                                         try {
@@ -3250,20 +4748,20 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                     Returns True if file is ready, False if timeout.
                     """
                     import time
-            
+
                     start_time = time.time()
                     last_size = -1
                     stable_count = 0
                     required_stable_checks = 2  # Need 2 consecutive checks with same size
-            
+
                     while time.time() - start_time < max_wait_time:
                         try:
                             if not bam_path.exists():
                                 time.sleep(0.5)
                                 continue
-                    
+
                             current_size = bam_path.stat().st_size
-                    
+
                             # Check if file size has changed
                             if current_size == last_size:
                                 stable_count += 1
@@ -3272,18 +4770,18 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                                     return True
                             else:
                                 stable_count = 0  # Reset counter if size changed
-                    
+
                             last_size = current_size
                             time.sleep(0.5)
-                    
+
                         except (OSError, IOError):
                             # File might be temporarily unavailable
                             time.sleep(0.5)
                             continue
-            
+
                     # Timeout reached
                     return False
-        
+
                 # Function to reload BAM data into existing IGV browser
                 def _reload_bam_track():
                     # Initialize state variable
@@ -3304,7 +4802,7 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
 
                         # Extract BAM name for display
                         bam_name = current_bam_url.split("/")[-1]
-                
+
                         # Determine the actual BAM file path
                         bam_path = None
                         if current_bam_url.startswith("/samples/"):
@@ -3314,7 +4812,7 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                                 sample_dir_name = parts[2]
                                 bam_file_name = parts[3]
                                 bam_path = sample_dir / bam_file_name
-                
+
                         # Wait for BAM file to be ready if it exists
                         if bam_path and bam_path.exists():
                             igv_status.set_text("Checking if BAM file is ready...")
@@ -3322,7 +4820,7 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                                 igv_status.set_text("BAM file is still being updated. Please wait and try again.")
                                 ui.notify("BAM file is still being updated. Please wait and try again.", type="warning")
                                 return
-                    
+
                             # Also check if BAI file is ready
                             bai_path = bam_path.with_suffix(bam_path.suffix + ".bai")
                             if bai_path.exists():
@@ -3357,7 +4855,7 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                                             }}
                                         }}
                                     }}
-                                
+
                                     // Remove alignment tracks
                                     for (let track of tracks) {{
                                         try {{
@@ -3377,7 +4875,7 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                                     }} catch (e) {{
                                     // Ignore errors
                                     }}
-                            
+
                                     // Create the track configuration
                                     const trackConfig = {{
                                     name: '{bam_name}',
@@ -3389,7 +4887,7 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                                     height: 600,
                                     autoScale: true
                                     }};
-                            
+
                                     // Add the track to the browser
                                     if (typeof window.lj_igv.loadTrack === 'function') {{
                                     window.lj_igv.loadTrack(trackConfig);
@@ -3399,7 +4897,7 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                                         window.lj_igv.addTrack(trackConfig);
                                     }}
                                     }}
-                            
+
                                     // Force a redraw
                                     if (typeof window.lj_igv.redraw === 'function') {{
                                     window.lj_igv.redraw();
@@ -3416,14 +4914,14 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
 
                         # Update status
                         igv_status.set_text(f"Loading BAM track: {bam_name}")
-                
+
                         # Change button text to "Reload BAM" after first load
                         reload_bam_button.set_text("Reload BAM")
 
                         # Mark that data tracks are no longer cleared
                         if state:
                             state["data_tracks_cleared"] = False
-                    
+
                         # Auto-load the BED file after BAM is loaded
                         _load_target_bed()
 
@@ -3442,11 +4940,11 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
 
                         # Get the target panel information
                         state = _get_igv_state()
-                
+
                         # Check if BED file has already been loaded
                         if state.get("bed_file_loaded", False):
                             return  # BED file already loaded, don't load again
-                
+
                         # Try to read the panel from master.csv
                         target_panel = None
                         bed_file_path = None
@@ -3457,16 +4955,16 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                                 df = pd.read_csv(master_csv_path)
                                 if not df.empty and "analysis_panel" in df.columns:
                                     target_panel = str(df.iloc[0]["analysis_panel"]).strip()
-                            
+
                                     # Map panel to BED filename
                                     bed_file_mapping = {
                                     "rCNS2": "rCNS2_panel_name_uniq.bed",
                                     "AML": "AML_panel_name_uniq.bed",
                                     "Sarcoma": "Sarcoma_panel_name_uniq.bed"
                                     }
-                            
+
                                     bed_filename = bed_file_mapping.get(target_panel, f"{target_panel}_panel_name_uniq.bed")
-                            
+
                                     # Try to find the BED file in robin resources
                                     try:
                                         from robin import resources
@@ -3478,7 +4976,7 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                                             bed_file_path = None
                                     except Exception:
                                         pass
-                            
+
                                     # Fallback paths
                                     if not bed_file_path:
                                         possible_paths = [
@@ -3502,7 +5000,7 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                         bed_dir = os.path.dirname(bed_file_path)
                         bed_name = os.path.basename(bed_file_path)
                         bed_url = f"/robin_resources/{bed_name}"
-                
+
                         try:
                             if app is not None:
                                 app.add_static_files("/robin_resources", bed_dir)
@@ -3524,7 +5022,7 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                                     height: 40,
                                     color: '#0072B2'
                                     }};
-                            
+
                                     // Load the track into IGV
                                     if (typeof window.lj_igv.loadTrack === 'function') {{
                                     window.lj_igv.loadTrack(trackConfig);
@@ -3541,10 +5039,10 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                         """
 
                         ui.run_javascript(js_load_bed, timeout=20.0)
-                
+
                         # Mark that BED file has been loaded
                         state["bed_file_loaded"] = True
-                
+
                         # Update status
                         igv_status.set_text(f"Loaded BED file: {bed_name}")
                         ui.notify(f"Target BED file loaded: {bed_name}", type="positive")
@@ -3568,7 +5066,7 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                         } else {
                             errors.push(`IGV version: ${igv.version || 'unknown'}`);
                         }
-                
+
                         return errors;
                     } catch (e) {
                         return ['Error checking console: ' + e.message];
@@ -3598,11 +5096,11 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                         js_find_element = """
                             console.log('Looking for IGV div element...');
                             console.log('Expected ID: igv-container');
-                    
+
                             // List all divs on the page
                             const allDivs = document.querySelectorAll('div');
                             console.log('Total divs found:', allDivs.length);
-                    
+
                             allDivs.forEach((div, i) => {
                                 console.log(`Div ${i}:`, {
                                     id: div.id,
@@ -3612,7 +5110,7 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                                     offsetHeight: div.offsetHeight
                                 });
                             });
-                    
+
                             // Try to find our specific element
                             let el = document.getElementById('igv-container');
                             if (!el) {
@@ -3624,7 +5122,7 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                                     console.log('Using first candidate by class');
                                 }
                             }
-                    
+
                             if (el) {
                                 console.log('Element found:', el);
                                 console.log('Element dimensions:', el.offsetWidth, 'x', el.offsetHeight);
@@ -3648,22 +5146,22 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                         js_empty = """
                             try {
                                 console.log('Creating empty IGV browser...');
-                        
+
                                 // Find the element again
                                 let el = document.getElementById('igv-container');
                                 if (!el) {
                                     el = document.querySelector('.w-full.h-\\[600px\\].border');
                                 }
-                        
+
                                 if (!el) {
                                     throw new Error('Element still not found');
                                 }
-                        
+
                                 const options = { genome: 'hg38' };
                                 console.log('Creating empty IGV browser with options:', options);
-                        
+
                                 igv.createBrowser(el, options).then(b => {
-                                    window.lj_igv = b; 
+                                    window.lj_igv = b;
                                     window.lj_igv_browser_ready = true;
                                     console.log('Empty IGV browser created successfully');
                                 }).catch(error => {
@@ -3689,14 +5187,14 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                         console.log('=== IGV Debug Info ===');
                         console.log('window.lj_igv:', window.lj_igv);
                         console.log('window.lj_igv_browser_ready:', window.lj_igv_browser_ready);
-                
+
                         if (window.lj_igv) {
                             console.log('IGV browser exists');
                             console.log('Available methods:', Object.getOwnPropertyNames(window.lj_igv));
                         } else {
                             console.log('No IGV browser found');
                         }
-                
+
                         console.log('Python state check requested');
                         """
 
@@ -3865,7 +5363,10 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                     ui.label(
                         "• Reference genome (hg38 recommended) - provided via CLI --reference option"
                     )
-                    ui.label("• Docker running with hkubal/clairs-to:latest image")
+                    ui.label(
+                        "• Docker running with hkubal/clairs-to:latest "
+                        "(ROBIN derives a host-user-readable image; containers still run as your UID/GID)"
+                    )
                     ui.label("• snpEff and SnpSift installed")
 
                 # Add helpful note about file generation
@@ -3875,21 +5376,32 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                         "Note: Both target.bam and targets_exceeding_threshold.bed are automatically generated when you run target analysis. You don't need to create them manually."
                     ).classes("text-sm text-blue-800")
 
-            # SNP Analysis results display
-            with ui.expansion().classes("w-full").props("icon=assessment"):
-                ui.label("Results").classes("text-sm font-medium mb-2")
+            # Lazy-load SNP/INDEL UI when Results expansion opens (avoids full VCF parse on page load)
+            snp_results_lazy_state: Dict[str, Any] = {"sig": None}
 
-                # Results status
+            def _snp_results_file_signature() -> Tuple[Optional[int], Optional[int]]:
+                clair_dir = sample_dir / "clair3"
+                snp_vcf = clair_dir / "snpsift_output.vcf"
+                indel_vcf = clair_dir / "snpsift_indel_output.vcf"
+
+                def _mt(p: Path) -> Optional[int]:
+                    try:
+                        return p.stat().st_mtime_ns if p.exists() else None
+                    except OSError:
+                        return None
+
+                return (_mt(snp_vcf), _mt(indel_vcf))
+
+            snp_results_expansion = ui.expansion("Results", icon="assessment").classes(
+                "w-full"
+            )
+            with snp_results_expansion:
                 snp_results_status = (
-                    ui.label("No SNP analysis results yet")
+                    ui.label("Expand this section to load variant results.")
                     .classes("text-sm text-gray-600")
                     .props("data-snp-results-status")
                 )
-
-                # Results table placeholder
                 snp_results_container = ui.column().classes("w-full")
-
-                # Function to check and display SNP results
 
             def _check_snp_results():
                 try:
@@ -3963,6 +5475,17 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
 
                 except Exception as e:
                     snp_results_status.set_text(f"Error checking results: {e}")
+
+            def _on_snp_results_expansion_change(e) -> None:
+                if not e.value:
+                    return
+                sig = _snp_results_file_signature()
+                if sig == snp_results_lazy_state["sig"]:
+                    return
+                _check_snp_results()
+                snp_results_lazy_state["sig"] = sig
+
+            snp_results_expansion.on_value_change(_on_snp_results_expansion_change)
 
             # Helper function to detect gzipped files
             def _is_gzipped(file_path):
@@ -4247,17 +5770,14 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                                 "field": col,
                                 "sortable": True
                             })
-                        
-                        # Create rows from DataFrame
-                        rows = display_df.to_dict('records')
-                        
-                        # Create styled table for consistency
-                        from robin.gui.theme import styled_table
-                        table_container, variant_table = styled_table(
-                            columns=columns,
-                            rows=rows,
-                            pagination=25,
-                            class_size="table-xs"
+
+                        # Create paged table (slice rows per page, avoid full row materialization).
+                        variant_table = _render_paged_df_table(
+                            display_df,
+                            columns,
+                            pagination_default=100,
+                            class_size="table-xs",
+                            search_placeholder=f"Search {v_type}s...",
                         )
 
                         # Make all columns sortable
@@ -4293,13 +5813,6 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                                             ),
                                         )
 
-                        # Add search functionality
-                        with variant_table.add_slot("top-right"):
-                            with ui.input(placeholder=f"Search {v_type}s...").props(
-                                "type=search"
-                            ).bind_value(variant_table, "filter").add_slot("append"):
-                                ui.icon("search")
-
                         # Column toggle function
                         def toggle_column(column: dict, visible: bool) -> None:
                             column["classes"] = "" if visible else "hidden"
@@ -4313,11 +5826,12 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
 
                     # Add export functionality
                     with ui.row().classes("w-full mt-4"):
-                        ui.button(
-                            f"Export {variant_type}s to CSV",
-                            icon="download",
-                            on_click=lambda: _export_variants(filtered_df, variant_type),
-                        ).classes("w-full")
+                        if launcher._current_user_can_export():
+                            ui.button(
+                                f"Export {variant_type}s to CSV",
+                                icon="download",
+                                on_click=lambda: _export_variants(filtered_df, variant_type),
+                            ).classes("w-full")
 
                         # Add row count display
                         ui.label(
@@ -4362,6 +5876,8 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
             # Function to export variants
             def _export_variants(data_df, variant_type):
                 """Export filtered variants to CSV"""
+                if not launcher._require_export_or_notify():
+                    return
                 try:
                     import tempfile
 
@@ -4382,9 +5898,6 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
 
                 except Exception as e:
                     ui.notify(f"Export failed: {e}", type="error")
-
-            # Check for existing results (after all functions are defined)
-            _check_snp_results()
 
             # Function to check file availability
             def _check_snp_file_availability():
@@ -4486,6 +5999,7 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                     # The reference genome is passed via CLI and stored in workflow_runner.reference
 
                     # Update UI state
+                    snp_results_lazy_state["sig"] = None
                     snp_analysis_button.disable()
                     snp_status_label.set_text("Starting SNP analysis...")
                     snp_status_label.classes(replace="text-sm text-blue-600")
@@ -4700,7 +6214,7 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                                             statusElement.textContent = "SNP analysis failed: " + "{str(e)}";
                                             statusElement.className = "text-sm text-red-600";
                                         }}
-                                        
+
                                         // Re-enable button
                                         var buttonElement = document.querySelector('{snp_analysis_button.id}');
                                         if (buttonElement) {{
@@ -5318,7 +6832,7 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
 
                             # Create table using styled_table for consistency
                             from robin.gui.theme import styled_table
-                            
+
                             # Create columns definition
                             columns = []
                             for col in gene_table_data[0].keys():
@@ -5328,7 +6842,7 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                                     "field": col,
                                     "sortable": True
                                 })
-                            
+
                             # Create styled table
                             table_container, gene_table = styled_table(
                                 columns=columns,
@@ -5492,7 +7006,7 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                                         df = pd.DataFrame(variant_data)
                                         # Create styled table for consistency
                                         from robin.gui.theme import styled_table
-                                        
+
                                         # Create columns definition
                                         columns = []
                                         for col in df.columns:
@@ -5502,16 +7016,13 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                                                 "field": col,
                                                 "sortable": True
                                             })
-                                        
-                                        # Create rows from DataFrame
-                                        rows = df.to_dict('records')
-                                        
-                                        # Create styled table
-                                        table_container, variant_table = styled_table(
-                                            columns=columns,
-                                            rows=rows,
-                                            pagination=10,
-                                            class_size="table-xs"
+
+                                        variant_table = _render_paged_df_table(
+                                            df,
+                                            columns,
+                                            pagination_default=100,
+                                            class_size="table-xs",
+                                            search_placeholder="Search variants...",
                                         )
 
                                         # Make columns sortable
@@ -5583,7 +7094,7 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
 
                         # Create table using styled_table for consistency
                         from robin.gui.theme import styled_table
-                        
+
                         # Create columns definition
                         columns = []
                         for col in low_cov_data[0].keys():
@@ -5593,7 +7104,7 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                                 "field": col,
                                 "sortable": True
                             })
-                        
+
                         # Create styled table
                         table_container, low_cov_table = styled_table(
                             columns=columns,
@@ -5787,7 +7298,7 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                                     df = pd.DataFrame(variant_data)
                                     # Create styled table for consistency
                                     from robin.gui.theme import styled_table
-                                    
+
                                     # Create columns definition
                                     columns = []
                                     for col in df.columns:
@@ -5797,28 +7308,14 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                                             "field": col,
                                             "sortable": True
                                         })
-                                    
-                                    # Create rows from DataFrame
-                                    rows = df.to_dict('records')
-                                    
-                                    # Create styled table
-                                    table_container, detailed_variant_table = styled_table(
-                                        columns=columns,
-                                        rows=rows,
-                                        pagination=20,
-                                        class_size="table-xs"
-                                    )
 
-                                    # Add search functionality
-                                    with detailed_variant_table.add_slot("top-right"):
-                                        with ui.input(
-                                            placeholder="Search variants..."
-                                        ).props("type=search").bind_value(
-                                            detailed_variant_table, "filter"
-                                        ).add_slot(
-                                            "append"
-                                        ):
-                                            ui.icon("search")
+                                    detailed_variant_table = _render_paged_df_table(
+                                        df,
+                                        columns,
+                                        pagination_default=100,
+                                        class_size="table-xs",
+                                        search_placeholder="Search variants...",
+                                    )
 
                                     # Make columns sortable
                                     for col in detailed_variant_table.columns:
@@ -5826,13 +7323,14 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
 
                                     # Add export functionality
                                     with ui.row().classes("w-full mt-4"):
-                                        ui.button(
-                                            "Export Gene Variants to CSV",
-                                            icon="download",
-                                            on_click=lambda: _export_gene_variants(
-                                                variant_data, selected_gene
-                                            ),
-                                        ).classes("w-full")
+                                        if launcher._current_user_can_export():
+                                            ui.button(
+                                                "Export Gene Variants to CSV",
+                                                icon="download",
+                                                on_click=lambda: _export_gene_variants(
+                                                    variant_data, selected_gene
+                                                ),
+                                            ).classes("w-full")
                                 else:
                                     ui.label("No variants found for this gene.").classes(
                                         "text-sm text-gray-500"
@@ -5855,6 +7353,8 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                 # Helper function to export gene variants
                 def _export_gene_variants(variant_data, gene_name):
                     """Export gene variants to CSV"""
+                    if not launcher._require_export_or_notify():
+                        return
                     try:
                         import tempfile
 
@@ -6091,6 +7591,8 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                     thread.start()
 
                     # Check for completion status periodically
+                    lga_timer_box: Dict[str, Any] = {"timer": None}
+
                     def check_lga_status():
                         if lga_status["status"] == "completed":
                             try:
@@ -6103,7 +7605,8 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                                 lga_analysis_button.props("color=secondary")
                             except Exception as e:
                                 print(f" Error updating UI: {e}")
-                            return False  # Stop checking
+                            stop_timer(lga_timer_box.get("timer"))
+                            return
                         elif lga_status["status"] == "error":
                             try:
                                 lga_status_label.set_text(
@@ -6113,11 +7616,13 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                                 lga_analysis_button.enable()
                             except Exception as e:
                                 print(f" Error updating UI: {e}")
-                            return False  # Stop checking
-                        return True  # Keep checking
+                            stop_timer(lga_timer_box.get("timer"))
+                            return
 
                     # Start checking status every 0.5 seconds
-                    ui.timer(0.5, check_lga_status, active=True)
+                    lga_timer_box["timer"] = client_timer(
+                        0.5, check_lga_status, active=True
+                    )
 
                     ui.notify(
                         "Lightweight variant analysis started in background (direct execution)",
@@ -6173,307 +7678,250 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
             # Never let logging itself break the UI
             pass
 
+    def _apply_target_cov_payload(result: Dict[str, Any]) -> None:
+        """Apply precomputed bar-series data to the chart (main thread only)."""
+        if not result.get("ok"):
+            err = result.get("error")
+            if err:
+                _log_notify(str(err), level="warning", notify=False)
+            return
+        echart_target_cov.options["xAxis"]["data"] = result["names_short"]
+        _on, _off = _cov_on_off_colors()
+        echart_target_cov.options["series"] = [
+            {
+                "type": "bar",
+                "name": "On Target",
+                "barWidth": "32%",
+                "barGap": "15%",
+                "data": result["on_target"],
+                "itemStyle": {"color": _on},
+            },
+            {
+                "type": "bar",
+                "name": "Off Target",
+                "barWidth": "32%",
+                "data": result["off_target"],
+                "itemStyle": {"color": _off},
+            },
+        ]
+        _apply_coverage_target_cov_chrome(echart_target_cov)
+        echart_target_cov.update()
+
+    async def _apply_target_cov_async(
+        cov_df: pd.DataFrame, bed_df: pd.DataFrame
+    ) -> None:
+        r = await asyncio.to_thread(
+            _compute_target_cov_series_data,
+            cov_df.copy(),
+            bed_df.copy(),
+            reference_contig_scope,
+        )
+        _apply_target_cov_payload(r)
+
     def _update_target_cov(cov_df: pd.DataFrame, bed_df: pd.DataFrame) -> None:
         try:
-
-            def chr_key(label: str) -> int:
-                s = str(label)
-                if s.startswith("chr"):
-                    s = s[3:]
-                mapping = {"X": 23, "Y": 24}
-                try:
-                    return int(s)
-                except Exception:
-                    return mapping.get(s, 1000)
-
-            bed_df = bed_df.copy()
-            bed_df["length"] = (bed_df["endpos"] - bed_df["startpos"] + 1).astype(float)
-            grouped = (
-                bed_df.groupby("chrom")
-                .agg({"bases": "sum", "length": "sum"})
-                .reset_index()
+            asyncio.get_running_loop()
+        except RuntimeError:
+            _apply_target_cov_payload(
+                _compute_target_cov_series_data(
+                    cov_df, bed_df, reference_contig_scope
+                )
             )
-            grouped["meandepth"] = grouped["bases"] / grouped["length"]
-            pattern = r"^chr([0-9]+|X|Y)$"
-            name_col = "#rname" if "#rname" in cov_df.columns else "rname"
-            temp_df = cov_df[cov_df[name_col].astype(str).str.match(pattern)]
-            temp_df = temp_df[temp_df[name_col] != "chrM"]
-            names = sorted(temp_df[name_col].astype(str).unique(), key=chr_key)
-            
-            if not names:
+            return
+        asyncio.create_task(_apply_target_cov_async(cov_df, bed_df))
+
+    def _apply_boxplot_payload(result: Dict[str, Any]) -> None:
+        """Apply precomputed boxplot datasets to the chart (main thread only)."""
+        if not result.get("ok"):
+            err = result.get("error")
+            if err:
+                _log_notify(str(err), level="warning", notify=False)
+            return
+        panel_display_name = result["panel_display_name"]
+        target_boxplot.options["dataset"][0]["source"] = result["result"]
+        target_boxplot.options["dataset"][1]["source"] = result["raw_source"]
+        target_boxplot.options["dataset"][2]["source"] = result["out_rows"]
+        target_boxplot.options["dataset"][3]["source"] = result["glob_rows"]
+        target_boxplot.options["xAxis"]["data"] = result["chroms"]
+        target_boxplot.options["xAxis"]["name"] = "Chromosome"
+        target_boxplot.options["xAxis"]["nameLocation"] = "middle"
+        target_boxplot.options["xAxis"]["nameGap"] = 40
+        target_boxplot.options["series"] = [
+            {
+                "id": "target_box_series",
+                "name": "box plot",
+                "type": "boxplot",
+                "itemStyle": _cov_boxplot_item_style(),
+                "datasetId": "raw",
+                "universalTransition": True,
+                "animationDurationUpdate": 1000,
+                "encode": {
+                    "x": "chrom",
+                    "y": ["min", "Q1", "median", "Q3", "max"],
+                    "itemName": ["chrom"],
+                    "tooltip": ["min", "Q1", "median", "Q3", "max"],
+                },
+            },
+            {
+                "id": "target_outliers_series",
+                "name": "outliers",
+                "type": "scatter",
+                "datasetId": "outliers",
+                "symbolSize": 6,
+                "itemStyle": _cov_scatter_outlier_style(),
+                "label": {
+                    "show": True,
+                    "position": "right",
+                    "formatter": "{@name}",
+                },
+                "encode": {
+                    "x": "chrom",
+                    "y": "coverage",
+                    "label": ["name"],
+                    "tooltip": ["name", "coverage"],
+                },
+            },
+            {
+                "id": "target_global_outliers_series",
+                "name": "global outliers",
+                "type": "scatter",
+                "datasetId": "globaloutliers",
+                "symbolSize": 6,
+                "itemStyle": _cov_scatter_outlier_style(),
+                "label": {
+                    "show": True,
+                    "position": "right",
+                    "formatter": "{@name}",
+                },
+                "encode": {
+                    "x": "chrom",
+                    "y": "coverage",
+                    "label": ["name"],
+                    "tooltip": ["name", "coverage"],
+                },
+            },
+        ]
+        target_boxplot.options["title"]["text"] = (
+            f"Target Coverage ({panel_display_name})"
+        )
+        target_boxplot.options["title"]["subtext"] = ""
+        target_boxplot.options["legend"]["show"] = True
+        _apply_coverage_boxplot_chrome(target_boxplot)
+        target_boxplot.update()
+        try:
+            options_clean = _echarts_option_to_json(target_boxplot.options)
+            options_json = json.dumps(options_clean)
+            options_escaped = json.dumps(options_json)
+            ui.run_javascript(
+                f"""
+                (function() {{
+                  var el = document.querySelector('.target-coverage-boxplot');
+                  if (!el) return;
+                  var chart = echarts.getInstanceByDom(el);
+                  if (!chart) {{
+                    var child = el.querySelector('div');
+                    if (child) chart = echarts.getInstanceByDom(child);
+                  }}
+                  if (!chart) return;
+                  try {{
+                    var options = JSON.parse({options_escaped});
+                    chart.setOption(options, {{ replaceMerge: ['series', 'dataset'] }});
+                  }} catch (e) {{ console.warn('Target coverage replaceMerge:', e); }}
+                }})();
+                """
+            )
+        except Exception as js_err:
+            logging.debug("Target coverage replaceMerge JS skip: %s", js_err)
+
+    async def _apply_boxplot_async(
+        bed_df: pd.DataFrame, panel_display_name: str = "Target Coverage"
+    ) -> None:
+        r = await asyncio.to_thread(
+            _compute_boxplot_chart_data,
+            bed_df.copy(),
+            panel_display_name,
+            reference_contig_scope,
+        )
+        _apply_boxplot_payload(r)
+
+    def _update_boxplot(
+        bed_df: pd.DataFrame, panel_display_name: str = "Target Coverage"
+    ) -> None:
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            _apply_boxplot_payload(
+                _compute_boxplot_chart_data(
+                    bed_df, panel_display_name, reference_contig_scope
+                )
+            )
+            return
+        asyncio.create_task(_apply_boxplot_async(bed_df, panel_display_name))
+
+    def _apply_time_series_payload(r: Dict[str, Any]) -> None:
+        if not r.get("ok"):
+            err = r.get("error")
+            if err:
                 _log_notify(
-                    "No valid chromosome data found for target coverage chart",
+                    f"Coverage-over-time update failed: {err}",
                     level="warning",
                     notify=False,
                 )
-                return
-            
-            names_short = [_short_chr_label(n) for n in names]
-            echart_target_cov.options["xAxis"]["data"] = names_short
-            grouped = grouped.set_index("chrom").reindex(names).reset_index()
-            
-            # Get off-target data - group by chromosome and take mean if multiple entries
-            temp_df_grouped = temp_df.groupby(name_col)["meandepth"].mean()
-            off_target_data = [
-                float(temp_df_grouped.get(chrom, 0.0)) if pd.notna(temp_df_grouped.get(chrom, 0.0)) else 0.0
-                for chrom in names
-            ]
-            
-            # Get on-target data
-            on_target_data = [
-                float(v) if pd.notna(v) else 0.0 
-                for v in grouped["meandepth"].fillna(0).tolist()
-            ]
-            
-            _on, _off = _cov_on_off_colors()
-            echart_target_cov.options["series"] = [
-                {
-                    "type": "bar",
-                    "name": "On Target",
-                    "barWidth": "32%",
-                    "barGap": "15%",
-                    "data": on_target_data,
-                    "itemStyle": {"color": _on},
-                },
-                {
-                    "type": "bar",
-                    "name": "Off Target",
-                    "barWidth": "32%",
-                    "data": off_target_data,
-                    "itemStyle": {"color": _off},
-                },
-            ]
-            _apply_coverage_target_cov_chrome(echart_target_cov)
-            echart_target_cov.update()
-        except Exception as e:
-            _log_notify(
-                f"Target vs Off-target coverage update failed: {e}",
-                level="warning",
-                notify=False,
-            )
+            return
+        echart_time.options["series"][0]["data"] = r["points"]
+        _apply_coverage_time_series_chrome(echart_time)
+        echart_time.update()
 
-    def _echarts_option_to_json(obj: Any) -> Any:
-        """Convert ECharts options to JSON-serializable form (numpy types, NaN)."""
-        if isinstance(obj, dict):
-            return {k: _echarts_option_to_json(v) for k, v in obj.items()}
-        if isinstance(obj, list):
-            return [_echarts_option_to_json(x) for x in obj]
-        if isinstance(obj, (np.floating, np.integer)):
-            v = float(obj) if isinstance(obj, np.floating) else int(obj)
-            return None if (isinstance(obj, np.floating) and np.isnan(obj)) else v
-        if isinstance(obj, float) and np.isnan(obj):
-            return None
-        return obj
-
-    def _update_boxplot(bed_df: pd.DataFrame, panel_display_name: str = "Target Coverage") -> None:
-        try:
-            df = bed_df.copy()
-            if "coverage" not in df.columns:
-                df["length"] = (df["endpos"] - df["startpos"] + 1).astype(float)
-                df["coverage"] = df["bases"] / df["length"]
-            # Normalize chrom to canonical form so "chr1" and "1" map to one category per chromosome
-            chrom_str = df["chrom"].astype(str).str.strip()
-            df["chrom"] = chrom_str.where(chrom_str.str.startswith("chr"), "chr" + chrom_str)
-            chroms = natsort.natsorted(df["chrom"].unique())
-            chrom_lookup = {chrom: idx for idx, chrom in enumerate(chroms)}
-            df["chrom_index"] = df["chrom"].map(chrom_lookup)
-            agg = (
-                df.groupby("chrom")
-                .agg(
-                    min=("coverage", "min"),
-                    Q1=("coverage", lambda x: float(np.percentile(x, 25))),
-                    median=("coverage", "median"),
-                    Q3=("coverage", lambda x: float(np.percentile(x, 75))),
-                    max=("coverage", "max"),
-                    chrom_index=("chrom_index", "first"),
-                )
-                .reset_index()
-            )
-            agg["chrom"] = pd.Categorical(agg["chrom"], categories=chroms, ordered=True)
-            agg = agg.sort_values("chrom").reset_index(drop=True)
-            result = [
-                ["chrom", "min", "Q1", "median", "Q3", "max", "chrom_index"]
-            ] + agg.values.tolist()
-
-            def iqr_bounds(sub):
-                q1 = np.percentile(sub["coverage"], 25)
-                q3 = np.percentile(sub["coverage"], 75)
-                iqr = q3 - q1
-                return q1 - 1.5 * iqr, q3 + 1.5 * iqr
-
-            out_rows = []
-            for c in chroms:
-                sub = df[df["chrom"].astype(str) == c]
-                lb, ub = iqr_bounds(sub)
-                out = sub[(sub["coverage"] < lb) | (sub["coverage"] > ub)]
-                out_rows += out[["chrom", "coverage", "name"]].values.tolist()
-            lb_g, ub_g = iqr_bounds(df)
-            glob = df[(df["coverage"] < lb_g) | (df["coverage"] > ub_g)]
-            glob_rows = glob[["chrom", "coverage", "name"]].values.tolist()
-            target_boxplot.options["dataset"][0]["source"] = result
-            target_boxplot.options["dataset"][1]["source"] = df[
-                ["chrom", "coverage", "name"]
-            ].values.tolist()
-            target_boxplot.options["dataset"][2]["source"] = out_rows
-            target_boxplot.options["dataset"][3]["source"] = glob_rows
-            target_boxplot.options["xAxis"]["data"] = chroms
-            target_boxplot.options["xAxis"]["name"] = "Chromosome"
-            target_boxplot.options["xAxis"]["nameLocation"] = "middle"
-            target_boxplot.options["xAxis"]["nameGap"] = 40
-
-            # Restore original series configuration (explicit ids so ECharts replaceMerge
-            # replaces series correctly on update, avoiding duplicate boxes per chromosome)
-            target_boxplot.options["series"] = [
-                {
-                    "id": "target_box_series",
-                    "name": "box plot",
-                    "type": "boxplot",
-                    "itemStyle": _cov_boxplot_item_style(),
-                    "datasetId": "raw",
-                    "universalTransition": True,
-                    "animationDurationUpdate": 1000,
-                    "encode": {
-                        "x": "chrom",
-                        "y": ["min", "Q1", "median", "Q3", "max"],
-                        "itemName": ["chrom"],
-                        "tooltip": ["min", "Q1", "median", "Q3", "max"],
-                    },
-                },
-                {
-                    "id": "target_outliers_series",
-                    "name": "outliers",
-                    "type": "scatter",
-                    "datasetId": "outliers",
-                    "symbolSize": 6,
-                    "itemStyle": _cov_scatter_outlier_style(),
-                    "label": {
-                        "show": True,
-                        "position": "right",
-                        "formatter": "{@name}",
-                    },
-                    "encode": {
-                        "x": "chrom",
-                        "y": "coverage",
-                        "label": ["name"],
-                        "tooltip": ["name", "coverage"],
-                    },
-                },
-                {
-                    "id": "target_global_outliers_series",
-                    "name": "global outliers",
-                    "type": "scatter",
-                    "datasetId": "globaloutliers",
-                    "symbolSize": 6,
-                    "itemStyle": _cov_scatter_outlier_style(),
-                    "label": {
-                        "show": True,
-                        "position": "right",
-                        "formatter": "{@name}",
-                    },
-                    "encode": {
-                        "x": "chrom",
-                        "y": "coverage",
-                        "label": ["name"],
-                        "tooltip": ["name", "coverage"],
-                    },
-                },
-            ]
-            
-            # Restore original title and legend
-            target_boxplot.options["title"]["text"] = f"Target Coverage ({panel_display_name})"
-            target_boxplot.options["title"]["subtext"] = ""
-            target_boxplot.options["legend"]["show"] = True
-            _apply_coverage_boxplot_chrome(target_boxplot)
-            
-            target_boxplot.update()
-
-            # Force ECharts to replace series/dataset instead of merging, so we don't get
-            # duplicate boxes per chromosome on first load (merge can append series).
-            try:
-                options_clean = _echarts_option_to_json(target_boxplot.options)
-                options_json = json.dumps(options_clean)
-                options_escaped = json.dumps(options_json)
-                ui.run_javascript(
-                    f"""
-                    (function() {{
-                      var el = document.querySelector('.target-coverage-boxplot');
-                      if (!el) return;
-                      var chart = echarts.getInstanceByDom(el);
-                      if (!chart) {{
-                        var child = el.querySelector('div');
-                        if (child) chart = echarts.getInstanceByDom(child);
-                      }}
-                      if (!chart) return;
-                      try {{
-                        var options = JSON.parse({options_escaped});
-                        chart.setOption(options, {{ replaceMerge: ['series', 'dataset'] }});
-                      }} catch (e) {{ console.warn('Target coverage replaceMerge:', e); }}
-                    }})();
-                    """
-                )
-            except Exception as js_err:
-                logging.debug("Target coverage replaceMerge JS skip: %s", js_err)
-        except Exception as e:
-            _log_notify(
-                f"Target boxplot update failed: {e}", level="warning", notify=False
-            )
+    async def _apply_time_series_async(npy_path: Path) -> None:
+        r = await asyncio.to_thread(_load_coverage_time_series_points, npy_path)
+        _apply_time_series_payload(r)
 
     def _update_time(npy_path: Path) -> None:
         try:
-            arr = np.load(npy_path)
-            raw = arr.tolist()
-            # Ensure [[ts_ms, cov], ...] for time axis
-            echart_time.options["series"][0]["data"] = raw
-            _apply_coverage_time_series_chrome(echart_time)
-            echart_time.update()
-        except Exception as e:
-            _log_notify(
-                f"Coverage-over-time update failed: {e}", level="warning", notify=False
-            )
+            asyncio.get_running_loop()
+        except RuntimeError:
+            _apply_time_series_payload(_load_coverage_time_series_points(npy_path))
+            return
+        asyncio.create_task(_apply_time_series_async(npy_path))
+
+    async def _apply_target_table_async(df: pd.DataFrame) -> None:
+        r = await asyncio.to_thread(
+            _compute_target_cov_table_rows, df.copy(), reference_contig_scope
+        )
+        if not r.get("ok"):
+            err = r.get("error")
+            if err:
+                _log_notify(
+                    f"Target table update failed: {err}",
+                    level="warning",
+                    notify=False,
+                )
+            return
+        target_cov_table.rows = r["rows"]
+        target_cov_table.update()
 
     def _update_target_table(df: pd.DataFrame) -> None:
         try:
-            dfx = df.copy()
-            if "coverage" not in dfx.columns:
-                dfx["length"] = (dfx["endpos"] - dfx["startpos"] + 1).astype(float)
-                dfx["coverage"] = dfx["bases"] / dfx["length"]
-            dfx["coverage"] = dfx["coverage"].astype(float).round(2)
-
-            # Compute outlier status using 2 SD method (matches Target Coverage Over Time plot)
-            outlier_status = []
-            if len(dfx) >= 3:
-                mean_cov = dfx["coverage"].mean()
-                std_cov = dfx["coverage"].std()
-                if std_cov > 0:
-                    lower = mean_cov - 2.0 * std_cov
-                    upper = mean_cov + 2.0 * std_cov
-                    for cov in dfx["coverage"]:
-                        if cov > upper:
-                            outlier_status.append("High")
-                        elif cov < lower:
-                            outlier_status.append("Low")
-                        else:
-                            outlier_status.append("")
-                else:
-                    outlier_status = [""] * len(dfx)
-            else:
-                outlier_status = [""] * len(dfx)
-
-            dfx["outlier_status"] = outlier_status
-            rows = dfx[
-                ["chrom", "startpos", "endpos", "name", "coverage", "outlier_status"]
-            ].to_dict(orient="records")
-            target_cov_table.rows = rows
+            asyncio.get_running_loop()
+        except RuntimeError:
+            r = _compute_target_cov_table_rows(df, reference_contig_scope)
+            if not r.get("ok"):
+                err = r.get("error")
+                if err:
+                    _log_notify(
+                        f"Target table update failed: {err}",
+                        level="warning",
+                        notify=False,
+                    )
+                return
+            target_cov_table.rows = r["rows"]
             target_cov_table.update()
-        except Exception as e:
-            _log_notify(
-                f"Target table update failed: {e}", level="warning", notify=False
-            )
+            return
+        asyncio.create_task(_apply_target_table_async(df))
 
     async def _refresh_coverage_async() -> None:
-        """Refresh coverage data asynchronously."""
+        """Refresh coverage: load CSV/npy off the event loop, then update UI on the main thread."""
         try:
-            # Check directory existence
             if not sample_dir or not sample_dir.exists():
                 _log_notify(
                     f"Sample directory not found: {sample_dir}",
@@ -6481,221 +7929,89 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                     notify=True,
                 )
                 return
-            
-            # Run coverage refresh synchronously (already in background)
-            _refresh_coverage_sync(sample_dir, launcher)
-                
+
+            key = str(sample_dir)
+            prev = launcher._coverage_state.get(key, {})
+            prev_meta = {
+                "has_last_visit": "last_visit_time" in prev,
+                "cov_main_mtime": prev.get("cov_main_mtime", 0),
+                "bed_cov_mtime": prev.get("bed_cov_mtime", 0),
+                "target_cov_mtime": prev.get("target_cov_mtime", 0),
+                "cov_time_mtime": prev.get("cov_time_mtime", 0),
+                "target_cov_time_csv_mtime": prev.get("target_cov_time_csv_mtime", 0),
+                "master_csv_mtime": prev.get("master_csv_mtime", 0),
+                "has_cov_df": "cov_df" in prev,
+                "has_bed_df": "bed_df" in prev,
+                "cov_df_ref": prev.get("cov_df"),
+                "bed_df_ref": prev.get("bed_df"),
+            }
+            load_result = await asyncio.to_thread(
+                _coverage_load_refresh_data, sample_dir, prev_meta
+            )
+            await _refresh_coverage_apply(load_result)
         except Exception as e:
             _log_notify(
                 f"Unexpected coverage refresh error: {e}", level="error", notify=True
             )
 
-    def _refresh_coverage_sync(sample_dir: Path, launcher: Any) -> None:
-        """Synchronous coverage refresh - runs in background thread."""
+    async def _refresh_coverage_apply(load_result: Dict[str, Any]) -> None:
+        """Merge loaded data into state and update UI (NiceGUI / event-loop thread only)."""
         try:
             key = str(sample_dir)
             state = launcher._coverage_state.get(key, {})
-            
-            # Check if this is a fresh page visit (no last_visit_time means new page)
-            # Force updates on fresh page visits regardless of mtime
-            is_fresh_visit = "last_visit_time" not in state
-            if is_fresh_visit:
+
+            if load_result.get("is_fresh_visit"):
                 state["last_visit_time"] = time.time()
-            
-            cov_main = sample_dir / "coverage_main.csv"
-            bed_cov = sample_dir / "bed_coverage_main.csv"
-            target_cov = sample_dir / "target_coverage.csv"
-            cov_time = sample_dir / "coverage_time_chart.npy"
-            
-            # Check modification times for all files
-            cov_main_mtime = cov_main.stat().st_mtime if cov_main.exists() else 0
-            bed_cov_mtime = bed_cov.stat().st_mtime if bed_cov.exists() else 0
-            target_cov_mtime = target_cov.stat().st_mtime if target_cov.exists() else 0
-            cov_time_mtime = cov_time.stat().st_mtime if cov_time.exists() else 0
-            
-            # Get previous state values (use sentinel values if not present)
-            prev_cov_main_mtime = state.get("cov_main_mtime", 0)
-            prev_bed_cov_mtime = state.get("bed_cov_mtime", 0)
-            prev_target_cov_mtime = state.get("target_cov_mtime", 0)
-            prev_cov_time_mtime = state.get("cov_time_mtime", 0)
-            
-            # Check if any file has changed
-            cov_main_changed = prev_cov_main_mtime != cov_main_mtime
-            bed_cov_changed = prev_bed_cov_mtime != bed_cov_mtime
-            target_cov_changed = prev_target_cov_mtime != target_cov_mtime
-            cov_time_changed = prev_cov_time_mtime != cov_time_mtime
-            
-            # Also check if data is missing from state (needs initial load)
-            data_missing = (
-                (cov_main.exists() and "cov_df" not in state) or
-                (bed_cov.exists() and "bed_df" not in state)
-            )
-            
-            # Determine if any update is needed
-            needs_update = (
-                is_fresh_visit
-                or cov_main_changed
-                or bed_cov_changed
-                or target_cov_changed
-                or cov_time_changed
-                or data_missing
-            )
-            
-            # Early exit if nothing has changed (except for periodic checks that run less frequently)
+
+            for err in load_result.get("errors", []):
+                _log_notify(
+                    err["message"],
+                    level=err.get("level", "warning"),
+                    notify=err.get("notify", False),
+                )
+
+            needs_update = load_result.get("needs_update", False)
             if not needs_update:
-                # Still check for SNP/LGA/IGV status updates (these have their own throttling)
-                # But skip all file reading and UI updates
-                logging.debug(f"[Coverage] ⏭ Skipping coverage update - no file changes detected")
-                # Continue to SNP/LGA/IGV checks below (they have their own throttling)
-                # But we'll skip the file processing section
+                logging.debug(
+                    "[Coverage] ⏭ Skipping coverage update - no file changes detected"
+                )
             else:
-                # Log what changed
-                reasons = []
-                if is_fresh_visit:
-                    reasons.append("fresh_visit")
-                if cov_main_changed:
-                    reasons.append("coverage_main.csv")
-                if bed_cov_changed:
-                    reasons.append("bed_coverage_main.csv")
-                if target_cov_changed:
-                    reasons.append("target_coverage.csv")
-                if cov_time_changed:
-                    reasons.append("coverage_time_chart.npy")
-                if data_missing:
-                    reasons.append("data_missing")
-                logging.debug(f"[Coverage] Update needed. Reasons: {', '.join(reasons)}")
-            # Only process files if update is needed
-            if needs_update:
-                if cov_main.exists():
-                    m = cov_main_mtime
-                    # Force update on fresh page visit or if mtime changed or data not in state
-                    if is_fresh_visit or cov_main_changed or "cov_df" not in state:
-                        try:
-                            cov_df = pd.read_csv(cov_main)
-                            # Backfill meandepth if missing
-                            if "meandepth" not in cov_df.columns and {
-                                "covbases",
-                                "endpos",
-                            }.issubset(set(cov_df.columns)):
-                                cov_df = cov_df.copy()
-                                with np.errstate(divide="ignore", invalid="ignore"):
-                                    cov_df["meandepth"] = (
-                                        cov_df["covbases"]
-                                        / cov_df["endpos"].replace(0, np.nan)
-                                    ).fillna(0)
-                            state["cov_df"] = cov_df
-                            state["cov_main_mtime"] = m  # only set on success
-                        except Exception as e:
-                            _log_notify(
-                                f"Failed to read coverage_main.csv: {e}",
-                                level="error",
-                                notify=True,
-                            )
-                else:
-                    _log_notify("coverage_main.csv not found", level="debug", notify=False)
-                if bed_cov.exists():
-                    m = bed_cov_mtime
-                    # Force update on fresh page visit or if mtime changed or data not in state
-                    if is_fresh_visit or bed_cov_changed or "bed_df" not in state:
-                        try:
-                            bed_df = pd.read_csv(bed_cov)
-                            state["bed_df"] = bed_df
-                            panel_display_name = state.get("panel_display_name", "Target Coverage")
-                            _update_boxplot(bed_df, panel_display_name)
-                            if state.get("cov_df") is not None:
-                                _update_target_cov(state["cov_df"], bed_df)
-                            state["bed_cov_mtime"] = m  # only set on success
-                        except Exception as e:
-                            _log_notify(
-                                f"Failed to read bed_coverage_main.csv: {e}",
-                                level="error",
-                                notify=True,
-                            )
-                else:
-                    _log_notify(
-                        "bed_coverage_main.csv not found", level="debug", notify=False
-                    )
-                if target_cov.exists():
-                    m = target_cov_mtime
-                    # Force update on fresh page visit or if mtime changed
-                    if is_fresh_visit or target_cov_changed:
-                        try:
-                            tdf = pd.read_csv(target_cov)
-                            _update_target_table(tdf)
-                            state["target_cov_mtime"] = m  # only set on success
-                        except Exception as e:
-                            _log_notify(
-                                f"Failed to read target_coverage.csv: {e}",
-                                level="error",
-                                notify=True,
-                            )
-                else:
-                    _log_notify(
-                        "target_coverage.csv not found", level="debug", notify=False
-                    )
-                if cov_time.exists():
-                    m = cov_time_mtime
-                    # Force update on fresh page visit or if mtime changed
-                    if is_fresh_visit or cov_time_changed:
-                        try:
-                            _update_time(cov_time)
-                            state["cov_time_mtime"] = m
-                        except Exception as e:
-                            _log_notify(
-                                f"Failed to load coverage_time_chart.npy: {e}",
-                                level="warning",
-                                notify=False,
-                            )
-                # Summary - only recalculate if data changed
-                try:
-                    global_cov = None
-                    target_cov_v = None
-                    enrich_v = None
+                logging.debug("[Coverage] Update needed (data loaded off event loop).")
+                state.update(load_result.get("state_updates", {}))
+
+                loaded_bed_df = load_result.get("loaded_bed_df", False)
+                panel_display_name = state.get("panel_display_name", "Target Coverage")
+
+                if loaded_bed_df and state.get("bed_df") is not None:
+                    await _apply_boxplot_async(state["bed_df"], panel_display_name)
                     if state.get("cov_df") is not None:
-                        cdf = state["cov_df"]
-                        if (
-                            "covbases" in cdf.columns
-                            and "endpos" in cdf.columns
-                            and cdf["endpos"].sum() > 0
-                        ):
-                            global_cov = float(cdf["covbases"].sum()) / float(
-                                cdf["endpos"].sum()
-                            )
-                    if state.get("bed_df") is not None:
-                        bdf = state["bed_df"].copy()
-                        if "length" not in bdf.columns:
-                            bdf["length"] = (bdf["endpos"] - bdf["startpos"] + 1).astype(
-                                float
-                            )
-                        if bdf["length"].sum() > 0:
-                            target_cov_v = float(bdf["bases"].sum()) / float(
-                                bdf["length"].sum()
-                            )
-                    if (
-                        global_cov is not None
-                        and target_cov_v is not None
-                        and global_cov > 0
-                    ):
-                        enrich_v = target_cov_v / global_cov
-                    if target_cov_v is not None:
-                        if target_cov_v >= 30:
-                            q_text, q_cls, q_bg = (
-                                "Sufficient",
-                                "text-emerald-700",
-                                "bg-emerald-100",
-                            )
-                        elif target_cov_v >= 15:
-                            q_text, q_cls, q_bg = (
-                                "Moderate",
-                                "text-amber-700",
-                                "bg-amber-100",
-                            )
-                        else:
-                            q_text, q_cls, q_bg = (
-                                "Low",
-                                "text-rose-700",
-                                "bg-rose-100",
-                            )
+                        await _apply_target_cov_async(
+                            state["cov_df"], state["bed_df"]
+                        )
+
+                if load_result.get("loaded_target_df") and load_result.get(
+                    "target_df"
+                ) is not None:
+                    await _apply_target_table_async(load_result["target_df"])
+
+                if load_result.get("cov_time_refresh") and load_result.get(
+                    "cov_time_path"
+                ) is not None:
+                    await _apply_time_series_async(load_result["cov_time_path"])
+
+                if load_result.get("target_cov_time_analysis_refresh"):
+                    _plot_target_coverage_over_time()
+
+                summary = load_result.get("summary") or {}
+                try:
+                    global_cov = summary.get("global_cov")
+                    target_cov_v = summary.get("target_cov_v")
+                    enrich_v = summary.get("enrich_v")
+                    quality = summary.get("quality")
+                    if quality and target_cov_v is not None:
+                        q_text = quality["q_text"]
+                        q_cls = quality["q_cls"]
+                        q_bg = quality["q_bg"]
                         cov_quality_label.set_text(f"Quality: {q_text}")
                         try:
                             cov_quality_label.classes(
@@ -6706,7 +8022,7 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                             )
                         except Exception:
                             pass
-                        cov_quality_badge.set_text(f"{target_cov_v:.2f}x")
+                        cov_quality_badge.set_text(quality["badge_text"])
                     if global_cov is not None:
                         cov_global_lbl.set_text(
                             f"Global Estimated Coverage: {global_cov:.2f}x"
@@ -6717,20 +8033,91 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                         )
                     if enrich_v is not None:
                         cov_enrich_lbl.set_text(f"Estimated enrichment: {enrich_v:.2f}x")
+                    read_lengths = summary.get("read_lengths") or {}
+                    chart_payload = _read_length_chart_payload(read_lengths)
+                    has_read_length_metrics = bool(read_lengths.get("available"))
+                    has_read_length_plot = bool(chart_payload.get("ok"))
+                    try:
+                        read_length_metrics.set_visibility(has_read_length_metrics)
+                        read_length_chart_card.set_visibility(has_read_length_plot)
+                    except Exception:
+                        pass
+                    if has_read_length_metrics:
+                        cov_on_len_lbl.set_text(
+                            "Mean "
+                            f"{format_read_length(read_lengths.get('mean_on_target_length'))}"
+                            " · Median "
+                            f"{format_read_length(read_lengths.get('median_on_target_length'))}"
+                        )
+                        cov_off_len_lbl.set_text(
+                            "Mean "
+                            f"{format_read_length(read_lengths.get('mean_off_target_length'))}"
+                            " · Median "
+                            f"{format_read_length(read_lengths.get('median_off_target_length'))}"
+                        )
+                        cov_on_n_lbl.set_text(
+                            f"{format_read_count(read_lengths.get('on_target_reads'))} primary reads"
+                        )
+                        cov_off_n_lbl.set_text(
+                            f"{format_read_count(read_lengths.get('off_target_reads'))} primary reads"
+                        )
+                    if has_read_length_plot:
+                        on_c, off_c = _cov_on_off_colors()
+                        echart_read_len.options["xAxis"]["data"] = chart_payload[
+                            "labels"
+                        ]
+                        echart_read_len.options["series"][0]["data"] = chart_payload[
+                            "on_pct"
+                        ]
+                        echart_read_len.options["series"][0]["itemStyle"] = {
+                            "color": on_c
+                        }
+                        echart_read_len.options["series"][1]["data"] = chart_payload[
+                            "off_pct"
+                        ]
+                        echart_read_len.options["series"][1]["itemStyle"] = {
+                            "color": off_c
+                        }
+                        read_length_zoom_state["n_bins"] = int(
+                            chart_payload.get("n_bins") or len(chart_payload["labels"])
+                        )
+                        read_length_zoom_state["first_occupied"] = int(
+                            chart_payload.get("first_occupied") or 0
+                        )
+                        read_length_zoom_state["last_occupied"] = int(
+                            chart_payload.get("last_occupied")
+                            if chart_payload.get("last_occupied") is not None
+                            else read_length_zoom_state["n_bins"] - 1
+                        )
+                        if not read_length_zoom_state.get("initialized"):
+                            from robin.gui.coverage_metrics import (
+                                read_length_histogram_zoom_window,
+                            )
+
+                            window = read_length_histogram_zoom_window(
+                                read_length_zoom_state, mode="full"
+                            )
+                            _apply_read_length_zoom(
+                                echart_read_len, window["start"], window["end"]
+                            )
+                            read_length_zoom_state["initialized"] = True
+                        echart_read_len.update()
                 except Exception as e:
                     _log_notify(
                         f"Coverage summary update failed: {e}",
                         level="warning",
                         notify=False,
                     )
-            # Update state with current modification times
-            if needs_update:
-                state["cov_main_mtime"] = cov_main_mtime
-                state["bed_cov_mtime"] = bed_cov_mtime
-                state["target_cov_mtime"] = target_cov_mtime
-                state["cov_time_mtime"] = cov_time_mtime
+
+                mt = load_result.get("mtimes", {})
+                state["cov_main_mtime"] = mt.get("cov_main", 0)
+                state["bed_cov_mtime"] = mt.get("bed_cov", 0)
+                state["target_cov_mtime"] = mt.get("target_cov", 0)
+                state["cov_time_mtime"] = mt.get("cov_time", 0)
+                state["target_cov_time_csv_mtime"] = mt.get("target_cov_time_csv", 0)
+                state["master_csv_mtime"] = mt.get("master_csv", 0)
                 state["last_visit_time"] = state.get("last_visit_time", time.time())
-            
+
             launcher._coverage_state[key] = state
 
             # SNP Analysis results check - only update if necessary
@@ -6744,33 +8131,7 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                     indel_vcf = clair_dir / "snpsift_indel_output.vcf"
 
                     if snp_vcf.exists() and indel_vcf.exists():
-                        # Update SNP results status if it exists
-                        try:
-                            # Find the SNP results status label and update it
-                            snp_results_elements = document.querySelectorAll(
-                                "[data-snp-results-status]"
-                            )
-                            if snp_results_elements.length > 0:
-                                for element in snp_results_elements:
-                                    element.textContent = (
-                                        "SNP analysis completed successfully!"
-                                    )
-                                    element.className = "text-sm text-green-600"
-                        except Exception:
-                            pass
-
-                        # Update button state if it exists
-                        try:
-                            snp_button_elements = document.querySelectorAll(
-                                "[data-snp-analysis-button]"
-                            )
-                            if snp_button_elements.length > 0:
-                                for element in snp_button_elements:
-                                    element.textContent = "Rerun SNP Analysis"
-                                    element.disabled = false
-                                    element.className = "q-btn q-btn--standard q-btn--rectangle q-btn--secondary"
-                        except Exception:
-                            pass
+                        state["snp_results_ready"] = True
 
                     # Also check file availability for SNP analysis
                     try:
@@ -6784,18 +8145,7 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                                     bed_content = f.read().strip()
 
                                 if bed_content:
-                                    # Files are available, enable button if not already enabled
-                                    try:
-                                        snp_button_elements = document.querySelectorAll(
-                                            "[data-snp-analysis-button]"
-                                        )
-                                        if snp_button_elements.length > 0:
-                                            for element in snp_button_elements:
-                                                if element.disabled:
-                                                    element.disabled = false
-                                                    element.className = "q-btn q-btn--standard q-btn--rectangle q-btn--primary"
-                                    except Exception:
-                                        pass
+                                    state["snp_inputs_ready"] = True
                             except Exception:
                                 pass
                     except Exception:
@@ -6816,7 +8166,7 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                         target_bam = sample_dir / "target.bam"
                         targets_bed = sample_dir / "targets_exceeding_threshold.bed"
 
-                    
+
                     except Exception as e:
                         logging.debug(f"   LGA: <access denied>: {e}")
                         pass
@@ -6862,13 +8212,16 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
         behind chart options built at layout time; ``force=True`` reapplies the current
         palette so plots match the visible theme without toggling.
         """
-        try:
-            cur = bool(app.storage.user.get("dark_mode"))
-        except Exception:
-            cur = False
+        cur = get_user_dark_mode(default=False)
         if not force and _last_cov_theme_sig[0] == cur:
             return
         _last_cov_theme_sig[0] = cur
+        try:
+            if getattr(read_length_chart_card, "visible", False):
+                _apply_coverage_read_length_chrome(echart_read_len)
+                echart_read_len.update()
+        except Exception:
+            pass
         try:
             _apply_coverage_target_cov_chrome(echart_target_cov)
             echart_target_cov.update()
@@ -6902,10 +8255,10 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
             pass
 
     # Trigger an immediate refresh on page load, then continue with periodic refreshes
-    refresh_timer = ui.timer(
+    refresh_timer = client_timer(
         30.0, _refresh_coverage_async, active=True, immediate=False
     )  # Periodic refresh every 30 seconds
-    ui.timer(0.5, _refresh_coverage_async, once=True)
+    client_timer(0.5, _refresh_coverage_async, once=True)
     # Theme sync is centralized via a single global timer in theme.py.
     unregister_cov_theme_sync = register_theme_sync_callback(
         _sync_coverage_echarts_theme,
@@ -6915,7 +8268,7 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
     )
     try:
         ui.context.client.on_disconnect(
-            lambda: (refresh_timer.deactivate(), unregister_cov_theme_sync())
+            lambda: (stop_timer(refresh_timer), unregister_cov_theme_sync())
         )
     except Exception:
         pass

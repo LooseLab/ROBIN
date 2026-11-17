@@ -48,6 +48,8 @@ robin utils update-clinvar
 
 Pair with `update-models` when setting up a new environment.
 
+After updating ClinVar, open a sample’s **SNP analysis** section in the GUI and use **Re-annotate with current ClinVar** to re-run **snpEff/SnpSift** on existing Clair3 outputs (no variant re-calling). The table shows which release annotated the sample versus what is installed.
+
 ---
 
 ## `robin utils sequencing-files`
@@ -67,7 +69,7 @@ robin utils sequencing-files --panel rCNS2 --output-dir ~/references/robin_ref
 
 The command copies packaged **`{panel}_panel_name_uniq.bed`** and, when present, **`{panel}_panel_source.bed`**, then materializes the reference.
 
-See also: [Quickstart — Reference and panel BEDs](../getting-started/quickstart.md#reference-and-panel-beds).
+See also: [Quickstart — Reference and panel BEDs](../getting-started/quickstart.md#reference-and-panel-beds-one-command).
 
 ---
 

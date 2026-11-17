@@ -31,8 +31,22 @@ from robin.reporting.report import create_pdf
     "--zip/--no-zip", default=False, help="Zip CSVs and manifest into a single archive"
 )
 @click.option("--debug", is_flag=True, help="Enable debug logging")
+@click.option(
+    "--cnv-normalized-difference",
+    is_flag=True,
+    help=(
+        "Plot CNV summary and per-chromosome figures using log2(ploidy / expected copy number) "
+        "(overrides the admin Plotting preference)"
+    ),
+)
 def main(
-    filename: str, output: str, center: str, export_csv_dir: Optional[str], zip: bool, debug: bool
+    filename: str,
+    output: str,
+    center: str,
+    export_csv_dir: Optional[str],
+    zip: bool,
+    debug: bool,
+    cnv_normalized_difference: bool,
 ):
     """Create a PDF report from ROBIN analysis results.
 
@@ -66,6 +80,7 @@ def main(
             export_csv_dir=export_csv_dir,
             export_xlsx=False,
             export_zip=zip,
+            cnv_summary_normalized=True if cnv_normalized_difference else None,
         )
         logger.info(f"Successfully created PDF report: {pdf_file}")
 

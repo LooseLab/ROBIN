@@ -108,7 +108,7 @@ class MasterCSVManager:
                     # Ensure string fields are properly converted to strings
                     # to prevent float objects from being passed to split() methods
                     string_fields = [
-                        "devices", "basecall_models", "run_time", "flowcell_ids",
+                        "devices", "basecall_models", "modbase_models", "run_time", "flowcell_ids",
                         "run_info_run_time", "run_info_device", "run_info_model", 
                         "run_info_flow_cell", "samples_overview_job_types", "analysis_panel"
                     ]
@@ -147,6 +147,7 @@ class MasterCSVManager:
             "counter_fail_unmapped_bases": 0,
             "devices": "",
             "basecall_models": "",
+            "modbase_models": "",
             "run_time": "",
             "flowcell_ids": "",
             "run_info_run_time": "",
@@ -163,10 +164,19 @@ class MasterCSVManager:
             "samples_overview_total_jobs": 0,
             "samples_overview_completed_jobs": 0,
             "samples_overview_failed_jobs": 0,
+            # Jobs still active or pending when a previous ROBIN process exited.
+            "samples_overview_unfinished_jobs": 0,
             # Comma-separated unique job types seen for the sample
             "samples_overview_job_types": "",
             # Unix epoch seconds for last activity used by GUI
             "samples_overview_last_seen": 0.0,
+            # On / off-target primary-read length accumulators
+            "counter_on_target_reads": 0,
+            "counter_off_target_reads": 0,
+            "counter_on_target_bases": 0,
+            "counter_off_target_bases": 0,
+            "on_target_length_hist": "",
+            "off_target_length_hist": "",
         }
 
     def _update_pass_counters(
@@ -208,7 +218,58 @@ class MasterCSVManager:
         data["counter_unmapped_reads_num"] += bam_data.get("unmapped_reads_num", 0)
         data["counter_mapped_bases"] += bam_data.get("mapped_bases", 0)
         data["counter_unmapped_bases"] += bam_data.get("unmapped_bases", 0)
+        data["counter_on_target_reads"] = int(
+            data.get("counter_on_target_reads", 0) or 0
+        ) + int(bam_data.get("on_target_reads", 0) or 0)
+        data["counter_off_target_reads"] = int(
+            data.get("counter_off_target_reads", 0) or 0
+        ) + int(bam_data.get("off_target_reads", 0) or 0)
+        data["counter_on_target_bases"] = int(
+            data.get("counter_on_target_bases", 0) or 0
+        ) + int(bam_data.get("on_target_bases", 0) or 0)
+        data["counter_off_target_bases"] = int(
+            data.get("counter_off_target_bases", 0) or 0
+        ) + int(bam_data.get("off_target_bases", 0) or 0)
+        data["on_target_length_hist"] = self._merge_length_histogram(
+            data.get("on_target_length_hist", ""),
+            bam_data.get("on_target_length_hist", ""),
+        )
+        data["off_target_length_hist"] = self._merge_length_histogram(
+            data.get("off_target_length_hist", ""),
+            bam_data.get("off_target_length_hist", ""),
+        )
         return data
+
+    @staticmethod
+    def _merge_length_histogram(existing: Any, incoming: Any) -> str:
+        """Add two comma-separated length-histogram columns without importing the preprocessor."""
+        def _parts(value: Any) -> list[int]:
+            if value in (None, "", "nan"):
+                return []
+            text = str(value).strip()
+            if not text or text.lower() == "nan":
+                return []
+            counts: list[int] = []
+            for part in text.split(","):
+                part = part.strip()
+                if not part:
+                    continue
+                try:
+                    counts.append(max(0, int(float(part))))
+                except (TypeError, ValueError):
+                    counts.append(0)
+            return counts
+
+        left = _parts(existing)
+        right = _parts(incoming)
+        if not left:
+            return ",".join(str(v) for v in right)
+        if not right:
+            return ",".join(str(v) for v in left)
+        n = max(len(left), len(right))
+        left.extend([0] * (n - len(left)))
+        right.extend([0] * (n - len(right)))
+        return ",".join(str(a + b) for a, b in zip(left, right))
 
     def _update_run_info(
         self, data: Dict[str, Any], bam_info: Dict[str, Any]
@@ -233,6 +294,14 @@ class MasterCSVManager:
                 models.append(model_str)
             data["basecall_models"] = ",".join(models)
             data["run_info_model"] = model_str
+
+        if bam_info.get("modbase_models"):
+            modbase_model = str(bam_info["modbase_models"])
+            existing_str = str(data.get("modbase_models", ""))
+            existing = existing_str.split(",") if existing_str else []
+            if modbase_model not in existing:
+                existing.append(modbase_model)
+            data["modbase_models"] = ",".join(existing)
 
         # Update flow cell IDs
         if bam_info.get("flow_cell_id"):
@@ -302,6 +371,7 @@ class MasterCSVManager:
           - total_jobs: int
           - completed_jobs: int
           - failed_jobs: int
+          - unfinished_jobs: int (in-flight jobs abandoned by a previous process)
           - job_types: Iterable[str] | str (stored as comma-separated unique list)
           - last_seen: float | int (unix epoch seconds)
         """
@@ -339,6 +409,13 @@ class MasterCSVManager:
                     overview.get(
                         "failed_jobs", existing_data.get("samples_overview_failed_jobs", 0)
                     )
+                )
+                existing_data["samples_overview_unfinished_jobs"] = int(
+                    overview.get(
+                        "unfinished_jobs",
+                        existing_data.get("samples_overview_unfinished_jobs", 0),
+                    )
+                    or 0
                 )
                 jt_value = overview.get("job_types")
                 if isinstance(jt_value, str):

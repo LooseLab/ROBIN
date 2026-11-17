@@ -12,7 +12,7 @@ This module provides a configurable logging system that supports:
 import logging
 import os
 import sys
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
 from dataclasses import dataclass, field
 from contextlib import contextmanager
 
@@ -54,7 +54,7 @@ class JobLogger:
         self.job_type = job_type
         self.filepath = filepath
 
-    def _format_message(self, level: str, message: str) -> str:
+    def _format_message(self, level: str, message: Any) -> str:
         """Format log message with job context"""
         parts = []
 
@@ -72,25 +72,29 @@ class JobLogger:
             return f"{' '.join(parts)} {message}"
         return message
 
-    def debug(self, message: str) -> None:
+    def debug(self, message: Any, *args, **kwargs) -> None:
         """Log debug message"""
-        self.logger.debug(self._format_message("DEBUG", message))
+        self.logger.debug(self._format_message("DEBUG", message), *args, **kwargs)
 
-    def info(self, message: str) -> None:
+    def info(self, message: Any, *args, **kwargs) -> None:
         """Log info message"""
-        self.logger.info(self._format_message("INFO", message))
+        self.logger.info(self._format_message("INFO", message), *args, **kwargs)
 
-    def warning(self, message: str) -> None:
+    def warning(self, message: Any, *args, **kwargs) -> None:
         """Log warning message"""
-        self.logger.warning(self._format_message("WARNING", message))
+        self.logger.warning(self._format_message("WARNING", message), *args, **kwargs)
 
-    def error(self, message: str) -> None:
+    def error(self, message: Any, *args, **kwargs) -> None:
         """Log error message"""
-        self.logger.error(self._format_message("ERROR", message))
+        self.logger.error(self._format_message("ERROR", message), *args, **kwargs)
 
-    def critical(self, message: str) -> None:
+    def critical(self, message: Any, *args, **kwargs) -> None:
         """Log critical message"""
-        self.logger.critical(self._format_message("CRITICAL", message))
+        self.logger.critical(self._format_message("CRITICAL", message), *args, **kwargs)
+
+    def exception(self, message: Any, *args, **kwargs) -> None:
+        """Log an exception message with job context."""
+        self.logger.exception(self._format_message("ERROR", message), *args, **kwargs)
 
 
 class LogManager:

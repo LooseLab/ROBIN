@@ -5,12 +5,12 @@ This module contains styling-related code for the ROBIN report generation.
 """
 
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
-from reportlab.lib.colors import HexColor
-from reportlab.pdfbase import pdfmetrics
-from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.platypus import TableStyle
-import os
 import logging
+from reportlab.lib.colors import HexColor
+
+from robin.reporting.fonts import register_report_fonts
+from robin.reporting.theme import DEFAULT_REPORT_THEME
 
 logger = logging.getLogger(__name__)
 
@@ -18,11 +18,12 @@ logger = logging.getLogger(__name__)
 class ReportStyles:
     """Encapsulates all styling-related functionality for the report."""
 
-    def __init__(self, fonts_dir):
+    def __init__(self, fonts_dir, theme=None, fonts=None):
         """Initialize styling with font directory path."""
         self.fonts_dir = fonts_dir
-        self.use_default_font = True
-        self.register_fonts()
+        self.theme = theme or DEFAULT_REPORT_THEME
+        self.fonts = fonts or register_report_fonts(fonts_dir)
+        self.use_default_font = self.fonts.regular == "Helvetica"
 
         # Initialize styles
         self.styles = getSampleStyleSheet()
@@ -31,38 +32,17 @@ class ReportStyles:
         self._setup_table_style()
 
     def register_fonts(self):
-        """Register custom fonts for the report."""
-        font_files = {
-            "FiraSans": "fira-sans-v16-latin-regular.ttf",
-            "FiraSans-Medium": "fira-sans-v16-latin-500.ttf",
-            "FiraSans-Bold": "fira-sans-v16-latin-700.ttf",
-            "FiraMono": "fira-mono-v14-latin-regular.ttf",
-        }
-
-        # Default to Helvetica if Fira Sans is not available
-        self.use_default_font = True
-
-        for font_name, font_file in font_files.items():
-            font_path = os.path.join(self.fonts_dir, font_file)
-            if os.path.exists(font_path):
-                try:
-                    pdfmetrics.registerFont(TTFont(font_name, font_path))
-                    if font_name == "FiraSans":
-                        self.use_default_font = False
-                except Exception as e:
-                    logger.warning(f"Could not register font {font_name}: {e}")
-            else:
-                logger.warning(f"Font file not found: {font_path}")
-
-        if self.use_default_font:
-            logger.info("Using Helvetica as fallback font")
+        """Register fonts and refresh the resolved font names."""
+        self.fonts = register_report_fonts(self.fonts_dir)
+        self.use_default_font = self.fonts.regular == "Helvetica"
 
     def _setup_colors(self):
         """Set up Material Design 3 color palette for consistent branding."""
+        theme = self.theme
         self.COLORS = {
             # Primary colors (ROBIN green theme)
-            "primary": HexColor("#4F9153"),  # ROBIN theme green (unchanged)
-            "primary_container": HexColor("#D1E7DD"),  # Light green container
+            "primary": HexColor(theme.brand),
+            "primary_container": HexColor(theme.surface_muted),
             "on_primary": HexColor("#FFFFFF"),  # White text on primary
             "on_primary_container": HexColor(
                 "#0D3B1E"
@@ -75,23 +55,24 @@ class ReportStyles:
                 "#21005D"
             ),  # Dark text on secondary container
             # Surface colors
-            "surface": HexColor("#FEFBFF"),  # M3 surface
-            "surface_variant": HexColor("#E7E0EC"),  # M3 surface variant
-            "on_surface": HexColor("#1C1B1F"),  # M3 on surface
-            "on_surface_variant": HexColor("#49454F"),  # M3 on surface variant
+            "surface": HexColor(theme.surface),
+            "surface_variant": HexColor(theme.surface_muted),
+            "surface_muted": HexColor(theme.surface_muted),
+            "on_surface": HexColor(theme.text),
+            "on_surface_variant": HexColor(theme.muted),
             # Outline colors
-            "outline": HexColor("#79747E"),  # M3 outline
-            "outline_variant": HexColor("#CAC4D0"),  # M3 outline variant
+            "outline": HexColor(theme.muted),
+            "outline_variant": HexColor(theme.border),
             # Semantic colors
-            "success": HexColor("#4CAF50"),  # M3 success green
-            "warning": HexColor("#FF9800"),  # M3 warning orange
-            "error": HexColor("#F44336"),  # M3 error red
-            "info": HexColor("#2196F3"),  # M3 info blue
+            "success": HexColor(theme.positive),
+            "warning": HexColor(theme.warning),
+            "error": HexColor(theme.negative),
+            "info": HexColor(theme.information),
             # Legacy colors (for backward compatibility)
-            "text": HexColor("#1C1B1F"),  # M3 on surface
-            "muted": HexColor("#49454F"),  # M3 on surface variant
-            "border": HexColor("#CAC4D0"),  # M3 outline variant
-            "background": HexColor("#FEFBFF"),  # M3 surface
+            "text": HexColor(theme.text),
+            "muted": HexColor(theme.muted),
+            "border": HexColor(theme.border),
+            "background": HexColor(theme.surface),
         }
 
     def _setup_styles(self):
@@ -101,23 +82,17 @@ class ReportStyles:
         for style_name in self.styles.byName:
             if "Italic" in style_name:
                 self.styles[style_name].fontName = (
-                    "FiraSans" if not self.use_default_font else "Helvetica"
+                    self.fonts.regular
                 )
 
         # Base fonts to use
-        if self.use_default_font:
-            base_font = "Helvetica"
-            bold_font = "Helvetica-Bold"
-            medium_font = "Helvetica-Bold"  # Helvetica doesn't have medium weight
-            mono_font = "Courier"
-        else:
-            base_font = "FiraSans"
-            bold_font = "FiraSans-Bold"
-            medium_font = "FiraSans-Medium"
-            mono_font = "FiraMono"
+        base_font = self.fonts.regular
+        bold_font = self.fonts.bold
+        medium_font = self.fonts.medium
+        mono_font = self.fonts.mono
 
         # Update base styles with enhanced M3 typography
-        for style_name in ["Title", "Heading1", "Heading2", "Normal"]:
+        for style_name in ["Title", "Heading1", "Heading2", "Heading3", "Normal"]:
             if style_name == "Title":
                 self.styles[style_name].fontName = bold_font
                 self.styles[style_name].fontSize = 20  # Enhanced from 18
@@ -131,27 +106,35 @@ class ReportStyles:
             elif style_name == "Heading1":
                 self.styles[style_name].fontName = bold_font
                 self.styles[style_name].fontSize = 16
-                self.styles[style_name].leading = 24
-                self.styles[style_name].spaceAfter = 6
-                self.styles[style_name].spaceBefore = 4
+                self.styles[style_name].leading = 20
+                self.styles[style_name].spaceAfter = 4
+                self.styles[style_name].spaceBefore = 2
                 self.styles[style_name].textColor = self.COLORS["primary"]
                 self.styles[style_name].allowWidows = 0
                 self.styles[style_name].allowOrphans = 0
             elif style_name == "Heading2":
                 self.styles[style_name].fontName = medium_font
-                self.styles[style_name].fontSize = 14
-                self.styles[style_name].leading = 20
-                self.styles[style_name].spaceAfter = 6
-                self.styles[style_name].spaceBefore = 4
-                self.styles[style_name].textColor = self.COLORS["secondary"]
+                self.styles[style_name].fontSize = 13
+                self.styles[style_name].leading = 17
+                self.styles[style_name].spaceAfter = 4
+                self.styles[style_name].spaceBefore = 3
+                self.styles[style_name].textColor = self.COLORS["on_surface"]
                 self.styles[style_name].allowWidows = 0
                 self.styles[style_name].allowOrphans = 0
+            elif style_name == "Heading3":
+                self.styles[style_name].fontName = medium_font
+                self.styles[style_name].fontSize = 11
+                self.styles[style_name].leading = 14
+                self.styles[style_name].spaceAfter = 3
+                self.styles[style_name].spaceBefore = 2
+                self.styles[style_name].textColor = self.COLORS["on_surface"]
+                self.styles[style_name].keepWithNext = True
             else:  # Normal - body text throughout report
                 self.styles[style_name].fontName = base_font
                 self.styles[style_name].fontSize = 10
                 self.styles[style_name].leading = 14
-                self.styles[style_name].spaceBefore = 3
-                self.styles[style_name].spaceAfter = 3
+                self.styles[style_name].spaceBefore = 1
+                self.styles[style_name].spaceAfter = 2
                 self.styles[style_name].textColor = self.COLORS["on_surface"]
                 # Enhanced typography settings
                 self.styles[style_name].allowWidows = 0
@@ -173,7 +156,7 @@ class ReportStyles:
                 "fontSize": 12,  # Enhanced from 10
                 "leading": 16,  # M3 leading ratio
                 "textColor": self.COLORS["primary"],
-                "fontName": bold_font,
+                "fontName": medium_font,
                 "spaceAfter": 4,
                 "spaceBefore": 2,
             },
@@ -476,10 +459,37 @@ class ReportStyles:
                 del self.styles[style_name]
             self.styles.add(ParagraphStyle(name=style_name, **style_props))
 
+        self._setup_report_role_styles(
+            base_font=base_font, medium_font=medium_font, bold_font=bold_font, mono_font=mono_font
+        )
+
+    def _setup_report_role_styles(self, *, base_font, medium_font, bold_font, mono_font):
+        """Add the small, authoritative vocabulary used by new components."""
+        t = self.theme
+        c = self.COLORS
+        roles = {
+            "ReportTitle": dict(fontName=bold_font, fontSize=20, leading=24, textColor=c["text"], spaceAfter=8, keepWithNext=True),
+            "SectionHeading": dict(fontName=bold_font, fontSize=t.heading_size, leading=18, textColor=c["primary"], spaceBefore=8, spaceAfter=4, keepWithNext=True),
+            "SubsectionHeading": dict(fontName=medium_font, fontSize=t.subheading_size, leading=15, textColor=c["text"], spaceBefore=5, spaceAfter=3, keepWithNext=True),
+            "Body": dict(fontName=base_font, fontSize=t.body_size, leading=t.body_leading, textColor=c["text"], spaceBefore=1, spaceAfter=3),
+            "Small": dict(fontName=base_font, fontSize=t.small_size, leading=10, textColor=c["muted"], spaceBefore=1, spaceAfter=2),
+            "Caption": dict(fontName=base_font, fontSize=t.small_size, leading=10, textColor=c["muted"], spaceBefore=2, spaceAfter=4, alignment=1),
+            "TableHeader": dict(fontName=medium_font, fontSize=t.table_size, leading=10, textColor=c["text"], spaceBefore=0, spaceAfter=0),
+            "TableCell": dict(fontName=base_font, fontSize=t.table_size, leading=10, textColor=c["text"], spaceBefore=0, spaceAfter=0, wordWrap="LTR"),
+            "TableCellCompact": dict(fontName=base_font, fontSize=8, leading=9, textColor=c["text"], spaceBefore=0, spaceAfter=0, wordWrap="LTR"),
+            "Technical": dict(fontName=mono_font, fontSize=t.small_size, leading=10, textColor=c["text"], spaceBefore=1, spaceAfter=2, wordWrap="LTR"),
+            "Finding": dict(fontName=medium_font, fontSize=11, leading=14, textColor=c["text"], spaceBefore=2, spaceAfter=3, keepWithNext=True),
+            "Warning": dict(fontName=base_font, fontSize=t.body_size, leading=t.body_leading, textColor=c["warning"], backColor=c["surface_muted"], borderColor=c["warning"], borderWidth=0.75, borderPadding=5, spaceBefore=3, spaceAfter=5),
+        }
+        for name, props in roles.items():
+            if name in self.styles:
+                self.styles.byName.pop(name, None)
+            self.styles.add(ParagraphStyle(name=name, parent=self.styles["Normal"], **props))
+
     def _setup_table_style(self):
         """Set up Material Design 3 table styles."""
-        base_font = "FiraSans" if not self.use_default_font else "Helvetica"
-        bold_font = "FiraSans-Bold" if not self.use_default_font else "Helvetica-Bold"
+        base_font = self.fonts.regular
+        bold_font = self.fonts.bold
 
         # Enhanced main table style with advanced M3 design
         self.MODERN_TABLE_STYLE = TableStyle(
@@ -489,19 +499,19 @@ class ReportStyles:
                 ("TEXTCOLOR", (0, 0), (-1, 0), self.COLORS["on_primary"]),
                 ("FONTNAME", (0, 0), (-1, 0), bold_font),
                 ("FONTSIZE", (0, 0), (-1, 0), 11),
-                ("TOPPADDING", (0, 0), (-1, 0), 8),
-                ("BOTTOMPADDING", (0, 0), (-1, 0), 8),
+                ("TOPPADDING", (0, 0), (-1, 0), 4),
+                ("BOTTOMPADDING", (0, 0), (-1, 0), 4),
                 ("LINEBELOW", (0, 0), (-1, 0), 3, self.COLORS["primary"]),
                 # Body styling with alternating row colors
                 ("BACKGROUND", (0, 1), (-1, -1), self.COLORS["surface"]),
                 ("TEXTCOLOR", (0, 1), (-1, -1), self.COLORS["on_surface"]),
                 ("FONTNAME", (0, 1), (-1, -1), base_font),
                 ("FONTSIZE", (0, 1), (-1, -1), 10),
-                ("TOPPADDING", (0, 1), (-1, -1), 6),
-                ("BOTTOMPADDING", (0, 1), (-1, -1), 6),
+                ("TOPPADDING", (0, 1), (-1, -1), 3),
+                ("BOTTOMPADDING", (0, 1), (-1, -1), 3),
                 # Padding and alignment
-                ("LEFTPADDING", (0, 0), (-1, -1), 12),
-                ("RIGHTPADDING", (0, 0), (-1, -1), 12),
+                ("LEFTPADDING", (0, 0), (-1, -1), 6),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 6),
                 ("ALIGN", (0, 0), (-1, -1), "LEFT"),
                 # Subtle alternating row backgrounds for better readability
                 (
@@ -523,19 +533,19 @@ class ReportStyles:
                 ("TEXTCOLOR", (0, 0), (-1, 0), self.COLORS["on_secondary"]),
                 ("FONTNAME", (0, 0), (-1, 0), bold_font),
                 ("FONTSIZE", (0, 0), (-1, 0), 10),
-                ("TOPPADDING", (0, 0), (-1, 0), 6),
-                ("BOTTOMPADDING", (0, 0), (-1, 0), 6),
+                ("TOPPADDING", (0, 0), (-1, 0), 3),
+                ("BOTTOMPADDING", (0, 0), (-1, 0), 3),
                 ("LINEBELOW", (0, 0), (-1, 0), 2, self.COLORS["secondary"]),
                 # Body styling with subtle alternating rows
                 ("BACKGROUND", (0, 1), (-1, -1), self.COLORS["surface"]),
                 ("TEXTCOLOR", (0, 1), (-1, -1), self.COLORS["on_surface"]),
                 ("FONTNAME", (0, 1), (-1, -1), base_font),
                 ("FONTSIZE", (0, 1), (-1, -1), 9),
-                ("TOPPADDING", (0, 1), (-1, -1), 5),
-                ("BOTTOMPADDING", (0, 1), (-1, -1), 5),
+                ("TOPPADDING", (0, 1), (-1, -1), 2),
+                ("BOTTOMPADDING", (0, 1), (-1, -1), 2),
                 # Padding and alignment
-                ("LEFTPADDING", (0, 0), (-1, -1), 10),
-                ("RIGHTPADDING", (0, 0), (-1, -1), 10),
+                ("LEFTPADDING", (0, 0), (-1, -1), 5),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 5),
                 ("ALIGN", (0, 0), (-1, -1), "LEFT"),
                 # Subtle alternating row backgrounds
                 (
@@ -557,18 +567,18 @@ class ReportStyles:
                 ("TEXTCOLOR", (0, 0), (-1, 0), self.COLORS["on_primary"]),
                 ("FONTNAME", (0, 0), (-1, 0), bold_font),
                 ("FONTSIZE", (0, 0), (-1, 0), 11),
-                ("TOPPADDING", (0, 0), (-1, 0), 8),
-                ("BOTTOMPADDING", (0, 0), (-1, 0), 8),
+                ("TOPPADDING", (0, 0), (-1, 0), 4),
+                ("BOTTOMPADDING", (0, 0), (-1, 0), 4),
                 # Body styling
                 ("BACKGROUND", (0, 1), (-1, -1), self.COLORS["surface"]),
                 ("TEXTCOLOR", (0, 1), (-1, -1), self.COLORS["on_surface"]),
                 ("FONTNAME", (0, 1), (-1, -1), base_font),
                 ("FONTSIZE", (0, 1), (-1, -1), 10),
-                ("TOPPADDING", (0, 1), (-1, -1), 6),
-                ("BOTTOMPADDING", (0, 1), (-1, -1), 6),
+                ("TOPPADDING", (0, 1), (-1, -1), 3),
+                ("BOTTOMPADDING", (0, 1), (-1, -1), 3),
                 # Padding and alignment
-                ("LEFTPADDING", (0, 0), (-1, -1), 12),
-                ("RIGHTPADDING", (0, 0), (-1, -1), 12),
+                ("LEFTPADDING", (0, 0), (-1, -1), 6),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 6),
                 ("ALIGN", (0, 0), (-1, -1), "LEFT"),
                 # Border
                 ("BOX", (0, 0), (-1, -1), 1, self.COLORS["outline"]),

@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 import csv
 import logging
 import zlib
@@ -52,15 +53,12 @@ try:
 except ImportError:  # pragma: no cover
     ui = None
 
+from robin.gui.theme import get_user_dark_mode
+
 
 def _is_dark_mode() -> bool:
-    """Quasar body--dark is driven by app storage (see theme.frame)."""
-    try:
-        from nicegui import app
-
-        return bool(app.storage.user.get("dark_mode"))
-    except Exception:
-        return False
+    """Return normalized per-user dark mode."""
+    return get_user_dark_mode(default=False)
 
 
 def _echart_surface_palette() -> Dict[str, str]:
@@ -304,29 +302,44 @@ def _bar_chart_mark_line(
 
 # Import section visibility helpers
 try:
-    from robin.gui.config import get_enabled_classification_steps, CLASSIFICATION_STEPS
+    from robin.gui.config import (
+        get_visible_classification_steps,
+        launcher_visibility_context,
+        CLASSIFICATION_STEPS,
+    )
 except ImportError:
-    get_enabled_classification_steps = lambda steps: {"sturgeon", "nanodx", "random_forest", "pannanodx"}
+    get_visible_classification_steps = lambda *a, **k: {"sturgeon", "nanodx", "random_forest", "pannanodx", "marlin", "lamprey", "tucan"}  # type: ignore[assignment]
+    launcher_visibility_context = lambda launcher: (None, None, "user")  # type: ignore[assignment]
     CLASSIFICATION_STEPS = {
         "sturgeon": "Sturgeon",
-        "nanodx": "NanoDX",
+        "nanodx": "CrossNN",
         "random_forest": "Random Forest",
-        "pannanodx": "PanNanoDX",
+        "pannanodx": "PanCrossNN",
+        "marlin": "MARLIN",
+        "lamprey": "Lamprey (research)",
+        "tucan": "Tucan",
     }
 
 
 def add_classification_section(sample_dir: Path, launcher: Any = None) -> None:
-    """Build the Classification section (Sturgeon, NanoDX, PanNanoDX, RF)."""
+    """Build the Classification section (Sturgeon, CrossNN, PanCrossNN, RF, MARLIN, Lamprey, Tucan)."""
     # Get workflow steps from launcher if available
-    workflow_steps = launcher.workflow_steps if launcher and hasattr(launcher, 'workflow_steps') else None
-    enabled_classification_steps = get_enabled_classification_steps(workflow_steps)
+    workflow_steps, display_config, viewer_role = launcher_visibility_context(launcher)
+    enabled_classification_steps = get_visible_classification_steps(
+        workflow_steps, display_config, viewer_role=viewer_role
+    )
+    if not enabled_classification_steps:
+        return
     
     # Map workflow step names to tool display names
     tool_to_step_map = {
         "Sturgeon": "sturgeon",
-        "NanoDX": "nanodx",
-        "PanNanoDX": "pannanodx",
+        "CrossNN": "nanodx",
+        "PanCrossNN": "pannanodx",
         "Random Forest": "random_forest",
+        "MARLIN": "marlin",
+        "Lamprey (research)": "lamprey",
+        "Tucan": "tucan",
     }
     
     with ui.element("div").classes("classification-insight-shell w-full min-w-0").props(
@@ -337,16 +350,19 @@ def add_classification_section(sample_dir: Path, launcher: Any = None) -> None:
         )
         tool_to_file = {
             "Sturgeon": {"file": "sturgeon_scores.csv", "mode": "fraction"},
-            "NanoDX": {"file": "NanoDX_scores.csv", "mode": "fraction"},
-            "PanNanoDX": {"file": "PanNanoDX_scores.csv", "mode": "fraction"},
+            "CrossNN": {"file": "NanoDX_scores.csv", "mode": "fraction"},
+            "PanCrossNN": {"file": "PanNanoDX_scores.csv", "mode": "fraction"},
             "Random Forest": {"file": "random_forest_scores.csv", "mode": "percent"},
+            "MARLIN": {"file": "marlin_scores.csv", "mode": "fraction"},
+            "Lamprey (research)": {"file": "lamprey_scores.csv", "mode": "fraction"},
+            "Tucan": {"file": "tucan_scores.csv", "mode": "fraction"},
         }
         charts: Dict[str, Dict[str, Any]] = {}
         for tool_name, cfg in tool_to_file.items():
             # Check if this tool should be shown
             tool_step = tool_to_step_map.get(tool_name)
-            if workflow_steps and tool_step and tool_step not in enabled_classification_steps:
-                continue  # Skip this tool if not enabled
+            if tool_step and tool_step not in enabled_classification_steps:
+                continue
             exp = (
                 ui.expansion(tool_name, icon="analytics")
                 .classes("w-full")
@@ -356,13 +372,16 @@ def add_classification_section(sample_dir: Path, launcher: Any = None) -> None:
                 summary_labels = None
                 tool_icon = {
                     "Sturgeon": "psychology",
-                    "NanoDX": "biotech",
-                    "PanNanoDX": "science",
+                    "CrossNN": "biotech",
+                    "PanCrossNN": "science",
                     "Random Forest": "forest",
+                    "MARLIN": "bloodtype",
+                    "Lamprey (research)": "biotech",
+                    "Tucan": "pets",
                 }[tool_name]
                 if tool_name == "Sturgeon":
                     with ui.element("div").classes(
-                        "classification-insight-card w-full min-w-0 mb-2"
+                        "robin-card robin-card--informational classification-insight-card w-full min-w-0 mb-2"
                     ):
                         with ui.row().classes(
                             "w-full items-start gap-2 p-2 md:p-3 flex-wrap"
@@ -383,9 +402,9 @@ def add_classification_section(sample_dir: Path, launcher: Any = None) -> None:
                             "conf": st_conf,
                             "probes": st_probes,
                         }
-                elif tool_name in ("NanoDX", "PanNanoDX"):
+                elif tool_name in ("CrossNN", "PanCrossNN"):
                     with ui.element("div").classes(
-                        "classification-insight-card w-full min-w-0 mb-2"
+                        "robin-card robin-card--informational classification-insight-card w-full min-w-0 mb-2"
                     ):
                         with ui.row().classes(
                             "w-full items-start gap-2 p-2 md:p-3 flex-wrap"
@@ -406,17 +425,23 @@ def add_classification_section(sample_dir: Path, launcher: Any = None) -> None:
                             "conf": ndx_conf,
                             "probes": ndx_feats,
                         }
-                elif tool_name == "Random Forest":
+                elif tool_name in ("Random Forest", "MARLIN", "Lamprey (research)", "Tucan"):
                     with ui.element("div").classes(
-                        "classification-insight-card w-full min-w-0 mb-2"
+                        "robin-card robin-card--informational classification-insight-card w-full min-w-0 mb-2"
                     ):
                         with ui.row().classes(
                             "w-full items-start gap-2 p-2 md:p-3 flex-wrap"
                         ):
                             ui.icon(tool_icon).classes("classification-insight-icon")
                             with ui.column().classes("gap-1 flex-1 min-w-0"):
+                                label_prefix = {
+                                    "Random Forest": "Forest",
+                                    "MARLIN": "MARLIN",
+                                    "Lamprey (research)": "Lamprey",
+                                    "Tucan": "Tucan",
+                                }.get(tool_name, tool_name)
                                 rf_class = ui.label(
-                                    "Forest classification: Unknown"
+                                    f"{label_prefix} classification: Unknown"
                                 ).classes("classification-insight-result text-sm")
                                 rf_conf = ui.label("Confidence: --%").classes(
                                     "classification-insight-meta"
@@ -601,12 +626,7 @@ def add_classification_section(sample_dir: Path, launcher: Any = None) -> None:
 
         ``force=True`` reapplies after client/storage settle so first paint matches theme.
         """
-        try:
-            from nicegui import app
-
-            cur = bool(app.storage.user.get("dark_mode"))
-        except Exception:
-            cur = False
+        cur = get_user_dark_mode(default=False)
         if not force and _last_dark_sig[0] == cur:
             return
         _last_dark_sig[0] = cur
@@ -631,7 +651,11 @@ def add_classification_section(sample_dir: Path, launcher: Any = None) -> None:
             except Exception:
                 pass
 
-    from robin.gui.theme import register_theme_sync_callback
+    from robin.gui.theme import (
+        register_theme_sync_callback,
+        client_timer,
+        stop_timer,
+    )
 
     unregister_classification_theme_sync = register_theme_sync_callback(
         _sync_classification_theme,
@@ -649,7 +673,14 @@ def add_classification_section(sample_dir: Path, launcher: Any = None) -> None:
                     return None
                 numeric_keys = []
                 for k in reader.fieldnames or []:
-                    if k.lower() in {"timestamp", "number_probes"}:
+                    if k.lower() in {
+                        "timestamp",
+                        "number_probes",
+                        "covered_cpgs",
+                        "temperature",
+                        "diagnostic",
+                        "probes",
+                    }:
                         continue
                     try:
                         float(rows[-1].get(k, ""))
@@ -700,11 +731,36 @@ def add_classification_section(sample_dir: Path, launcher: Any = None) -> None:
 
                     for k in series_map:
                         series_map[k] = sorted(series_map[k], key=_sort_key)
+                number_probes: Optional[int] = None
+                try:
+                    lr = rows[-1]
+                    for nk in ("number_probes", "Number_probes", "covered_cpgs", "probes"):
+                        raw = lr.get(nk)
+                        if raw is not None and str(raw).strip() != "":
+                            number_probes = int(float(raw))
+                            break
+                except Exception:
+                    number_probes = None
+                if number_probes is None and csv_path.name == "random_forest_scores.csv":
+                    try:
+                        from robin.analysis.random_forest_analysis import (
+                            parse_rf_feature_count_from_report,
+                        )
+
+                        number_probes = parse_rf_feature_count_from_report(
+                            str(
+                                csv_path.parent
+                                / "random_forest_calibrated_classification.tsv"
+                            )
+                        )
+                    except Exception:
+                        number_probes = None
                 return {
                     "last": last_scores,
                     "x": x_labels,
                     "series": series_map,
                     "has_time": bool(time_key),
+                    "number_probes": number_probes,
                 }
         except Exception:
             return None
@@ -743,13 +799,19 @@ def add_classification_section(sample_dir: Path, launcher: Any = None) -> None:
             )
         return out
 
-    def _update_charts_from_file(tool_name: str, file_name: str):
+    def _update_charts_from_file(
+        tool_name: str,
+        file_name: str,
+        preloaded: Optional[Dict[str, Any]] = None,
+    ):
         try:
+            if tool_name not in charts:
+                return
             file_path = sample_dir / file_name if sample_dir else None
             if not file_path or not file_path.exists():
                 return
             mode = charts[tool_name].get("mode", "percent")
-            data = _read_scores_csv(file_path, mode)
+            data = preloaded if preloaded is not None else _read_scores_csv(file_path, mode)
             if not data:
                 return
             bar = charts[tool_name]["bar"]
@@ -956,22 +1018,14 @@ def add_classification_section(sample_dir: Path, launcher: Any = None) -> None:
                         )
                     labels_map["conf"].set_text(f"Confidence: {best_value:.2f}%")
                     try:
-                        with file_path.open("r", newline="") as fh:
-                            reader = csv.DictReader(fh)
-                            rows = list(reader)
-                        if rows:
-                            npv = rows[-1].get("number_probes") or rows[-1].get(
-                                "number_probes".lower()
+                        npv = data.get("number_probes")
+                        if npv is not None:
+                            label = (
+                                "Features"
+                                if tool_name == "Random Forest"
+                                else "Probes"
                             )
-                            if npv is not None:
-                                label = (
-                                    "Features"
-                                    if tool_name == "Random Forest"
-                                    else "Probes"
-                                )
-                                labels_map["probes"].set_text(
-                                    f"{label}: {int(float(npv))}"
-                                )
+                            labels_map["probes"].set_text(f"{label}: {int(npv)}")
                     except Exception:
                         pass
                 try:
@@ -986,21 +1040,22 @@ def add_classification_section(sample_dir: Path, launcher: Any = None) -> None:
         except Exception:
             pass
 
-    def _refresh_classification() -> None:
-        """Refresh classification data."""
+    def _refresh_classification_sync_impl() -> None:
+        """Refresh classification data (synchronous; for contexts without asyncio loop)."""
         try:
-            # Check directory existence
             if not sample_dir or not sample_dir.exists():
                 logging.warning(f"[Classification] Sample directory not found: {sample_dir}")
                 return
-            
-            # Check modification times for all files upfront
+
             import time
+
             file_mtimes = {}
             files_changed = {}
             any_changes = False
-            
+
             for tool_name, cfg in tool_to_file.items():
+                if tool_name not in charts:
+                    continue
                 file_path = sample_dir / cfg["file"] if sample_dir else None
                 if file_path and file_path.exists():
                     mtime = file_path.stat().st_mtime
@@ -1014,19 +1069,17 @@ def add_classification_section(sample_dir: Path, launcher: Any = None) -> None:
                 else:
                     file_mtimes[tool_name] = 0
                     files_changed[tool_name] = False
-            
-            # Check if this is a fresh visit (no files have been processed yet)
+
             is_fresh_visit = any(
-                charts[tool_name].get("last_mtime") is None 
-                for tool_name in tool_to_file.keys()
+                chart.get("last_mtime") is None for chart in charts.values()
             )
-            
-            # Early exit if nothing has changed and not a fresh visit
+
             if not any_changes and not is_fresh_visit:
-                logging.debug(f"[Classification] ⏭ Skipping classification update - no file changes detected")
+                logging.debug(
+                    "[Classification] ⏭ Skipping classification update - no file changes detected"
+                )
                 return
-            
-            # Log what changed
+
             if any_changes or is_fresh_visit:
                 reasons = []
                 if is_fresh_visit:
@@ -1035,18 +1088,94 @@ def add_classification_section(sample_dir: Path, launcher: Any = None) -> None:
                     if changed:
                         reasons.append(f"{tool_to_file[tool_name]['file']}")
                 if reasons:
-                    logging.debug(f"[Classification] Update needed. Reasons: {', '.join(reasons)}")
-            
-            # Update only files that have changed
+                    logging.debug(
+                        f"[Classification] Update needed. Reasons: {', '.join(reasons)}"
+                    )
+
             for tool_name, cfg in tool_to_file.items():
                 file_path = sample_dir / cfg["file"] if sample_dir else None
                 if file_path and files_changed.get(tool_name, False):
                     _check_and_update_file(tool_name, cfg["file"], file_path, charts)
-                    # Update mtime in charts dict after successful update
                     if tool_name in file_mtimes:
                         charts[tool_name]["last_mtime"] = file_mtimes[tool_name]
         except Exception as e:
             logging.exception(f"[Classification] Refresh failed: {e}")
+
+    async def _refresh_classification_async() -> None:
+        """Parse score CSVs off the event loop, then update ECharts on the main thread."""
+        try:
+            if not sample_dir or not sample_dir.exists():
+                logging.warning(f"[Classification] Sample directory not found: {sample_dir}")
+                return
+
+            import time
+
+            file_mtimes = {}
+            files_changed = {}
+            any_changes = False
+
+            for tool_name, cfg in tool_to_file.items():
+                if tool_name not in charts:
+                    continue
+                file_path = sample_dir / cfg["file"] if sample_dir else None
+                if file_path and file_path.exists():
+                    mtime = file_path.stat().st_mtime
+                    file_mtimes[tool_name] = mtime
+                    prev_mtime = charts[tool_name].get("last_mtime", 0)
+                    if prev_mtime is None or mtime > prev_mtime:
+                        files_changed[tool_name] = True
+                        any_changes = True
+                    else:
+                        files_changed[tool_name] = False
+                else:
+                    file_mtimes[tool_name] = 0
+                    files_changed[tool_name] = False
+
+            is_fresh_visit = any(
+                chart.get("last_mtime") is None for chart in charts.values()
+            )
+
+            if not any_changes and not is_fresh_visit:
+                logging.debug(
+                    "[Classification] ⏭ Skipping classification update - no file changes detected"
+                )
+                return
+
+            if any_changes or is_fresh_visit:
+                reasons = []
+                if is_fresh_visit:
+                    reasons.append("fresh_visit")
+                for tool_name, changed in files_changed.items():
+                    if changed:
+                        reasons.append(f"{tool_to_file[tool_name]['file']}")
+                if reasons:
+                    logging.debug(
+                        f"[Classification] Update needed. Reasons: {', '.join(reasons)}"
+                    )
+
+            for tool_name, cfg in tool_to_file.items():
+                file_path = sample_dir / cfg["file"] if sample_dir else None
+                if not file_path or not files_changed.get(tool_name, False):
+                    continue
+                mode = charts[tool_name].get("mode", "percent")
+                data = await asyncio.to_thread(_read_scores_csv, file_path, mode)
+                if data:
+                    _update_charts_from_file(
+                        tool_name, cfg["file"], preloaded=data
+                    )
+                if tool_name in file_mtimes:
+                    charts[tool_name]["last_mtime"] = file_mtimes[tool_name]
+        except Exception as e:
+            logging.exception(f"[Classification] Refresh failed: {e}")
+
+    def _refresh_classification() -> None:
+        """Refresh classification data."""
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            _refresh_classification_sync_impl()
+            return
+        asyncio.create_task(_refresh_classification_async())
 
     def _check_and_update_file(tool_name: str, filename: str, file_path: Path, charts: Dict[str, Any]) -> None:
         """Check file and update charts if needed.
@@ -1061,12 +1190,12 @@ def add_classification_section(sample_dir: Path, launcher: Any = None) -> None:
             pass
 
     # Start the refresh timer (every 30 seconds)
-    refresh_timer = ui.timer(30.0, _refresh_classification, active=True, immediate=False)
+    refresh_timer = client_timer(30.0, _refresh_classification, active=True, immediate=False)
     # Initial refresh after the page is rendered
-    ui.timer(0.5, _refresh_classification, once=True)
+    client_timer(0.5, _refresh_classification, once=True)
     try:
         ui.context.client.on_disconnect(
-            lambda: (refresh_timer.deactivate(), unregister_classification_theme_sync())
+            lambda: (stop_timer(refresh_timer), unregister_classification_theme_sync())
         )
     except Exception:
         pass

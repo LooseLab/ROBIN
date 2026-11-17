@@ -1,0 +1,6 @@
+"average","sites","avg_coverage","pred","status","message"
+23.0449264705882,136,13.7941176470588,9.65132606512493e-14,"Unmethylated","MGMT promoter methylation status is assessed based on a logistic regression based prediction model that considers 137 most predictive CpG sites in the MGMT promoter region. The cutoff is assigned as 25%.
+
+Number of sites used = 136
+Average methylation = 23.04%
+Predicted MGMT promoter status = Unmethylated"

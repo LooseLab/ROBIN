@@ -258,7 +258,7 @@ Within **each** grid cell, use this structure:
 
 7.6 Reference Implementation (ROBIN)
 
-The **Run Summary** on the sample detail page uses **dedicated CSS** in `styles.css` (classes `run-summary-shell`, `run-summary-grid`, `run-summary-cell`, etc.) so **layout and colors stay correct in dark mode** without relying on Tailwind `dark:`. The grid is **responsive** (1 → 2 → 4 columns by breakpoint), with **explicit `grid-column: span …`** rules for full-width rows. **Hints** are implemented as **tooltips / `title` on values** to keep row height compact.
+The **Run Summary** on the sample detail page uses **dedicated CSS** in `pages.css` (classes `run-summary-shell`, `run-summary-grid`, `run-summary-cell`, etc.) so **layout and colors stay correct in dark mode** without relying on Tailwind `dark:`. The grid is **responsive** (1 → 2 → 4 columns by breakpoint), with **explicit `grid-column: span …`** rules for full-width rows. **Hints** are implemented as **tooltips / `title` on values** to keep row height compact.
 
 
 
@@ -310,11 +310,11 @@ Pair the **numeric confidence** with a **thin horizontal bar** (height **~6–8p
 
 8.6 Implementation Note (NiceGUI)
 
-Use a **wrapper** (`ui.element('div')` or `ui.card`) with classes such as **`hover:shadow-md transition-all cursor-pointer`**, and **`on('click', …)`** to scroll. Prefer **dedicated CSS classes** in `styles.css` with **`.body--dark`** for dark tokens, consistent with §7.5.
+Use a **wrapper** (`ui.element('div')` or `ui.card`) with classes such as **`robin-card--interactive`** and **`on('click', …)`** to scroll. Prefer **dedicated CSS classes** in `pages.css` with **`.body--dark`** for dark tokens, consistent with §7.5.
 
 8.7 Reference Implementation (ROBIN)
 
-The sample **Classification details** strip uses **`classification-insight-*`** classes in `styles.css` and **`_create_classification_dashboard_card_with_data`** in `summary.py**. Expansion panels in `classification.py` expose **`id="classification-detail-{tool_step}"`** for scroll targets.
+The sample **Classification details** strip uses **`classification-insight-*`** classes in `pages.css` and **`_create_classification_dashboard_card_with_data`** in `summary.py**. Expansion panels in `classification.py` expose **`id="classification-detail-{tool_step}"`** for scroll targets.
 
 
 8.8 Classification Charts (ECharts — Sturgeon, NanoDX, PanNanoDX, Random Forest)
@@ -369,12 +369,12 @@ This strip sits below **Classification details** on the sample detail page. It s
 
 9.3 Threshold Pills (Coverage)
 
-The **≥30× / ≥20× / ≥10× / below 10×** legend uses **`analysis-insight-pill`** and **`analysis-insight-pill--emerald|sky|amber|rose`** in `styles.css` so light and **`.body--dark`** backgrounds stay readable.
+The **≥30× / ≥20× / ≥10× / below 10×** legend uses **`analysis-insight-pill`** and **`analysis-insight-pill--emerald|sky|amber|rose`** in `pages.css` so light and **`.body--dark`** backgrounds stay readable.
 
 9.4 Reference implementation (ROBIN)
 
 - **`summary.py`:** **`_analysis_section`** (shell + grid), **`_scroll_to_analysis_detail`**, **`_create_*_dashboard_card_with_data`** for each analysis card.
-- **`styles.css`:** Reuses **`classification-insight-*`**; adds **`analysis-insight-pill*`** for the coverage legend; scoped **`#analysis-detail-cnv`** / **`#analysis-detail-mgmt`** / **`#analysis-detail-fusion`** for dark-mode copy on detail sections.
+- **`pages.css`:** Reuses **`classification-insight-*`**; adds **`analysis-insight-pill*`** for the coverage legend; scoped **`#analysis-detail-cnv`** / **`#analysis-detail-mgmt`** / **`#analysis-detail-fusion`** for dark-mode copy on detail sections.
 - **Scroll targets:** Outer section cards set **`id=analysis-detail-coverage`**, **`id=analysis-detail-cnv`**, **`id=analysis-detail-mgmt`**, **`id=analysis-detail-fusion`** in **`coverage.py`**, **`cnv.py`**, **`mgmt.py`**, **`fusion.py`** respectively.
 
 **CNV detail UI & ECharts** — see **§9.6**. **Fusion detail** — see **§9.7**.
@@ -400,14 +400,75 @@ The **≥30× / ≥20× / ≥10× / below 10×** legend uses **`analysis-insight
 - **Interaction:** **Crosshair** (`axisPointer: cross`) and axis tooltip. Data source: **`coverage_time_chart.npy`** (`[timestamp_ms, coverage]`); tooltip shows **estimated coverage (×)** at the crosshair (total reads are not stored in this file).
 - **Implementation:** **`echart_time`**, **`_update_time()`** in **`coverage.py`**; **`_cov_line_primary()`**, **`_cov_area_fill_primary()`**.
 
-### C. Individual target coverage (outlier analysis)
+### C. Individual target coverage (outlier analysis) — signal-first trend
 
-- **Background:** Horizontal **±2 SD band** around the **mean coverage time series** (mean of per-timepoint means), shown as a **subtle slate** `markArea`.
-- **Mean line:** **Thick dashed** line — **`#f8fafc`** (dark UI) or **`#1e293b`** (light UI).
-- **Gene lines:** **Outlier** targets (per existing SD logic) use a **fixed accent palette** (cyan / magenta / gold / …). **Non-outlier** targets (up to **25**) are drawn **dimmed** (slate, ~40% opacity, thin dashed). **Legend hover / emphasis** uses ECharts **`emphasis` / `blur`** so a series can “pop” when focused.
-- **Implementation:** **`_plot_target_coverage_over_time()`** in **`coverage.py`** (`target_coverage_time.csv`); helpers **`_cov_mean_line_color()`**, **`_cov_gene_line_color()`**, **`_COV_DIM_LINE`**, **`_COV_MAX_DIM_GENES`**.
-- **Legend layout:** **`type: 'scroll'`**, **`orient: 'horizontal'`**, **`bottom`** — legend sits **under** the grid so it does not cover the Y-axis or series (taller chart container reserved for the strip). **Series names** are **truncated in Python** (`_cov_legend_label`) so long gene lists do not blow the key width; in-range suffix is **`· in-range`**.
-- **Tooltip:** Use ECharts **default** axis tooltip only — do **not** pass a **`formatter` function string** in options (NiceGUI serialises options as JSON; JS functions are not preserved and the source can appear as tooltip body — same pitfall as classification charts; use template strings or defaults).
+Full visual and interaction spec: **Outlier Coverage & High-Density Trend Analysis** (see table at end of this subsection).
+
+#### Design Specification: Outlier Coverage & High-Density Trend Analysis
+
+##### 1. Plot archetype: the “signal-first” trend
+
+In bioinformatics, outlier analysis often involves tracking multiple targets over time. To prevent visual “spaghetti,” the plot prioritises the **population mean** and **statistically significant deviations** while minimising background noise.
+
+##### 2. Layering & signal-to-noise ratio (SNR)
+
+**2.1 Background architecture**
+
+- **The normal range (the “envelope”):** A shaded background band represents normal variance (**±2 standard deviations** from the **mean coverage time series** — mean of per-timepoint means).
+  - *Light mode:* Slate 100 (`#F1F5F9`) at **50%** opacity.
+  - *Dark mode:* Slate 800 (`#1E293B`) at **30%** opacity.
+- **Grid lines:** Horizontal and vertical grids stay **minimal** and **semi-transparent** so they give scale without competing with data lines.
+
+**2.2 The reference mean**
+
+- **Style:** Thick **dashed** line for the population / run average.
+- **Light mode:** Slate 800 (`#1E293B`) dashed stroke.
+- **Dark mode:** Slate 200 (`#E2E8F0`) dashed stroke with a subtle **~1px glow** (`shadowBlur` on the line).
+
+**2.3 Data line hierarchy**
+
+- **Inactive / normal targets:** Non-outlier lines at **~15–20%** opacity (“ghost” population trend).
+- **Active / outlier targets:** Genes crossing the threshold use **high-saturation** brand colours (**Emerald, Cyan, Rose, Amber** family — theme-tuned for light vs luminous dark). **Solid 2px** stroke.
+
+##### 3. Visual encoding & semantic markers
+
+**3.1 Point markers (anomalies)**
+
+- **Gains / positive deviations:** Triangle-up (or circle) — **Emerald 400** (dark) / **Emerald 600** (light).
+- **Losses / negative deviations:** Triangle-down — **Red 400** (dark) / **Red 600** (light).
+- **Interaction:** Marker **emphasis** uses **shadow / glow** on hover (ECharts `emphasis.itemStyle`) so points read as interactive.
+
+**3.2 Time-series smoothing**
+
+- **Spline-style curves:** `smooth` + moderate tension (Bezier-style) on line series so raw sequencing jitter is softened without hiding breakpoints.
+
+##### 4. Legend & interactivity
+
+**4.1 Dynamic legend**
+
+- **Placement:** **Right**, vertical **scroll** on wide viewports; **narrow viewports** fall back to **horizontal scroll** under the grid (media `option` in `coverage.py`, same idea as classification charts).
+- **Focus behaviour:** **Legend hover** + ECharts **`emphasis.focus: 'series'`** / **`blur`** so one series is emphasised and others **dim** (~10% opacity). Native legend **click** still toggles series visibility (JSON-safe options; no custom JS formatters).
+
+**4.2 Crosshair & scrubbing**
+
+- **Vertical scrubber:** Axis pointer **`type: 'line'`** on **`x`** — thin full-height line following the pointer.
+- **Tooltip:** **Axis** trigger (default) — shows values at the scrubbed time for visible series, including **Mean (population)** for context. Do **not** use JS **`formatter` functions** in options (NiceGUI serialises to JSON; use defaults / string templates only).
+
+##### 5. Thematic implementation summary
+
+| Element | Light mode (clinical) | Dark mode (midnight) |
+| :--- | :--- | :--- |
+| **Normal band** | Slate-100 envelope | Slate-800 envelope |
+| **Mean line** | Dark slate, dashed | Slate-200 dashed + glow |
+| **Outlier lines** | Solid high-contrast brand palette | Luminous emerald / cyan / rose / amber |
+| **Anomalies** | Semantic red / green markers | Same hues, brighter + emphasis glow |
+
+*Design spec version 1.0 | October 2026*
+
+---
+
+- **Implementation:** **`_plot_target_coverage_over_time()`** in **`coverage.py`** (`target_coverage_time.csv`); helpers **`_cov_band_fill_rgba()`**, **`_cov_mean_line_color()`**, **`_cov_outlier_line_color()`**, **`_cov_anomaly_*_color()`**, **`_cov_target_time_split()`**, **`_echart_target_cov_time_media()`**, **`_COV_MAX_DIM_GENES`**, **`_cov_legend_label`**. In-range suffix **`· in-range`**.
+- **Tooltip:** Axis tooltip only — **no** JS `formatter` functions in options.
 
 **Reference implementation:** **`coverage.py`** — module-level **`_cov_*`** theme helpers; charts updated when **`_refresh_coverage_sync`** runs (and bar colours follow storage **`dark_mode`** on refresh).
 
@@ -420,7 +481,7 @@ The **expandable CNV block** (`#analysis-detail-cnv` in **`cnv.py`**) follows th
 
 **Semantics:** Gains/losses and breakpoint overlays follow §5 where applicable; **breakpoint** **`markLine`** styling remains a high-visibility red on both themes.
 
-**CSS:** **`#analysis-detail-cnv`** scoped **`.body--dark`** text fixes in **`styles.css`** (table/label greys).
+**CSS:** **`#analysis-detail-cnv`** scoped **`.body--dark`** text fixes in **`pages.css`** (table/label greys).
 
 **Reference implementation:** **`cnv.py`** — **`_apply_cnv_echart_chrome`**, **`_sync_cnv_echarts_theme_if_needed`**, state key **`cnv_plot_theme_dark`**.
 
@@ -429,7 +490,7 @@ The **expandable CNV block** (`#analysis-detail-cnv` in **`cnv.py`**) follows th
 
 The **expandable Fusion block** (`#analysis-detail-fusion` in **`fusion.py`**) uses the same **insight shell** as §9.6: **`classification-insight-shell`**, **`classification-insight-heading`** (**“Fusion analysis”** — **no emoji** in the section title), a top **`classification-insight-card`** with **`merge`** icon (**`classification-insight-icon`**), **Candidate summary** / target and genome-wide pair–group counts (**`classification-insight-meta`**), and a short **`classification-insight-foot`**. **Target panel** and **Genome-wide** subsections use **`target-coverage-panel__meta-label`** and **`mgmt-detail-separator`** between them. Tables and plots fill the shell below (matplotlib / DNA Features Viewer as implemented).
 
-**CSS:** **`#analysis-detail-fusion`** scoped **`.body--dark`** text fixes in **`styles.css`** for legacy Tailwind greys on tables and status copy.
+**CSS:** **`#analysis-detail-fusion`** scoped **`.body--dark`** text fixes in **`pages.css`** for legacy Tailwind greys on tables and status copy.
 
 **Reference implementation:** **`fusion.py`** — **`add_fusion_section`**.
 
@@ -449,14 +510,14 @@ The **MNP-Flex results** block on the sample detail page follows the same **insi
 
 10.2 Badges (no Tailwind-only colours)
 
-- **Score badges** (hierarchy, aggregates, top path): **`mnpflex-score-badge`** tiers **`--neutral`** and **`--5`** … **`--1`** by numeric score bands (see `styles.css`).
+- **Score badges** (hierarchy, aggregates, top path): **`mnpflex-score-badge`** tiers **`--neutral`** and **`--5`** … **`--1`** by numeric score bands (see `pages.css`).
 - **QC / MGMT status:** **`mnpflex-status-badge--neutral|pass|warn|fail|meth|unmeth`**.
 - **Errors:** **`mnpflex-error-text`** for inline error lines.
 
 10.3 Reference implementation (ROBIN)
 
 - **`mnpflex.py`:** **`add_mnpflex_section`** builds the UI; **`_score_badge_classes`** / **`_status_badge_classes`** return semantic **`mnpflex-*`** classes.
-- **`styles.css`:** **`mnpflex-*`** and **`classification-insight-grid--2`** (two-column grid for QC/MGMT).
+- **`pages.css`:** **`mnpflex-*`** and **`classification-insight-grid--2`** (two-column grid for QC/MGMT).
 
 
-Version 1.15 | March 2026
+Version 1.16 | April 2026

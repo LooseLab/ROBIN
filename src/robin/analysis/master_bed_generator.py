@@ -4,11 +4,12 @@ Master BED File Generator for ROBIN
 
 This module generates merged master BED files from CNV and fusion breakpoint BED files.
 The master BED file combines:
-- CNV regions (new_file_{counter}.bed) - split into start/end breakpoints, padded by +/- 10kb
+- CNV regions (new_file_{counter}.bed) - split into start/end breakpoints, padded by +/- bin_width
 - CNV breakpoints (breakpoints_{counter}.bed) - merged as-is
 - Fusion breakpoints (fusion_breakpoints_{counter}.bed) - merged as-is
 
-All regions are intersected with the target gene panel and merged to remove overlaps.
+The stranded adaptive-sampling panel BED is added to these regions and everything is
+merged (per strand) to remove overlaps.
 """
 
 import os
@@ -18,6 +19,7 @@ import glob
 import fcntl
 import time
 import argparse
+import hashlib
 import json
 import threading
 from typing import List, Tuple, Dict, Optional, Any
@@ -210,6 +212,34 @@ def _load_bed_file(bed_path: str, require_bed6: bool = False) -> pd.DataFrame:
         return pd.DataFrame()
 
 
+def _resolve_cnv_expand_size(
+    sample_dir: str,
+    expand_size: Optional[int] = None,
+    log: Optional[logging.Logger] = None,
+) -> int:
+    """
+    Resolve CNV edge padding for master BED expansion.
+
+    Prefer an explicit expand_size; otherwise use the sample's CNV analysis
+    ``bin_width`` from ``CNV_dict.npy``. Falls back to 10000 only if unknown.
+    """
+    if expand_size is not None and int(expand_size) > 0:
+        return int(expand_size)
+
+    log = log or logger
+    cnv_dict_path = os.path.join(sample_dir, "CNV_dict.npy")
+    try:
+        if os.path.exists(cnv_dict_path):
+            cnv_dict = np.load(cnv_dict_path, allow_pickle=True).item()
+            bin_width = cnv_dict.get("bin_width")
+            if bin_width and int(bin_width) > 0:
+                return int(bin_width)
+    except Exception as e:
+        log.debug(f"Could not load bin_width from {cnv_dict_path}: {e}")
+
+    return 10000
+
+
 def _expand_cnv_regions(df: pd.DataFrame, expand_size: int = 10000) -> pd.DataFrame:
     """
     Convert CNV regions into breakpoint regions at start and end positions.
@@ -222,7 +252,8 @@ def _expand_cnv_regions(df: pd.DataFrame, expand_size: int = 10000) -> pd.DataFr
     
     Args:
         df: DataFrame with chrom, start, end, name, score, strand columns
-        expand_size: Size to pad around each breakpoint in base pairs (default 10kb)
+        expand_size: Size to pad around each breakpoint in base pairs
+            (normally the CNV analysis bin_width)
         
     Returns:
         DataFrame with breakpoint regions, duplicated for both strands
@@ -650,12 +681,33 @@ def _sort_bed_regions(df: pd.DataFrame) -> pd.DataFrame:
 
 def _get_reference_path() -> Optional[str]:
     """
-    Get the reference genome path from config or environment variable.
-    
+    Get the reference genome path from workflow TOML, config, or environment.
+
+    Resolution order:
+    1. ``ROBIN_WORKFLOW_TOML`` / workflow ``reference`` key
+    2. ``config.yaml`` locations
+    3. ``ROBIN_REFERENCE`` or ``robin_REFERENCE`` environment variable
+
     Returns:
         Path to reference FASTA file (expanded), or None if not found
     """
-    # Try to load from config file first
+    # Prefer the workflow TOML used to start ``robin workflow --toml``
+    try:
+        from robin.minknow.config import workflow_toml_from_environ
+        from robin.workflow_config import load_workflow_toml
+
+        toml_path = workflow_toml_from_environ()
+        if toml_path is not None and toml_path.is_file():
+            config = load_workflow_toml(toml_path)
+            reference = config.get("reference")
+            if reference:
+                reference = os.path.expanduser(str(reference))
+                if os.path.exists(reference):
+                    return reference
+    except Exception:
+        pass
+
+    # Try to load from config file
     try:
         import yaml  # type: ignore
         config_paths = [
@@ -671,19 +723,19 @@ def _get_reference_path() -> Optional[str]:
                         reference = config.get("reference")
                         if reference:
                             # Expand user home directory if present
-                            reference = os.path.expanduser(reference)
+                            reference = os.path.expanduser(str(reference))
                             if os.path.exists(reference):
                                 return reference
     except (ImportError, Exception):
         pass
     
-    # Check environment variable
-    reference_env = os.environ.get("robin_REFERENCE")
-    if reference_env:
-        # Expand user home directory if present
-        reference_env = os.path.expanduser(reference_env)
-        if os.path.exists(reference_env):
-            return reference_env
+    # Environment variables (prefer ROBIN_REFERENCE; keep robin_REFERENCE for compat)
+    for env_key in ("ROBIN_REFERENCE", "robin_REFERENCE"):
+        reference_env = os.environ.get(env_key)
+        if reference_env:
+            reference_env = os.path.expanduser(reference_env)
+            if os.path.exists(reference_env):
+                return reference_env
     
     return None
 
@@ -732,14 +784,15 @@ def _find_fai_file(reference: Optional[str] = None) -> Optional[str]:
         else:
             logger.debug(f"Reference file does not exist: {reference}")
     
-    # Check environment variable directly (fallback)
-    reference_env = os.environ.get("robin_REFERENCE")
-    if reference_env:
-        # Expand user home directory if present
-        reference_env = os.path.expanduser(reference_env)
-        fai_path = f"{reference_env}.fai"
-        if os.path.exists(fai_path):
-            return fai_path
+    # Check environment variables directly (fallback)
+    for env_key in ("ROBIN_REFERENCE", "robin_REFERENCE"):
+        reference_env = os.environ.get(env_key)
+        if reference_env:
+            # Expand user home directory if present
+            reference_env = os.path.expanduser(reference_env)
+            fai_path = f"{reference_env}.fai"
+            if os.path.exists(fai_path):
+                return fai_path
     
     # Common locations to check
     common_paths = [
@@ -776,114 +829,125 @@ def _log_bed_coverage_data(
     try:
         sample_dir = os.path.join(work_dir, sample_id)
         log_path = os.path.join(sample_dir, log_file)
-        
-        # Load existing log if it exists
-        existing_data = []
-        if os.path.exists(log_path):
-            try:
-                with open(log_path, 'r') as f:
-                    existing_data = json.load(f)
-                if not isinstance(existing_data, list):
-                    # If file is corrupted or in wrong format, start fresh
-                    existing_data = []
-            except (json.JSONDecodeError, IOError) as e:
-                logger.warning(f"Could not read existing coverage log: {e}")
-                existing_data = []
-        
-        # Create new log entry
+        lock_path = os.path.join(sample_dir, "_locks", "bed_coverage_log.lock")
+        os.makedirs(os.path.dirname(lock_path), exist_ok=True)
+
         log_entry = {
             "timestamp": time.time(),
             "analysis_counter": analysis_counter,
-            "coverage": coverage_data
+            "coverage": coverage_data,
         }
-        
-        # Append new entry
-        existing_data.append(log_entry)
-        
-        # Write updated log
-        with open(log_path, 'w') as f:
-            json.dump(existing_data, f, indent=2)
-        
-        logger.debug(f"Logged BED coverage data to {log_path}")
-        
-        # Generate pre-processed visualization data
-        _generate_visualization_data(sample_dir, existing_data)
-        
+
+        # Serialize read-modify-write so concurrent master-BED jobs don't
+        # clobber / corrupt the log (which leaves the GUI stuck on old points).
+        with FileLock(lock_path, timeout=60.0):
+            existing_data = []
+            if os.path.exists(log_path):
+                try:
+                    with open(log_path, "r") as f:
+                        existing_data = json.load(f)
+                    if not isinstance(existing_data, list):
+                        existing_data = []
+                except (json.JSONDecodeError, IOError) as e:
+                    logger.warning(f"Could not read existing coverage log: {e}")
+                    existing_data = []
+
+            existing_data.append(log_entry)
+            temporary_path = f"{log_path}.tmp"
+            with open(temporary_path, "w") as f:
+                json.dump(existing_data, f, indent=2)
+            os.replace(temporary_path, log_path)
+
+            logger.debug(f"Logged BED coverage data to {log_path}")
+            _generate_visualization_data(sample_dir, existing_data)
+
     except Exception as e:
         logger.warning(f"Could not log BED coverage data: {e}")
 
 
-def _generate_visualization_data(sample_dir: str, log_entries: List[Dict[str, Any]]) -> None:
+def _round_sigfigs(value: float, digits: int = 3) -> float:
+    """Round ``value`` to ``digits`` significant figures for display/plotting."""
+    if value == 0 or not np.isfinite(value):
+        return 0.0 if value == 0 else float(value)
+    return float(f"{value:.{digits}g}")
+
+
+def build_bed_coverage_series(log_entries: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Build ECharts series from ``bed_coverage_log.json`` entries.
+
+    When many masters are written in a short wall-clock burst (folder
+    re-analysis), points are spaced by ``analysis_counter`` so the plot can
+    still show progression across hundreds of generations.
     """
-    Generate pre-processed visualization data for the GUI.
-    This avoids doing heavy DataFrame operations in the GUI for each viewer.
-    
-    Args:
-        sample_dir: Sample directory path
-        log_entries: List of log entry dictionaries
-    """
-    try:
-        # pandas is already imported at module level
-        
-        if not log_entries:
-            return
-        
-        # Color map for different BED types
-        colors = {
-            "cnv_regions": "#1f77b4",
-            "cnv_breakpoints": "#ff7f0e",
-            "fusion_breakpoints": "#2ca02c",
-            "master_bed_breakpoints": "#d62728",
-            "target_panel": "#9467bd",
-            "master_bed": "#8c564b",
-        }
-        
-        # Prepare DataFrame from log entries
-        rows = []
-        for entry in log_entries:
-            timestamp = entry.get("timestamp", 0)
-            counter = entry.get("analysis_counter", 0)
-            coverage = entry.get("coverage", {})
-            
-            # Extract coverage for each BED file type
-            for bed_type, bed_data in coverage.items():
-                if isinstance(bed_data, dict):
-                    total_prop = bed_data.get("total_proportion") if "total_proportion" in bed_data else None
-                    rows.append({
-                        "timestamp": timestamp,
-                        "analysis_counter": counter,
-                        "bed_type": bed_type,
-                        "total_proportion": total_prop,
-                    })
-        
-        if not rows:
-            return
-        
-        df = pd.DataFrame(rows)
-        
-        # Format data for ECharts
-        series = []
-        for bed_type in sorted(df["bed_type"].unique()):
-            bed_df = df[df["bed_type"] == bed_type].sort_values("timestamp")
-            if bed_df.empty:
+    if not log_entries:
+        return []
+
+    colors = {
+        "cnv_regions": "#1f77b4",
+        "cnv_breakpoints": "#ff7f0e",
+        "fusion_breakpoints": "#2ca02c",
+        "master_bed_breakpoints": "#d62728",
+        "target_panel": "#9467bd",
+        "master_bed": "#8c564b",
+    }
+
+    rows = []
+    for entry in log_entries:
+        timestamp = entry.get("timestamp", 0)
+        counter = entry.get("analysis_counter", 0)
+        coverage = entry.get("coverage", {})
+        for bed_type, bed_data in coverage.items():
+            if not isinstance(bed_data, dict):
                 continue
-            
-            # Format data for ECharts time series: [[timestamp_ms, value], ...]
-            data = []
-            for _, row in bed_df.iterrows():
-                total_prop = row["total_proportion"]
-                # Only include if value is not None and not NaN
-                if total_prop is not None and not pd.isna(total_prop):
-                    timestamp_ms = int(row["timestamp"] * 1000)  # Convert to milliseconds
-                    value = float(total_prop * 100)  # Convert to percentage
-                    data.append([timestamp_ms, value])
-            
-            # Only add series if we have data points to plot
-            if not data:
+            total_prop = (
+                bed_data.get("total_proportion")
+                if "total_proportion" in bed_data
+                else None
+            )
+            rows.append(
+                {
+                    "timestamp": timestamp,
+                    "analysis_counter": counter,
+                    "bed_type": bed_type,
+                    "total_proportion": total_prop,
+                }
+            )
+
+    if not rows:
+        return []
+
+    df = pd.DataFrame(rows)
+    bursty = _log_entries_are_bursty(log_entries)
+
+    series: List[Dict[str, Any]] = []
+    for bed_type in sorted(df["bed_type"].unique()):
+        bed_df = df[df["bed_type"] == bed_type].copy()
+        if bursty:
+            bed_df = bed_df.sort_values(["analysis_counter", "timestamp"])
+        else:
+            bed_df = bed_df.sort_values(["timestamp", "analysis_counter"])
+        if bed_df.empty:
+            continue
+
+        data = []
+        for _, row in bed_df.iterrows():
+            total_prop = row["total_proportion"]
+            if total_prop is None or pd.isna(total_prop):
                 continue
-            
-            color = colors.get(bed_type, "#7f7f7f")
-            series.append({
+            if bursty:
+                # Value-axis x = analysis counter (wall-clock collapses during batch).
+                x_value = int(float(row["analysis_counter"]))
+            else:
+                x_value = int(float(row["timestamp"]) * 1000)
+            # Percent coverage, rounded to 3 significant figures for tooltip/legend.
+            data.append([x_value, _round_sigfigs(float(total_prop) * 100, 3)])
+
+        if not data:
+            continue
+
+        color = colors.get(bed_type, "#7f7f7f")
+        series.append(
+            {
                 "name": bed_type.replace("_", " ").title(),
                 "type": "line",
                 "smooth": True,
@@ -892,29 +956,118 @@ def _generate_visualization_data(sample_dir: str, log_entries: List[Dict[str, An
                 "data": data,
                 "itemStyle": {"color": color},
                 "lineStyle": {"width": 2, "color": color},
-            })
-        
-        # Write pre-processed visualization data
+            }
+        )
+    return series
+
+
+def _log_entries_are_bursty(log_entries: List[Dict[str, Any]]) -> bool:
+    timestamps = sorted(
+        {
+            float(entry.get("timestamp", 0))
+            for entry in log_entries
+            if entry.get("timestamp") is not None
+        }
+    )
+    counters = {
+        int(entry.get("analysis_counter", 0))
+        for entry in log_entries
+        if entry.get("analysis_counter") is not None
+    }
+    if len(timestamps) >= 2:
+        span = timestamps[-1] - timestamps[0]
+        return span < max(5.0, 0.25 * len(timestamps))
+    return len(timestamps) <= 1 and len(counters) > 1
+
+
+def _generate_visualization_data(sample_dir: str, log_entries: List[Dict[str, Any]]) -> None:
+    """
+    Generate pre-processed visualization data for the GUI.
+    This avoids doing heavy DataFrame operations in the GUI for each viewer.
+
+    Args:
+        sample_dir: Sample directory path
+        log_entries: List of log entry dictionaries
+    """
+    try:
+        if not log_entries:
+            return
+
+        series = build_bed_coverage_series(log_entries)
         viz_path = os.path.join(sample_dir, "bed_coverage_viz.json")
-        with open(viz_path, 'w') as f:
-            json.dump({"series": series}, f, indent=2)
-        
-        logger.debug(f"Generated visualization data with {len(series)} series to {viz_path}")
-        
+        temporary_path = f"{viz_path}.tmp"
+        with open(temporary_path, "w") as f:
+            json.dump(
+                {
+                    "series": series,
+                    "point_count": sum(len(s.get("data") or []) for s in series),
+                    "entry_count": len(log_entries),
+                    "x_axis_mode": (
+                        "analysis_counter"
+                        if _log_entries_are_bursty(log_entries)
+                        else "wall_clock"
+                    ),
+                },
+                f,
+                indent=2,
+            )
+        os.replace(temporary_path, viz_path)
+
+        logger.debug(
+            f"Generated visualization data with {len(series)} series "
+            f"({len(log_entries)} log entries) to {viz_path}"
+        )
+
     except Exception as e:
         logger.warning(f"Could not generate visualization data: {e}")
 
 
-def _get_target_bed_path(target_panel: Optional[str] = None) -> Optional[str]:
+def _get_target_bed_path(
+    target_panel: Optional[str] = None,
+    reference: Optional[str] = None,
+) -> Optional[str]:
     """
-    Get the path to the target gene BED file.
-    
+    Get the path to the panel BED merged into the master BED.
+
+    Prefers the stranded panel BED used for adaptive sampling
+    (``{panel}_panel_source.bed``, taken from beside the reference FASTA when
+    present), so live readfish targets stay a superset of the panel the run was
+    started with. Falls back to the packaged ``{panel}_panel_name_uniq.bed``
+    (unstranded gene bodies, no padding) only when no source BED is available.
+
     Args:
         target_panel: Target panel name (rCNS2, AML, custom, etc.)
-        
+        reference: Alignment reference FASTA, used to locate the run's panel BED
+
     Returns:
-        Path to target BED file, or None if not found
+        Path to panel BED file, or None if not found
     """
+    if not target_panel:
+        return None
+
+    try:
+        from robin.utils.sequencing_files import (
+            panel_stranded_bed_filename,
+            resolve_panel_stranded_bed_path,
+        )
+
+        stranded_path = resolve_panel_stranded_bed_path(
+            target_panel,
+            reference_path=reference,
+        )
+        if stranded_path is not None and os.path.exists(stranded_path):
+            return str(stranded_path)
+        logger.warning(
+            "No adaptive sampling panel BED (%s) for panel %s; "
+            "falling back to the unstranded gene-body panel BED",
+            panel_stranded_bed_filename(target_panel),
+            target_panel,
+        )
+    except Exception as e:
+        logger.warning(
+            f"Could not resolve adaptive sampling panel BED for {target_panel}: {e}"
+        )
+
     try:
         from robin import resources
         resources_dir = os.path.dirname(resources.__file__)
@@ -973,6 +1126,73 @@ def _try_get_target_panel_from_fusion_metadata(
     return None
 
 
+def _file_sha256(path: str) -> str:
+    digest = hashlib.sha256()
+    with open(path, "rb") as source:
+        for chunk in iter(lambda: source.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _resolve_reference(reference: Optional[str] = None) -> Optional[str]:
+    """Resolve the alignment reference FASTA from the argument or workflow config."""
+    ref = reference or _get_reference_path()
+    return os.path.expanduser(str(ref)) if ref else None
+
+
+def _master_bed_source_signature(
+    sample_id: str,
+    work_dir: str,
+    target_panel: Optional[str],
+    reference: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Return a content signature for every file that affects the master BED."""
+    bed_dir = os.path.join(work_dir, sample_id, "bed_files")
+    sources = []
+    for source_type, pattern in (
+        ("cnv_regions", "new_file_*.bed"),
+        ("cnv_breakpoints", "breakpoints_*.bed"),
+        ("fusion_breakpoints", "fusion_breakpoints_*.bed"),
+        ("master_bed_breakpoints", "master_bed_breakpoints_*.bed"),
+    ):
+        path = _get_latest_bed_file(bed_dir, pattern)
+        if path and os.path.exists(path):
+            sources.append({"type": source_type, "sha256": _file_sha256(path)})
+
+    target_bed_path = _get_target_bed_path(target_panel, _resolve_reference(reference))
+    if target_bed_path and os.path.exists(target_bed_path):
+        sources.append({"type": "target_panel", "sha256": _file_sha256(target_bed_path)})
+
+    return {"version": 1, "target_panel": target_panel, "sources": sources}
+
+
+def _master_bed_state_path(master_bed_path: str) -> str:
+    return f"{master_bed_path}.sources.json"
+
+
+def _master_bed_is_current(
+    master_bed_path: str,
+    source_signature: Dict[str, Any],
+) -> bool:
+    if not os.path.exists(master_bed_path):
+        return False
+    try:
+        with open(_master_bed_state_path(master_bed_path), "r") as state_file:
+            return json.load(state_file) == source_signature
+    except (OSError, ValueError, TypeError):
+        return False
+
+
+def _save_master_bed_state(
+    master_bed_path: str,
+    source_signature: Dict[str, Any],
+) -> None:
+    temporary_path = f"{_master_bed_state_path(master_bed_path)}.tmp"
+    with open(temporary_path, "w") as state_file:
+        json.dump(source_signature, state_file, indent=2, sort_keys=True)
+    os.replace(temporary_path, _master_bed_state_path(master_bed_path))
+
+
 def _build_master_bed_data(
     sample_id: str,
     work_dir: str,
@@ -990,14 +1210,9 @@ def _build_master_bed_data(
     if not os.path.exists(bed_dir):
         return None
 
-    ref = reference
-    if not ref:
-        ref = _get_reference_path()
-        if ref:
-            ref = os.path.expanduser(ref)
-            log.debug(f"Using reference genome from config/environment: {ref}")
-    elif reference:
-        ref = os.path.expanduser(reference)
+    ref = _resolve_reference(reference)
+    if ref and not reference:
+        log.debug(f"Using reference genome from config/environment: {ref}")
     fai_path = _find_fai_file(ref)
     if fai_path:
         log.debug(f"Using FAI file for coverage calculations: {fai_path}")
@@ -1012,7 +1227,12 @@ def _build_master_bed_data(
         log.debug(f"Loading CNV regions from: {cnv_bed}")
         cnv_df = _load_bed_file(cnv_bed)
         if not cnv_df.empty:
-            cnv_expanded_df = _expand_cnv_regions(cnv_df, expand_size=10000)
+            expand_size = _resolve_cnv_expand_size(sample_dir, log=log)
+            log.debug(
+                "Expanding CNV region edges by +/- %s bp (CNV bin_width)",
+                expand_size,
+            )
+            cnv_expanded_df = _expand_cnv_regions(cnv_df, expand_size=expand_size)
             all_regions.append(cnv_expanded_df)
             log.debug(f"Loaded {len(cnv_df)} CNV regions (converted to {len(cnv_expanded_df)} breakpoint regions)")
             cnv_df_merged = _merge_overlapping_regions(cnv_df)
@@ -1100,9 +1320,9 @@ def _build_master_bed_data(
     log.debug(f"Merged to {len(merged_df)} regions")
 
     if target_panel:
-        target_bed_path = _get_target_bed_path(target_panel)
+        target_bed_path = _get_target_bed_path(target_panel, ref)
         if target_bed_path:
-            log.debug(f"Loading target panel regions: {target_panel}")
+            log.debug(f"Loading target panel regions: {target_panel} ({target_bed_path})")
             target_df = _load_bed_file(target_bed_path, require_bed6=True)
             if not target_df.empty:
                 target_df_processed = _duplicate_unstranded_regions(target_df)
@@ -1165,8 +1385,11 @@ def generate_master_bed(
 ) -> Optional[str]:
     """
     Generate master BED file from all available BED file types.
-    Lock is held only for the initial existence check and for the final write + log.
-    Heavy work (load/merge/coverage) is done outside the lock to avoid contention.
+
+    When source BED content has changed relative to the latest master BED, a new
+    analysis counter is allocated and ``master_{counter}.bed`` is written (never
+    overwriting a previous master BED). Lock is held only for the currency check
+    and for the final write + log.
     """
     if logger_instance:
         log = logger_instance
@@ -1179,54 +1402,117 @@ def generate_master_bed(
         log.debug(f"BED directory does not exist: {bed_dir}")
         return None
 
-    master_bed_path = os.path.join(bed_dir, f"master_{analysis_counter:03d}.bed")
     lock_file = os.path.join(sample_dir, "_locks", "master_bed.lock")
     lock_timeout = 300.0
 
     try:
-        # Critical section 1: quick existence check only
-        with FileLock(lock_file, timeout=lock_timeout):
-            if os.path.exists(master_bed_path):
-                log.debug(f"Master BED file already exists: {master_bed_path}")
-                return master_bed_path
-        # Lock released here
-
-        log.debug(f"Generating master BED file for sample {sample_id} (counter: {analysis_counter})")
-        build_result = _build_master_bed_data(
-            sample_id, work_dir, analysis_counter, target_panel, reference, log
-        )
-        if not build_result:
-            return None
-        sorted_df, coverage_data = build_result
-        bed6_cols = ["chrom", "start", "end", "name", "score", "strand"]
-
-        # Critical section 2: write BED and log coverage only
-        with FileLock(lock_file, timeout=lock_timeout):
-            if os.path.exists(master_bed_path):
-                log.debug(f"Master BED was generated by another process: {master_bed_path}")
-                return master_bed_path
-            sorted_df[bed6_cols].to_csv(
-                master_bed_path,
-                sep="\t",
-                header=False,
-                index=False,
+        for attempt in range(2):
+            source_signature = _master_bed_source_signature(
+                sample_id, work_dir, target_panel, reference
             )
-            if coverage_data:
-                _log_bed_coverage_data(
+            with FileLock(lock_file, timeout=lock_timeout):
+                latest_master = _get_latest_bed_file(bed_dir, "master_*.bed")
+                if latest_master and _master_bed_is_current(latest_master, source_signature):
+                    log.debug(f"Master BED sources unchanged: {latest_master}")
+                    return latest_master
+
+            log.debug(
+                "Generating master BED file for sample %s (hint counter: %s, attempt: %s)",
+                sample_id,
+                analysis_counter,
+                attempt + 1,
+            )
+            build_result = _build_master_bed_data(
+                sample_id, work_dir, analysis_counter, target_panel, reference, log
+            )
+            if not build_result:
+                return None
+            sorted_df, coverage_data = build_result
+            bed6_cols = ["chrom", "start", "end", "name", "score", "strand"]
+
+            with FileLock(lock_file, timeout=lock_timeout):
+                current_signature = _master_bed_source_signature(
+                    sample_id, work_dir, target_panel, reference
+                )
+                if current_signature != source_signature:
+                    log.debug(f"Master BED sources changed during generation for {sample_id}")
+                    continue
+                latest_master = _get_latest_bed_file(bed_dir, "master_*.bed")
+                if latest_master and _master_bed_is_current(latest_master, current_signature):
+                    log.debug(f"Master BED was generated by another process: {latest_master}")
+                    return latest_master
+
+                from robin.analysis.cnv_analysis import allocate_next_analysis_counter
+
+                write_counter = allocate_next_analysis_counter(sample_id, work_dir, log)
+                master_bed_path = os.path.join(bed_dir, f"master_{write_counter:03d}.bed")
+
+                temporary_path = f"{master_bed_path}.tmp"
+                sorted_df[bed6_cols].to_csv(
+                    temporary_path,
+                    sep="\t",
+                    header=False,
+                    index=False,
+                )
+                os.replace(temporary_path, master_bed_path)
+                _save_master_bed_state(master_bed_path, current_signature)
+                if coverage_data:
+                    _log_bed_coverage_data(
+                        sample_id=sample_id,
+                        work_dir=work_dir,
+                        analysis_counter=write_counter,
+                        coverage_data=coverage_data,
+                    )
+                log.info(
+                    f"Generated master BED file: {master_bed_path} with {len(sorted_df)} regions"
+                )
+
+            # Keep slow readfish TOML work outside the master-BED lock.
+            try:
+                from robin.readfish.analysis_hook import (
+                    ensure_readfish_toml_for_sample_analysis,
+                )
+
+                live_path = ensure_readfish_toml_for_sample_analysis(
                     sample_id=sample_id,
                     work_dir=work_dir,
-                    analysis_counter=analysis_counter,
-                    coverage_data=coverage_data,
+                    master_bed_path=master_bed_path,
+                    target_panel=target_panel,
+                    reference=reference,
                 )
-            log.info(f"Generated master BED file: {master_bed_path} with {len(sorted_df)} regions")
+                if live_path is not None:
+                    log.info(
+                        "readfish TOML synced after master BED: %s",
+                        live_path,
+                    )
+                else:
+                    log.debug(
+                        "readfish TOML not written for sample %s "
+                        "(backend not readfish, missing workflow TOML, or skipped)",
+                        sample_id,
+                    )
+            except Exception:
+                log.warning(
+                    "readfish live target update failed for sample %s",
+                    sample_id,
+                    exc_info=True,
+                )
             return master_bed_path
 
+        log.warning(
+            "Master BED sources kept changing during generation for %s; "
+            "leaving regeneration for the next update",
+            sample_id,
+        )
+        return None
+
     except TimeoutError as e:
-        if os.path.exists(master_bed_path):
+        latest_master = _get_latest_bed_file(bed_dir, "master_*.bed")
+        if latest_master:
             log.debug(
-                f"Master BED was generated by another process while waiting for lock: {master_bed_path}"
+                f"Master BED was generated by another process while waiting for lock: {latest_master}"
             )
-            return master_bed_path
+            return latest_master
         log.error(f"Could not acquire lock for master BED generation: {e}")
         return None
     except Exception as e:
@@ -1246,32 +1532,25 @@ def generate_master_bed_async(
 ) -> None:
     """
     Generate master BED file asynchronously in a background thread (non-blocking).
-    
-    This function checks if the master BED file already exists, and if not,
-    spawns a background thread to generate it. Returns immediately without
-    waiting for generation to complete.
-    
-    Args:
-        sample_id: Sample ID
-        work_dir: Working directory
-        analysis_counter: Current analysis counter
-        target_panel: Target panel name (for gene intersection)
-        logger_instance: Optional logger instance
-        reference: Optional reference genome path
-        
-    Returns:
-        None (returns immediately, generation happens in background)
+
+    Skips spawning a thread when the latest master BED already matches current
+    source content. Each actual write allocates a new analysis counter.
     """
-    # Check if file already exists (idempotency)
+    # Avoid spawning a thread when the source content has not changed.
     sample_dir = os.path.join(work_dir, sample_id)
     bed_dir = os.path.join(sample_dir, "bed_files")
-    master_bed_path = os.path.join(bed_dir, f"master_{analysis_counter:03d}.bed")
-    
-    if os.path.exists(master_bed_path):
+    source_signature = _master_bed_source_signature(
+        sample_id, work_dir, target_panel, reference
+    )
+    latest_master = _get_latest_bed_file(bed_dir, "master_*.bed")
+
+    if latest_master and _master_bed_is_current(latest_master, source_signature):
         if logger_instance:
-            logger_instance.debug(f"Master BED file already exists: {master_bed_path} - skipping async generation")
+            logger_instance.debug(
+                f"Master BED sources unchanged: {latest_master} - skipping async generation"
+            )
         return
-    
+
     # Spawn background thread for generation
     def _generate_in_background():
         try:
@@ -1288,12 +1567,15 @@ def generate_master_bed_async(
             log.error(f"Error in background master BED generation for {sample_id}: {e}")
             import traceback
             log.debug(f"Traceback: {traceback.format_exc()}")
-    
+
     thread = threading.Thread(target=_generate_in_background, daemon=True)
     thread.start()
-    
+
     if logger_instance:
-        logger_instance.debug(f"Spawned background thread for master BED generation: {sample_id} (counter: {analysis_counter})")
+        logger_instance.debug(
+            f"Spawned background thread for master BED generation: {sample_id} "
+            f"(hint counter: {analysis_counter})"
+        )
 
 
 def generate_master_bed_from_files(
@@ -1303,7 +1585,8 @@ def generate_master_bed_from_files(
     master_bed_breakpoints_file: Optional[str] = None,
     target_bed_file: Optional[str] = None,
     output_file: str = "master.bed",
-    expand_cnv_size: int = 10000,
+    expand_cnv_size: Optional[int] = None,
+    sample_dir: Optional[str] = None,
     logger_instance: Optional[logging.Logger] = None,
 ) -> Optional[str]:
     """
@@ -1315,7 +1598,9 @@ def generate_master_bed_from_files(
         fusion_breakpoints_file: Path to fusion breakpoints BED file
         target_bed_file: Path to target gene panel BED file (optional)
         output_file: Path to output master BED file
-        expand_cnv_size: Size to expand CNV regions in base pairs (default 10kb)
+        expand_cnv_size: Explicit pad around CNV edges. When None, uses CNV
+            ``bin_width`` from ``sample_dir`` / inferred sample directory.
+        sample_dir: Sample directory containing ``CNV_dict.npy`` (optional)
         logger_instance: Optional logger instance
         
     Returns:
@@ -1334,7 +1619,24 @@ def generate_master_bed_from_files(
             log.debug(f"Loading CNV regions from: {cnv_regions_file}")
             cnv_df = _load_bed_file(cnv_regions_file)
             if not cnv_df.empty:
-                expanded_df = _expand_cnv_regions(cnv_df, expand_size=expand_cnv_size)
+                resolved_sample_dir = sample_dir
+                if not resolved_sample_dir:
+                    # bed_files/ lives under the sample directory
+                    parent = os.path.dirname(os.path.abspath(cnv_regions_file))
+                    if os.path.basename(parent) == "bed_files":
+                        resolved_sample_dir = os.path.dirname(parent)
+                    else:
+                        resolved_sample_dir = parent
+                expand_size = _resolve_cnv_expand_size(
+                    resolved_sample_dir or "",
+                    expand_size=expand_cnv_size,
+                    log=log,
+                )
+                log.debug(
+                    "Expanding CNV region edges by +/- %s bp",
+                    expand_size,
+                )
+                expanded_df = _expand_cnv_regions(cnv_df, expand_size=expand_size)
                 all_regions.append(expanded_df)
                 log.debug(f"Loaded {len(cnv_df)} CNV regions (converted to {len(expanded_df)} breakpoint regions)")
         
@@ -1454,7 +1756,7 @@ Examples:
   python master_bed_generator.py --cnv-regions new_file_001.bed \\
                                   --cnv-breakpoints breakpoints_001.bed \\
                                   --fusion-breakpoints fusion_breakpoints_001.bed \\
-                                  --target-panel rCNS2_panel_name_uniq.bed \\
+                                  --target-panel rCNS2_panel_source.bed \\
                                   --output master.bed
 
   # Include master BED breakpoints (new target regions from supplementary alignments):
@@ -1516,7 +1818,7 @@ Examples:
         "--target-panel",
         type=str,
         help=(
-            "Path to target gene panel BED file (optional, for intersection). "
+            "Path to the adaptive sampling panel BED file (optional, normally {panel}_panel_source.bed). "
             "Processing: Target regions are loaded and unstranded regions are duplicated for both + and - strands. "
             "All breakpoint regions are kept (not filtered). "
             "All target gene regions are then added to the final output. "
@@ -1532,8 +1834,11 @@ Examples:
     parser.add_argument(
         "--expand-size",
         type=int,
-        default=10000,
-        help="Size to expand CNV regions in base pairs (default: 10000 = 10kb)"
+        default=None,
+        help=(
+            "Pad around CNV region start/end edges in base pairs. "
+            "Default: sample CNV bin_width from CNV_dict.npy (fallback 10000)"
+        ),
     )
     parser.add_argument(
         "--fai-file",

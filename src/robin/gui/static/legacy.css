@@ -1,0 +1,7 @@
+/*
+ * Migration boundary for future CSS rules.
+ *
+ * Rules are now organized in tokens.css, base.css, shell.css,
+ * components.css, pages.css, and batman.css. Keep this file as the final
+ * load-order boundary for any rule that has not yet found a permanent home.
+ */

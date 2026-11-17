@@ -8,8 +8,11 @@ import os
 import sys
 import time
 import re
+import math
+import hashlib
+from bisect import bisect_left
 from dataclasses import dataclass, field
-from typing import Dict, Any, Optional, List, Tuple
+from typing import Dict, Any, Iterable, Optional, List, Tuple
 from pathlib import Path
 
 if sys.version_info < (3, 12):
@@ -17,6 +20,7 @@ if sys.version_info < (3, 12):
 
 import pysam
 from dateutil import parser
+from robin.analysis.bam_sanitize import iter_alignments
 from robin.analysis.master_csv_manager import MasterCSVManager
 from robin.logging_config import get_job_logger
 
@@ -35,6 +39,10 @@ _RG_TAG = "RG"
 _ST_TAG = "st"
 _BASECALL_MODEL_PREFIX = "basecall_model="
 _RUNID_PREFIX = "runid="
+_MODBASE_MODELS_KEY = "modbase_models"
+_CPG_MODBASE_MARKER = "5mCG_5hmCG"
+_ALL_CONTEXT_MODBASE_MARKER = "5mC_5hmC"
+_UNRESOLVED_MODBASE_MODEL_VALUES = frozenset({"modbase_model_version_id"})
 
 # Optional: configure BAM read threads via environment variable (pysam/htslib BGZF threads)
 # Set LJ_BAM_THREADS=4 (or higher) to enable multi-threaded decompression when reading BAMs.
@@ -54,6 +62,15 @@ _PROCESS_LARGE_BAMS_INDIVIDUALLY = os.getenv("ROBIN_PROCESS_LARGE_BAMS", "0").st
 _MGMT_CHR = "chr10"
 _MGMT_START = 129466536
 _MGMT_END = 129467536
+
+# Compact log-spaced histogram for on/off-target read-length medians.
+# Bins cover 50 bp .. 500 kb so Nanopore adaptive-sampling lengths fit.
+_LENGTH_HIST_MIN = 50.0
+_LENGTH_HIST_MAX = 500_000.0
+_LENGTH_HIST_BINS = 40
+_LENGTH_HIST_LOG_MIN = math.log(_LENGTH_HIST_MIN)
+_LENGTH_HIST_LOG_SPAN = math.log(_LENGTH_HIST_MAX) - _LENGTH_HIST_LOG_MIN
+_TARGET_INTERVAL_CACHE: Dict[str, Tuple[float, "TargetIntervalIndex"]] = {}
 
 # ============================================================================
 # DATA STRUCTURES
@@ -75,6 +92,325 @@ class BamMetadata:
             self.extracted_data = {}
         if self.processing_steps is None:
             self.processing_steps = []
+
+
+def _persist_supplementary_read_ids(
+    metadata: BamMetadata,
+    bam_path: str,
+    work_dir: str,
+) -> None:
+    """Persist a complete supplementary-read ID set under a BAM-specific path."""
+    supp_ids = metadata.extracted_data.get("supplementary_read_ids", [])
+    metadata.extracted_data["supplementary_read_ids_complete"] = True
+    metadata.extracted_data["supplementary_read_ids_count"] = len(supp_ids)
+    if not supp_ids:
+        metadata.extracted_data.pop("supplementary_read_ids", None)
+        metadata.extracted_data.pop("supplementary_read_ids_path", None)
+        return
+
+    sample_id = metadata.extracted_data.get("sample_id", "unknown")
+    supp_dir = os.path.join(work_dir, sample_id, "_supplementary_read_ids")
+    os.makedirs(supp_dir, exist_ok=True)
+    path_hash = hashlib.sha256(os.path.abspath(bam_path).encode("utf-8")).hexdigest()[:16]
+    supp_path = os.path.join(
+        supp_dir,
+        f"{os.path.basename(bam_path)}.{path_hash}.txt",
+    )
+    tmp_path = f"{supp_path}.tmp"
+    with open(tmp_path, "w") as f:
+        for read_id in sorted(supp_ids):
+            f.write(f"{read_id}\n")
+    os.replace(tmp_path, supp_path)
+    metadata.extracted_data["supplementary_read_ids_path"] = supp_path
+    metadata.extracted_data.pop("supplementary_read_ids", None)
+
+
+# ============================================================================
+# ON / OFF-TARGET READ LENGTH
+# ============================================================================
+
+
+def normalize_contig_name(name: str | None) -> str:
+    """Normalise contig labels so ``1`` and ``chr1`` share an index key."""
+    raw = "" if name is None else str(name).strip()
+    if not raw:
+        return ""
+    lower = raw.lower()
+    if lower in {"m", "mt", "chrm", "chrmt"}:
+        return "chrM"
+    rest = raw[3:] if lower.startswith("chr") else raw
+    if rest.upper() in {"X", "Y"}:
+        return f"chr{rest.upper()}"
+    if rest.upper() in {"M", "MT"}:
+        return "chrM"
+    return f"chr{rest}"
+
+
+def _merge_intervals(intervals: List[Tuple[int, int]]) -> List[Tuple[int, int]]:
+    if not intervals:
+        return []
+    ordered = sorted((int(start), int(end)) for start, end in intervals if end > start)
+    if not ordered:
+        return []
+    merged = [ordered[0]]
+    for start, end in ordered[1:]:
+        last_start, last_end = merged[-1]
+        if start <= last_end:
+            merged[-1] = (last_start, max(last_end, end))
+        else:
+            merged.append((start, end))
+    return merged
+
+
+@dataclass(slots=True)
+class TargetIntervalIndex:
+    """Per-chromosome merged intervals with binary-search overlap tests."""
+
+    starts_by_chrom: Dict[str, List[int]]
+    ends_by_chrom: Dict[str, List[int]]
+
+    def overlaps(self, chrom: str | None, start: int, end: int) -> bool:
+        if end <= start:
+            return False
+        key = normalize_contig_name(chrom)
+        starts = self.starts_by_chrom.get(key)
+        if not starts:
+            return False
+        ends = self.ends_by_chrom[key]
+        idx = bisect_left(starts, end) - 1
+        return idx >= 0 and ends[idx] > start
+
+
+def load_target_interval_index(bed_path: str | Path) -> Optional[TargetIntervalIndex]:
+    """Load a panel BED into a contig-normalised interval index."""
+    path = Path(bed_path)
+    if not path.is_file():
+        return None
+
+    intervals: Dict[str, List[Tuple[int, int]]] = {}
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            for line in handle:
+                text = line.strip()
+                if not text or text.startswith("#"):
+                    continue
+                parts = text.split("\t")
+                if len(parts) < 3:
+                    continue
+                try:
+                    start = int(parts[1])
+                    end = int(parts[2])
+                except (TypeError, ValueError):
+                    continue
+                if end <= start:
+                    continue
+                key = normalize_contig_name(parts[0])
+                if not key:
+                    continue
+                intervals.setdefault(key, []).append((start, end))
+    except OSError:
+        return None
+
+    if not intervals:
+        return None
+
+    starts_by_chrom: Dict[str, List[int]] = {}
+    ends_by_chrom: Dict[str, List[int]] = {}
+    for chrom, raw in intervals.items():
+        merged = _merge_intervals(raw)
+        starts_by_chrom[chrom] = [start for start, _end in merged]
+        ends_by_chrom[chrom] = [end for _start, end in merged]
+    return TargetIntervalIndex(starts_by_chrom, ends_by_chrom)
+
+
+def get_target_interval_index(bed_path: str | Path) -> Optional[TargetIntervalIndex]:
+    """Return a cached interval index keyed by BED path and mtime."""
+    path = os.fspath(bed_path)
+    try:
+        mtime = os.path.getmtime(path)
+    except OSError:
+        return None
+    cached = _TARGET_INTERVAL_CACHE.get(path)
+    if cached and cached[0] == mtime:
+        return cached[1]
+    index = load_target_interval_index(path)
+    if index is not None:
+        _TARGET_INTERVAL_CACHE[path] = (mtime, index)
+    return index
+
+
+def resolve_target_bed_from_metadata(metadata: Optional[Dict[str, Any]]) -> Optional[str]:
+    """Resolve a panel BED from job metadata (explicit path or panel name)."""
+    if not metadata:
+        return None
+
+    for key in ("target_bed", "bedfile"):
+        explicit = metadata.get(key)
+        if explicit not in (None, "") and os.path.isfile(str(explicit)):
+            return str(explicit)
+
+    panel = metadata.get("target_panel")
+    if panel in (None, ""):
+        return None
+    try:
+        from robin.utils.sequencing_files import resolve_panel_bed_path
+
+        resolved = resolve_panel_bed_path(str(panel).strip())
+    except Exception:
+        return None
+    if resolved is not None and resolved.is_file():
+        return str(resolved)
+    return None
+
+
+def length_hist_bin(length: int) -> int:
+    """Map a read length onto a log-spaced histogram bin."""
+    if length <= _LENGTH_HIST_MIN:
+        return 0
+    if length >= _LENGTH_HIST_MAX:
+        return _LENGTH_HIST_BINS - 1
+    frac = (math.log(float(length)) - _LENGTH_HIST_LOG_MIN) / _LENGTH_HIST_LOG_SPAN
+    return min(_LENGTH_HIST_BINS - 1, max(0, int(frac * _LENGTH_HIST_BINS)))
+
+
+def length_hist_bin_edges() -> List[float]:
+    """Inclusive lower edges plus a final upper edge for the length histogram."""
+    edges = [
+        math.exp(_LENGTH_HIST_LOG_MIN + (_LENGTH_HIST_LOG_SPAN * i / _LENGTH_HIST_BINS))
+        for i in range(_LENGTH_HIST_BINS)
+    ]
+    edges.append(_LENGTH_HIST_MAX)
+    return edges
+
+
+def length_hist_bin_centers() -> List[float]:
+    edges = length_hist_bin_edges()
+    return [math.sqrt(edges[i] * edges[i + 1]) for i in range(_LENGTH_HIST_BINS)]
+
+
+def encode_length_histogram(counts: Iterable[int]) -> str:
+    values = [max(0, int(v)) for v in counts]
+    if len(values) < _LENGTH_HIST_BINS:
+        values.extend([0] * (_LENGTH_HIST_BINS - len(values)))
+    return ",".join(str(v) for v in values[:_LENGTH_HIST_BINS])
+
+
+def decode_length_histogram(encoded: Any) -> List[int]:
+    if encoded in (None, "", "nan"):
+        return [0] * _LENGTH_HIST_BINS
+    if isinstance(encoded, float) and math.isnan(encoded):
+        return [0] * _LENGTH_HIST_BINS
+    text = str(encoded).strip()
+    if not text or text.lower() == "nan":
+        return [0] * _LENGTH_HIST_BINS
+    counts: List[int] = []
+    for part in text.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        try:
+            counts.append(max(0, int(float(part))))
+        except (TypeError, ValueError):
+            counts.append(0)
+    if len(counts) < _LENGTH_HIST_BINS:
+        counts.extend([0] * (_LENGTH_HIST_BINS - len(counts)))
+    return counts[:_LENGTH_HIST_BINS]
+
+
+def merge_length_histograms(existing: Any, incoming: Any) -> str:
+    left = decode_length_histogram(existing)
+    right = decode_length_histogram(incoming)
+    return encode_length_histogram(a + b for a, b in zip(left, right))
+
+
+def median_from_length_histogram(counts: Iterable[int]) -> Optional[float]:
+    """Approximate the median read length from a log-spaced histogram."""
+    values = [max(0, int(v)) for v in counts]
+    total = sum(values)
+    if total <= 0:
+        return None
+    centers = length_hist_bin_centers()
+    low_rank = (total + 1) // 2
+    high_rank = low_rank if total % 2 else (total + 2) // 2
+    found: List[float] = []
+    cumulative = 0
+    for count, center in zip(values, centers):
+        previous = cumulative
+        cumulative += count
+        if previous < low_rank <= cumulative:
+            found.append(float(center))
+        if high_rank != low_rank and previous < high_rank <= cumulative:
+            found.append(float(center))
+        if len(found) >= (1 if high_rank == low_rank else 2):
+            break
+    if not found:
+        return None
+    return sum(found) / len(found)
+
+
+def format_read_length(length_bp: float | None) -> str:
+    if length_bp is None:
+        return "—"
+    try:
+        value = float(length_bp)
+    except (TypeError, ValueError):
+        return "—"
+    if not math.isfinite(value) or value < 0:
+        return "—"
+    if value >= 1000:
+        return f"{value / 1000:.1f} kb"
+    return f"{value:.0f} bp"
+
+
+def summarize_on_off_target_lengths(row: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """Derive mean/median on- and off-target lengths from master.csv counters."""
+    data = row or {}
+
+    def _as_int(key: str) -> int:
+        try:
+            return max(0, int(float(data.get(key, 0) or 0)))
+        except (TypeError, ValueError):
+            return 0
+
+    on_reads = _as_int("counter_on_target_reads")
+    off_reads = _as_int("counter_off_target_reads")
+    on_bases = _as_int("counter_on_target_bases")
+    off_bases = _as_int("counter_off_target_bases")
+    on_hist = decode_length_histogram(data.get("on_target_length_hist"))
+    off_hist = decode_length_histogram(data.get("off_target_length_hist"))
+    mean_on = (on_bases / on_reads) if on_reads else None
+    mean_off = (off_bases / off_reads) if off_reads else None
+    return {
+        "on_target_reads": on_reads,
+        "off_target_reads": off_reads,
+        "on_target_bases": on_bases,
+        "off_target_bases": off_bases,
+        "mean_on_target_length": mean_on,
+        "mean_off_target_length": mean_off,
+        "median_on_target_length": median_from_length_histogram(on_hist),
+        "median_off_target_length": median_from_length_histogram(off_hist),
+        "on_target_length_hist": on_hist,
+        "off_target_length_hist": off_hist,
+        "hist_bin_centers": length_hist_bin_centers(),
+        "available": (on_reads + off_reads) > 0,
+    }
+
+
+def load_on_off_target_length_stats(sample_dir: str | Path) -> Dict[str, Any]:
+    """Read accumulated on/off-target length stats from a sample master.csv."""
+    empty = summarize_on_off_target_lengths({})
+    master_csv = Path(sample_dir) / "master.csv"
+    if not master_csv.is_file():
+        return empty
+    try:
+        import pandas as pd
+
+        frame = pd.read_csv(master_csv)
+        if frame.empty:
+            return empty
+        return summarize_on_off_target_lengths(frame.iloc[0].to_dict())
+    except Exception:
+        return empty
 
 
 # ============================================================================
@@ -107,17 +443,14 @@ def get_rg_tags_from_bam(sam_file) -> Optional[Tuple[Optional[str], ...]]:
     dt_tag = rg_tag.get("DT")
     ds_tag = rg_tag.get("DS", "")
 
-    # Optimize string splitting and processing
-    if ds_tag:
-        ds_tags = ds_tag.split(" ")
-        ds_tags_len = len(ds_tags)
-        basecall_model_tag = (
-            ds_tags[1].removeprefix(_BASECALL_MODEL_PREFIX) if ds_tags_len > 1 else None
-        )
-        runid_tag = ds_tags[0].removeprefix(_RUNID_PREFIX) if ds_tags else None
-    else:
-        basecall_model_tag = None
-        runid_tag = None
+    ds_fields = {}
+    for token in ds_tag.split():
+        key, separator, value = token.partition("=")
+        if separator:
+            ds_fields[key] = value
+    basecall_model_tag = ds_fields.get(_BASECALL_MODEL_PREFIX.removesuffix("="))
+    runid_tag = ds_fields.get(_RUNID_PREFIX.removesuffix("="))
+    modbase_models_tag = ds_fields.get(_MODBASE_MODELS_KEY)
 
     lb_tag = rg_tag.get("LB")
     pl_tag = rg_tag.get("PL")
@@ -135,47 +468,107 @@ def get_rg_tags_from_bam(sam_file) -> Optional[Tuple[Optional[str], ...]]:
         pm_tag,
         pu_tag,
         al_tag,
+        modbase_models_tag,
     )
 
 
-def _extract_sample_id_from_bam(bam_path: str) -> str:
+def _is_unresolved_modbase_model(modbase_models: Optional[str]) -> bool:
+    """Return True when the BAM only records an unresolved modbase model placeholder."""
+    if not modbase_models:
+        return False
+    return modbase_models.strip().lower() in _UNRESOLVED_MODBASE_MODEL_VALUES
+
+
+def _get_modbase_model_warning_level(modbase_models: Optional[str]) -> str:
+    """Return ``info`` for unknown model placeholders, else ``warning``."""
+    if modbase_models and _is_unresolved_modbase_model(modbase_models):
+        return "info"
+    return "warning"
+
+
+def _get_modbase_model_warning(modbase_models: Optional[str]) -> Optional[str]:
+    """Return a user-facing warning for unsupported methylation model settings."""
+    if modbase_models and _CPG_MODBASE_MARKER in modbase_models:
+        return None
+    if modbase_models and _ALL_CONTEXT_MODBASE_MARKER in modbase_models:
+        return (
+            f"BAM uses all-context methylation calling ({modbase_models}). "
+            "Methylation classifications may be incorrect and slower than expected. "
+            "Use 5mCG_5hmCG modbase calling, which restricts methylation calling "
+            "to CpG contexts."
+        )
+    if modbase_models and _is_unresolved_modbase_model(modbase_models):
+        return (
+            "The BAM header does not record which modbase model was used. "
+            "Compatibility with the recommended 5mCG_5hmCG configuration could not "
+            "be verified."
+        )
+    if modbase_models:
+        return (
+            f"BAM reports modbase models without 5mCG_5hmCG ({modbase_models}). "
+            "Methylation classifications may be incorrect. Use 5mCG_5hmCG "
+            "modbase calling in CpG contexts."
+        )
+    return (
+        "BAM header does not report modbase_models. Methylation classifications "
+        "may be incorrect. Use 5mCG_5hmCG modbase calling in CpG contexts."
+    )
+
+
+def _assigned_sample_id(
+    lb_tag: Optional[str], runid_tag: Optional[str]
+) -> str:
+    """Return the library name, or the run id when the library name is absent."""
+    library = (lb_tag or "").strip()
+    if library:
+        return library
+    return (runid_tag or "").strip()
+
+
+def _unassigned_sample_result(
+    filename: str, directory: str, file_size: int, bam_path: str
+) -> Dict[str, Any]:
+    """Metadata for a BAM that must not be turned into a sample."""
+    state = _PASS_STR if _PASS_STR in bam_path else _FAIL_STR
+    return {
+        "sample_id": "",
+        "sample_id_unassigned": True,
+        "file_size": file_size,
+        "state": state,
+        "filename": filename,
+        "directory": directory,
+    }
+
+
+def _extract_sample_id_from_bam(
+    bam_path: str,
+    *,
+    detect_barcodes: bool = True,
+) -> str:
     """
     Extract sample ID from BAM file read group tags (and, if needed, a quick
     barcode probe).
+
+    The sample id is the read-group library name (LB), or the run id from DS
+    when LB is absent. Returns an empty string when neither is present.
+    Callers must not invent a sample id from the filename.
 
     This is used both as a fallback when comprehensive processing fails and as
     an early probe to decide whether this BAM's sample output directory
     already exists (idempotency for re-adding watch folders).
     """
     try:
-        bam_basename = os.path.basename(bam_path)
-        unknown_fallback = f"unknown_sample_{bam_basename}"
-
-        with pysam.AlignmentFile(bam_path, "rb") as bam:
-            # Get read group tags
-            rg_tags = bam.header.get(_RG_TAG, [])
+        with pysam.AlignmentFile(bam_path, "rb", check_sq=False) as bam:
+            rg_tags = get_rg_tags_from_bam(bam)
             if not rg_tags:
-                return unknown_fallback
+                return ""
 
-            # Process only the first RG tag for efficiency
-            rg_tag = rg_tags[0]
+            sample_id = _assigned_sample_id(rg_tags[4], rg_tags[3])
+            if not sample_id:
+                return ""
 
-            # Look for LB (Library) tag which contains the sample ID
-            lb_tag = rg_tag.get("LB")
-            if lb_tag:
-                sample_id = lb_tag
-            else:
-                # Fallback to runid from DS tag per ONT specification
-                ds_tag = rg_tag.get("DS", "")
-                if ds_tag:
-                    ds_tags = ds_tag.split(" ")
-                    if ds_tags and ds_tags[0].startswith(_RUNID_PREFIX):
-                        runid = ds_tags[0].removeprefix(_RUNID_PREFIX)
-                        sample_id = runid if runid else unknown_fallback
-                    else:
-                        sample_id = unknown_fallback
-                else:
-                    sample_id = unknown_fallback
+            if not detect_barcodes:
+                return sample_id
 
             # If the sample_id already ends with a barcode, we are done.
             if _BARCODE_PATTERN.search(sample_id):
@@ -205,8 +598,8 @@ def _extract_sample_id_from_bam(bam_path: str) -> str:
             return sample_id
 
     except Exception:
-        # If pysam fails, return a stable directory-safe fallback.
-        return f"unknown_sample_{os.path.basename(bam_path)}"
+        # Unreadable headers are not assigned a sample id.
+        return ""
 
 
 # ============================================================================
@@ -214,7 +607,12 @@ def _extract_sample_id_from_bam(bam_path: str) -> str:
 # ============================================================================
 
 
-def process_bam_reads(bam_file: str) -> Optional[Dict[str, Any]]:
+def process_bam_reads(
+    bam_file: str,
+    *,
+    detect_barcodes: bool = True,
+    target_bed: str | Path | None = None,
+) -> Optional[Dict[str, Any]]:
     """
     Processes the reads in the BAM file and aggregates information.
     This is the main processing step that analyzes all reads in the file.
@@ -222,6 +620,8 @@ def process_bam_reads(bam_file: str) -> Optional[Dict[str, Any]]:
 
     Args:
         bam_file: Path to the BAM file
+        target_bed: Optional panel BED used to classify primary mapped reads
+            as on-target (alignment overlaps a panel interval) or off-target.
 
     Returns:
         Optional[Dict[str, Any]]: A dictionary containing aggregated read information,
@@ -250,18 +650,12 @@ def process_bam_reads(bam_file: str) -> Optional[Dict[str, Any]]:
             if not rg_tags:
                 return None
 
-            # Step 2: Determine sample ID
-            # Ensure sample_id is not None - use runid as fallback per ONT specification
-            # LB tag is optional, but runid from DS tag is always present
-            sample_id = (
-                rg_tags[4]  # LB (Library) tag
-                if rg_tags[4]
-                else (
-                    rg_tags[3]  # runid from DS tag as fallback
-                    if rg_tags[3]
-                    else f"unknown_sample_{os.path.basename(bam_file)}"
-                )  # filename as final fallback
-            )
+            # Step 2: Determine sample ID from the header.
+            # LB is the library/sample name. Run id is the fallback when LB is
+            # absent. A missing name is not replaced with the filename.
+            sample_id = _assigned_sample_id(rg_tags[4], rg_tags[3])
+            if not sample_id:
+                return {"sample_id": "", "sample_id_unassigned": True}
 
             # Step 3: Initialize data structures
             # Pre-allocate dictionary with known size for better performance
@@ -275,12 +669,14 @@ def process_bam_reads(bam_file: str) -> Optional[Dict[str, Any]]:
                 "flow_cell_id": rg_tags[7],
                 "device_position": rg_tags[6],
                 "al": rg_tags[8],
+                "modbase_models": rg_tags[9],
                 "state": state,
                 "last_start": None,
                 "elapsed_time": None,
             }
 
             # Initialize counters as local integers for faster hot-loop updates
+            primary_read_count = 0
             mapped_reads = 0
             unmapped_reads = 0
             yield_tracking = 0
@@ -306,10 +702,21 @@ def process_bam_reads(bam_file: str) -> Optional[Dict[str, Any]]:
             has_mgmt_reads = False
             mgmt_read_count = 0
 
+            target_index = (
+                get_target_interval_index(target_bed) if target_bed else None
+            )
+            classify_target = target_index.overlaps if target_index is not None else None
+            on_target_reads = 0
+            off_target_reads = 0
+            on_target_bases = 0
+            off_target_bases = 0
+            on_target_length_hist = [0] * _LENGTH_HIST_BINS
+            off_target_length_hist = [0] * _LENGTH_HIST_BINS
+
             # Step 4: Process reads in streaming fashion
-            for read in sam_file.fetch(until_eof=True):
+            for read in iter_alignments(sam_file, until_eof=True):
                 # Extract RG tag and check for barcode - early termination optimization
-                if not barcode_found and read.has_tag(_RG_TAG):
+                if detect_barcodes and not barcode_found and read.has_tag(_RG_TAG):
                     rg_tag = read.get_tag(_RG_TAG)
                     # Use compiled regex pattern for barcode detection
                     barcode_match = _BARCODE_PATTERN.search(rg_tag)
@@ -349,7 +756,11 @@ def process_bam_reads(bam_file: str) -> Optional[Dict[str, Any]]:
                 if has_supplementary_alignments:
                     reads_with_supplementary.add(query_name)
 
-                if not is_secondary:  # Only process primary alignments
+                if not is_secondary:  # Primary, supplementary and unmapped records
+                    if not is_supplementary:
+                        # One record per read (its primary alignment or its
+                        # unmapped record), the unit MinKNOW uses for reads per file.
+                        primary_read_count += 1
                     if not is_unmapped:
                         mapped_reads += 1
                         mapped_bases += read_length
@@ -359,6 +770,28 @@ def process_bam_reads(bam_file: str) -> Optional[Dict[str, Any]]:
                         else:
                             fail_mapped_bases += read_length
                             fail_mapped_reads_num += 1
+
+                        if (
+                            classify_target is not None
+                            and not is_supplementary
+                            and read_length > 0
+                        ):
+                            ref_start = read.reference_start
+                            ref_end = read.reference_end
+                            if (
+                                ref_start is not None
+                                and ref_end is not None
+                                and classify_target(
+                                    read.reference_name, ref_start, ref_end
+                                )
+                            ):
+                                on_target_reads += 1
+                                on_target_bases += read_length
+                                on_target_length_hist[length_hist_bin(read_length)] += 1
+                            else:
+                                off_target_reads += 1
+                                off_target_bases += read_length
+                                off_target_length_hist[length_hist_bin(read_length)] += 1
 
                         # Check for MGMT reads (chr10:129466536-129467536)
                         if not has_mgmt_reads and read.reference_name == _MGMT_CHR:
@@ -393,6 +826,7 @@ def process_bam_reads(bam_file: str) -> Optional[Dict[str, Any]]:
             # Step 5: Finalize data
             # Build counters dict once
             counters = {
+                "primary_read_count": primary_read_count,
                 "mapped_reads": mapped_reads,
                 "unmapped_reads": unmapped_reads,
                 "yield_tracking": yield_tracking,
@@ -419,6 +853,7 @@ def process_bam_reads(bam_file: str) -> Optional[Dict[str, Any]]:
             # OPTIMIZATION: Only store boolean flag and count, not the actual read IDs by default.
             # However, tests expect the list of unique read IDs; keep the behavior identical.
             bam_read["has_supplementary_reads"] = len(reads_with_supplementary) > 0
+            bam_read["supplementary_read_ids_complete"] = True
             bam_read["supplementary_read_ids"] = (
                 list(reads_with_supplementary) if reads_with_supplementary else []
             )
@@ -426,6 +861,16 @@ def process_bam_reads(bam_file: str) -> Optional[Dict[str, Any]]:
             # Add MGMT read information to metadata
             bam_read["has_mgmt_reads"] = has_mgmt_reads
             bam_read["mgmt_read_count"] = mgmt_read_count
+            bam_read["on_target_reads"] = on_target_reads
+            bam_read["off_target_reads"] = off_target_reads
+            bam_read["on_target_bases"] = on_target_bases
+            bam_read["off_target_bases"] = off_target_bases
+            bam_read["on_target_length_hist"] = encode_length_histogram(
+                on_target_length_hist
+            )
+            bam_read["off_target_length_hist"] = encode_length_histogram(
+                off_target_length_hist
+            )
 
             # Parse dates once at the end instead of during the loop
             if last_start and bam_read["time_of_run"]:
@@ -501,6 +946,7 @@ def calculate_bam_summary(bam_data: Dict[str, Any]) -> Dict[str, Any]:
 
     # Pre-allocate result dictionary with known size
     result = {
+        "primary_read_count": bam_data.get("primary_read_count", 0),
         "mapped_reads": bam_data.get("mapped_reads", 0),
         "unmapped_reads": bam_data.get("unmapped_reads", 0),
         "yield_tracking": bam_data.get("yield_tracking", 0),
@@ -531,11 +977,44 @@ def calculate_bam_summary(bam_data: Dict[str, Any]) -> Dict[str, Any]:
         "reads_with_supplementary": bam_data.get("reads_with_supplementary", 0),
         "has_supplementary_reads": bam_data.get("has_supplementary_reads", False),
         # Add supplementary read IDs for fusion analysis
+        "supplementary_read_ids_complete": bam_data.get(
+            "supplementary_read_ids_complete", False
+        ),
         "supplementary_read_ids": bam_data.get("supplementary_read_ids", []),
         # Add MGMT read statistics
         "has_mgmt_reads": bam_data.get("has_mgmt_reads", False),
         "mgmt_read_count": bam_data.get("mgmt_read_count", 0),
+        # On / off-target primary-read length accumulators
+        "on_target_reads": bam_data.get("on_target_reads", 0),
+        "off_target_reads": bam_data.get("off_target_reads", 0),
+        "on_target_bases": bam_data.get("on_target_bases", 0),
+        "off_target_bases": bam_data.get("off_target_bases", 0),
+        "on_target_length_hist": bam_data.get("on_target_length_hist", ""),
+        "off_target_length_hist": bam_data.get("off_target_length_hist", ""),
     }
+
+    on_target_reads = result["on_target_reads"]
+    off_target_reads = result["off_target_reads"]
+    on_target_bases = result["on_target_bases"]
+    off_target_bases = result["off_target_bases"]
+    result["mean_on_target_length"] = (
+        on_target_bases / on_target_reads if on_target_reads > 0 else 0
+    )
+    result["mean_off_target_length"] = (
+        off_target_bases / off_target_reads if off_target_reads > 0 else 0
+    )
+    result["median_on_target_length"] = (
+        median_from_length_histogram(
+            decode_length_histogram(result["on_target_length_hist"])
+        )
+        or 0
+    )
+    result["median_off_target_length"] = (
+        median_from_length_histogram(
+            decode_length_histogram(result["off_target_length_hist"])
+        )
+        or 0
+    )
 
     return result
 
@@ -545,7 +1024,12 @@ def calculate_bam_summary(bam_data: Dict[str, Any]) -> Dict[str, Any]:
 # ============================================================================
 
 
-def extract_bam_metadata(bam_path: str) -> BamMetadata:
+def extract_bam_metadata(
+    bam_path: str,
+    *,
+    detect_barcodes: bool = True,
+    target_bed: str | Path | None = None,
+) -> BamMetadata:
     """
     Extract comprehensive metadata from a BAM file.
     This is the main orchestration function that coordinates all processing steps.
@@ -579,10 +1063,29 @@ def extract_bam_metadata(bam_path: str) -> BamMetadata:
     )
 
     # Step 2: Process BAM reads and extract comprehensive data
-    bam_info = process_bam_reads(bam_path)
+    bam_info = process_bam_reads(
+        bam_path,
+        detect_barcodes=detect_barcodes,
+        target_bed=target_bed,
+    )
+    if bam_info and bam_info.get("sample_id_unassigned"):
+        metadata.extracted_data = _unassigned_sample_result(
+            filename, directory, file_size, bam_path
+        )
+        metadata.processing_steps.append("sample_id_unassigned")
+        return metadata
     if bam_info is None:
         # Fallback to basic extraction if processing fails
-        sample_id = _extract_sample_id_from_bam(bam_path)
+        sample_id = _extract_sample_id_from_bam(
+            bam_path,
+            detect_barcodes=detect_barcodes,
+        )
+        if not sample_id:
+            metadata.extracted_data = _unassigned_sample_result(
+                filename, directory, file_size, bam_path
+            )
+            metadata.processing_steps.append("sample_id_unassigned")
+            return metadata
         state = _PASS_STR if _PASS_STR in bam_path else _FAIL_STR
 
         # Pre-allocate dictionary for better performance
@@ -607,6 +1110,7 @@ def extract_bam_metadata(bam_path: str) -> BamMetadata:
             "platform": bam_info.get("platform"),
             "device_position": bam_info.get("device_position"),
             "basecall_model": bam_info.get("basecall_model"),
+            "modbase_models": bam_info.get("modbase_models"),
             "flow_cell_id": bam_info.get("flow_cell_id"),
             "time_of_run": bam_info.get("time_of_run"),
             "file_path": bam_path,
@@ -628,6 +1132,32 @@ def extract_bam_metadata(bam_path: str) -> BamMetadata:
 # ============================================================================
 # HELPER FUNCTIONS
 # ============================================================================
+
+
+def _missing_sample_message(filename: str) -> str:
+    """User-facing explanation for a BAM that has no assignable sample name."""
+    return (
+        f"No sample name could be assigned for {filename}. "
+        "The BAM header has no library name (LB) or run id, so this file was not processed. "
+        "Other files with the same problem are skipped and listed in the workflow log."
+    )
+
+
+def _skip_bam_without_sample_id(job, logger, bam_path: str) -> None:
+    """Record a deliberate skip so the file is not analysed or given a sample folder."""
+    message = _missing_sample_message(os.path.basename(bam_path))
+    logger.warning(message)
+    job.context.add_metadata("skip_downstream", True)
+    job.context.add_metadata("skip_reason", "missing_sample_id")
+    job.context.add_metadata("sample_id_warning", message)
+    job.context.add_result(
+        "preprocessing",
+        {
+            "status": "skipped",
+            "reason": "missing_sample_id",
+            "message": message,
+        },
+    )
 
 
 def _send_alignment_warning_notification(
@@ -657,6 +1187,28 @@ def _send_alignment_warning_notification(
         )
     except Exception:
         # Fail silently if GUI is not available - logging already happened
+        pass
+
+
+def _send_modbase_warning_notification(
+    warning_msg: str, sample_id: str, filename: str
+) -> None:
+    """Send a methylation model warning to the GUI when available."""
+    try:
+        from robin.gui.app import send_gui_update
+        from robin.gui_launcher import UpdateType
+
+        send_gui_update(
+            UpdateType.WARNING_NOTIFICATION,
+            {
+                "message": warning_msg,
+                "sample_id": sample_id,
+                "filename": filename,
+                "title": "Methylation Model Warning",
+            },
+            priority=5,
+        )
+    except Exception:
         pass
 
 
@@ -717,14 +1269,49 @@ def bam_preprocessing_handler(job, center: str = None):
 
         # Step 2: Extract metadata from BAM file
         logger.debug(f"Extracting metadata from: {bam_path}")
-        metadata = extract_bam_metadata(bam_path)
+        detect_barcodes = job.context.metadata.get("detect_barcodes", True)
+        target_bed = resolve_target_bed_from_metadata(job.context.metadata)
+        metadata = extract_bam_metadata(
+            bam_path,
+            detect_barcodes=detect_barcodes,
+            target_bed=target_bed,
+        )
         logger.debug(f"Extracted metadata: {metadata.extracted_data}")
+
+        sample_id = (metadata.extracted_data.get("sample_id") or "").strip()
+        if (
+            metadata.extracted_data.get("sample_id_unassigned")
+            or not sample_id
+            or sample_id == "unknown"
+            or sample_id.startswith("unknown_sample_")
+        ):
+            # Header did not yield a library name or run id. Do not create a
+            # sample directory and do not continue the workflow for this file.
+            _skip_bam_without_sample_id(job, logger, bam_path)
+            return
 
         # Step 2.5: Check for alignment data and warn if missing
         mapped_reads = metadata.extracted_data.get("mapped_reads", 0)
         unmapped_reads = metadata.extracted_data.get("unmapped_reads", 0)
         total_reads = mapped_reads + unmapped_reads
-        sample_id = metadata.extracted_data.get("sample_id", "unknown")
+
+        modbase_warning = _get_modbase_model_warning(
+            metadata.extracted_data.get("modbase_models")
+        )
+        if modbase_warning:
+            modbase_models = metadata.extracted_data.get("modbase_models")
+            warning_level = _get_modbase_model_warning_level(modbase_models)
+            if warning_level == "info":
+                logger.info(modbase_warning)
+            else:
+                logger.warning(f"WARNING: {modbase_warning}")
+                _send_modbase_warning_notification(
+                    modbase_warning, sample_id, os.path.basename(bam_path)
+                )
+            metadata.extracted_data["modbase_warning"] = modbase_warning
+            metadata.extracted_data["modbase_warning_level"] = warning_level
+            job.context.add_metadata("modbase_warning", modbase_warning)
+            job.context.add_metadata("modbase_warning_level", warning_level)
         
         if total_reads > 0:
             # Check if BAM file has no mapped reads (no alignment data)
@@ -798,11 +1385,10 @@ def bam_preprocessing_handler(job, center: str = None):
         else:
             logger.debug("No reference found in job context")
 
-        # Check read count threshold: skip large BAMs unless ROBIN_PROCESS_LARGE_BAMS is set
+        # Check read count threshold: skip large BAMs unless ROBIN_PROCESS_LARGE_BAMS is set.
+        # Count reads, not alignment records, to match MinKNOW's reads-per-file rollover.
         try:
-            total_reads = int(metadata.extracted_data.get("mapped_reads", 0)) + int(
-                metadata.extracted_data.get("unmapped_reads", 0)
-            )
+            total_reads = int(metadata.extracted_data.get("primary_read_count", 0))
         except Exception:
             total_reads = 0
         
@@ -837,35 +1423,15 @@ def bam_preprocessing_handler(job, center: str = None):
                 # Do not proceed with CSV updates or further processing
                 return
 
-        # Persist supplementary_read_ids to a temp file to avoid retaining large lists in memory
+        # Persist the complete ID set per BAM to avoid retaining large lists in memory.
         try:
-            supp_ids = metadata.extracted_data.get("supplementary_read_ids", [])
-            if supp_ids:
-                sample_id = metadata.extracted_data.get("sample_id", "unknown")
-                # Determine work directory for file storage
-                work_dir = job.context.metadata.get(
-                    "work_dir", os.path.dirname(bam_path)
-                )
-                sample_dir = os.path.join(work_dir, sample_id)
-                os.makedirs(sample_dir, exist_ok=True)
-                supp_path = os.path.join(sample_dir, "supplementary_read_ids.txt")
-                # Write one ID per line (atomic write)
-                tmp_path = supp_path + ".tmp"
-                with open(tmp_path, "w") as f:
-                    for rid in supp_ids:
-                        f.write(f"{rid}\n")
-                os.replace(tmp_path, supp_path)
-                # Record path and count in metadata
-                metadata.extracted_data["supplementary_read_ids_path"] = supp_path
-                metadata.extracted_data["supplementary_read_ids_count"] = len(supp_ids)
-                # Prune the potentially very large in-memory list to keep Ray results small
-                metadata.extracted_data.pop("supplementary_read_ids", None)
-            else:
-                # Ensure list isn't carried forward even if empty
-                metadata.extracted_data.pop("supplementary_read_ids", None)
+            work_dir = job.context.metadata.get(
+                "work_dir", os.path.dirname(bam_path)
+            )
+            _persist_supplementary_read_ids(metadata, bam_path, work_dir)
         except Exception:
-            # Non-fatal if we cannot persist; continue
-            pass
+            # Keep the complete in-memory list as a safe fallback.
+            metadata.extracted_data.pop("supplementary_read_ids_path", None)
 
         # Step 4: Update master.csv if we have comprehensive data
         if metadata.extracted_data and "sample_id" in metadata.extracted_data:
@@ -899,6 +1465,12 @@ def bam_preprocessing_handler(job, center: str = None):
                     "reads_with_supplementary",
                     "has_mgmt_reads",
                     "mgmt_read_count",
+                    "on_target_reads",
+                    "off_target_reads",
+                    "on_target_bases",
+                    "off_target_bases",
+                    "on_target_length_hist",
+                    "off_target_length_hist",
                 )
                 bam_stats = {key: metadata.extracted_data.get(key, 0) for key in _bam_stat_keys}
 
@@ -940,11 +1512,22 @@ def bam_preprocessing_handler(job, center: str = None):
                 "reads_with_supplementary": metadata.extracted_data.get(
                     "reads_with_supplementary", 0
                 ),
+                "supplementary_read_ids_complete": metadata.extracted_data.get(
+                    "supplementary_read_ids_complete", False
+                ),
+                "supplementary_read_ids_path": metadata.extracted_data.get(
+                    "supplementary_read_ids_path"
+                ),
+                "supplementary_read_ids_count": metadata.extracted_data.get(
+                    "supplementary_read_ids_count", 0
+                ),
                 "supplementary_read_ids": metadata.extracted_data.get(
                     "supplementary_read_ids", []
                 ),
                 "has_mgmt_reads": metadata.extracted_data.get("has_mgmt_reads", False),
                 "mgmt_read_count": metadata.extracted_data.get("mgmt_read_count", 0),
+                "modbase_models": metadata.extracted_data.get("modbase_models"),
+                "modbase_warning": metadata.extracted_data.get("modbase_warning"),
             },
         )
 
@@ -952,6 +1535,9 @@ def bam_preprocessing_handler(job, center: str = None):
         logger.info(f"Preprocessing complete for {os.path.basename(bam_path)}")
         logger.info(f"Sample ID: {metadata.extracted_data.get('sample_id', 'unknown')}")
         logger.info(f"State: {metadata.extracted_data.get('state', 'unknown')}")
+        logger.info(
+            f"Reads (counted toward the 50,000 limit): {metadata.extracted_data.get('primary_read_count', 0):,}"
+        )
         logger.info(f"Mapped reads: {metadata.extracted_data.get('mapped_reads', 0):,}")
         logger.info(
             f"Unmapped reads: {metadata.extracted_data.get('unmapped_reads', 0):,}"
@@ -986,6 +1572,24 @@ def bam_preprocessing_handler(job, center: str = None):
             )
         else:
             logger.info("No MGMT reads found")
+
+        on_target_reads = metadata.extracted_data.get("on_target_reads", 0)
+        off_target_reads = metadata.extracted_data.get("off_target_reads", 0)
+        if on_target_reads or off_target_reads:
+            logger.info(
+                "On-target reads: "
+                f"{on_target_reads:,} (mean {format_read_length(metadata.extracted_data.get('mean_on_target_length'))}, "
+                f"median {format_read_length(metadata.extracted_data.get('median_on_target_length'))})"
+            )
+            logger.info(
+                "Off-target reads: "
+                f"{off_target_reads:,} (mean {format_read_length(metadata.extracted_data.get('mean_off_target_length'))}, "
+                f"median {format_read_length(metadata.extracted_data.get('median_off_target_length'))})"
+            )
+        elif target_bed:
+            logger.info(
+                f"No primary mapped reads available to classify against {os.path.basename(str(target_bed))}"
+            )
 
         # Step 7: Detailed debug logging (only if debug is enabled)
         if logger.logger.isEnabledFor(10):  # DEBUG level
@@ -1023,6 +1627,9 @@ def bam_preprocessing_handler(job, center: str = None):
             basecall_model = extracted_data.get("basecall_model")
             if basecall_model:
                 logger.debug(f"Basecall model: {basecall_model}")
+            modbase_models = extracted_data.get("modbase_models")
+            if modbase_models:
+                logger.debug(f"Modbase models: {modbase_models}")
             time_of_run = extracted_data.get("time_of_run")
             if time_of_run:
                 logger.debug(f"Run time: {time_of_run}")

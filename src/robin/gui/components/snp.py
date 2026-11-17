@@ -1,10 +1,13 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
-from pathlib import Path
 import logging
-import json
-from robin.analysis.snp_processing import parse_vcf
+import os
+import threading
+from typing import Any, Callable, Dict, List, Optional
+from pathlib import Path
+from robin.analysis.snp_processing import VariantDisplayStore, VariantTableFilters
+from robin.gui.client_notify import run_javascript_when_connected, schedule_after_page_sent
+from robin.utils.clinvar_manager import compare_sample_clinvar_to_installed
 
 try:
     from nicegui import ui
@@ -12,6 +15,81 @@ except ImportError:  # pragma: no cover
     ui = None
 
 logger = logging.getLogger(__name__)
+
+# Default SNP/INDEL table and detail views for ClinVar-annotated variants.
+VARIANT_TABLE_FIELDS = [
+    "CHROM",
+    "POS",
+    "REF",
+    "ALT",
+    "Gene_Name",
+    "HGVS.p",
+    "Annotation",
+    "Annotation_Impact",
+    "CLNSIG",
+    "ONC",
+    "SCI",
+    "ONCDN",
+    "SCIDN",
+    "FILTER",
+    "QUAL",
+    "GT",
+    "is_clinvar_significant",
+    "details",
+    "action",
+]
+VARIANT_WIDE_FIELDS = {
+    "Gene_Name",
+    "Annotation",
+    "HGVS.p",
+    "CLNSIG",
+    "ONC",
+    "SCI",
+    "ONCDN",
+    "SCIDN",
+}
+VARIANT_DETAIL_FIELDS = [
+    "CHROM",
+    "POS",
+    "ID",
+    "REF",
+    "ALT",
+    "Gene_Name",
+    "HGVS.c",
+    "HGVS.p",
+    "Annotation",
+    "Annotation_Impact",
+    "is_clinvar_significant",
+    "CLNSIG",
+    "ONC",
+    "SCI",
+    "ONCDN",
+    "SCIDN",
+    "CLNDN",
+    "is_pathogenic",
+    "is_vus",
+    "FILTER",
+    "QUAL",
+    "GT",
+]
+VARIANT_COLUMN_LABELS = {
+    "is_clinvar_significant": "ClinVar significant",
+    "is_pathogenic": "Germline pathogenic",
+    "is_vus": "VUS",
+    "ONCDN": "Oncogenic disease",
+    "SCIDN": "Somatic disease",
+    "CLNDN": "Germline disease",
+    "CLNSIG": "CLNSIG (germline)",
+    "ONC": "ONC (oncogenic)",
+    "SCI": "SCI (somatic tier)",
+}
+
+
+def _apply_variant_column_labels(columns: List[Dict[str, Any]]) -> None:
+    for col in columns:
+        field = col.get("field")
+        if field in VARIANT_COLUMN_LABELS:
+            col["label"] = VARIANT_COLUMN_LABELS[field]
 
 
 def navigate_igv_to_snp(chrom: str, pos: int, flank: int = 100) -> None:
@@ -57,32 +135,519 @@ def navigate_igv_to_snp(chrom: str, pos: int, flank: int = 100) -> None:
             }})();
         """
         
-        ui.run_javascript(js_navigate, timeout=5.0)
+        run_javascript_when_connected(js_navigate)
         
     except Exception as e:
         logger.error(f"Error navigating IGV to SNP {chrom}:{pos}: {e}")
 
 
+def _resolve_reference_genome(launcher: Any) -> Optional[str]:
+    reference_genome = None
+    workflow_runner = getattr(launcher, "workflow_runner", None)
+    if workflow_runner is not None:
+        reference_genome = getattr(workflow_runner, "reference", None)
+    if not reference_genome:
+        env_reference = os.environ.get("robin_REFERENCE")
+        if env_reference and os.path.exists(env_reference):
+            reference_genome = env_reference
+    return reference_genome
+
+
+def _submit_snp_workflow_job(
+    launcher: Any,
+    sample_dir: Path,
+    *,
+    annotation_only: bool = False,
+    force_regenerate: bool = False,
+) -> bool:
+    """Queue SNP analysis or annotation-only rerun through the workflow runner."""
+    from robin.analysis.target_analysis import snp_analysis_handler
+    from robin.workflow_simple import Job, WorkflowContext
+
+    work_dir = str(sample_dir.parent)
+    sample_id = sample_dir.name
+    reference_genome = _resolve_reference_genome(launcher)
+
+    metadata: Dict[str, Any] = {
+        "work_dir": work_dir,
+        "threads": 4,
+        "force_regenerate": force_regenerate,
+        "annotation_only": annotation_only,
+        "reference": reference_genome,
+    }
+
+    try:
+        master_csv = sample_dir / "master.csv"
+        if master_csv.exists():
+            import csv
+
+            with master_csv.open("r", newline="", encoding="utf-8") as fh:
+                reader = csv.DictReader(fh)
+                first_row = next(reader, None)
+                if first_row:
+                    panel = str(first_row.get("analysis_panel", "") or "").strip()
+                    if panel:
+                        metadata["target_panel"] = panel
+    except Exception:
+        pass
+
+    context = WorkflowContext(filepath=str(sample_dir), metadata=metadata)
+    context.get_sample_id = lambda: sample_id
+    context.add_result = lambda key, value: None
+    context.add_error = lambda key, value: None
+
+    job = Job(
+        job_id=hash(f"snp_analysis_{sample_id}_{annotation_only}") % 1000000,
+        job_type="snp_analysis",
+        context=context,
+        origin="manual",
+        workflow=["slow:snp_analysis"],
+    )
+
+    workflow_runner = getattr(launcher, "workflow_runner", None)
+    if workflow_runner is not None and hasattr(workflow_runner, "submit_snp_analysis_job"):
+        try:
+            success = workflow_runner.submit_snp_analysis_job(
+                sample_dir=str(sample_dir),
+                sample_id=sample_id,
+                reference=str(reference_genome) if reference_genome else None,
+                threads=4,
+                force_regenerate=force_regenerate,
+                annotation_only=annotation_only,
+            )
+            if success:
+                return True
+        except Exception as exc:
+            logger.warning("Workflow SNP submission failed: %s", exc)
+
+    def _run_handler() -> None:
+        try:
+            snp_analysis_handler(job, work_dir=work_dir)
+        except Exception as exc:
+            logger.error("Direct SNP handler failed: %s", exc)
+
+    threading.Thread(target=_run_handler, daemon=True).start()
+    return True
+
+
+def _add_clinvar_annotation_controls(
+    launcher: Any,
+    sample_dir: Path,
+    *,
+    compact: bool = False,
+    on_status_change: Optional[Callable[[str, str], None]] = None,
+    clinvar_status: Optional[Dict[str, Any]] = None,
+) -> None:
+    """Render ClinVar provenance labels and optional re-annotation trigger."""
+    if ui is None:
+        return
+
+    status = clinvar_status if clinvar_status is not None else compare_sample_clinvar_to_installed(sample_dir)
+    installed_label = status.get("installed_label", "ClinVar (version unknown)")
+    sample_label = status.get("sample_label", "Annotation release not recorded")
+    is_stale = bool(status.get("is_stale"))
+    can_reannotate = bool(status.get("can_reannotate"))
+
+    def _set_status(text: str, tone: str = "meta") -> None:
+        if on_status_change is not None:
+            on_status_change(text, tone)
+
+    with ui.row().classes(
+        "w-full gap-2 mb-2 flex-wrap items-center"
+        if not compact
+        else "w-full gap-2 mb-2 flex-wrap items-center"
+    ):
+        ui.label(f"Annotated with: {sample_label}").classes("classification-insight-meta")
+        ui.label(f"Installed: {installed_label}").classes(
+            "classification-insight-level classification-insight-level--low w-auto"
+            if is_stale
+            else "classification-insight-meta"
+        )
+        if is_stale:
+            ui.label("Newer ClinVar is installed").classes(
+                "classification-insight-level classification-insight-level--low w-auto"
+            )
+
+        if not compact:
+
+            def _start_reannotation() -> None:
+                if not can_reannotate:
+                    ui.notify(
+                        "Existing Clair3 outputs were not found. Run full SNP analysis first.",
+                        type="warning",
+                    )
+                    return
+                submitted = _submit_snp_workflow_job(
+                    launcher,
+                    sample_dir,
+                    annotation_only=True,
+                )
+                if submitted:
+                    ui.notify(
+                        "ClinVar re-annotation started (snpEff/SnpSift). "
+                        "Refresh this page when the job completes.",
+                        type="info",
+                    )
+                    _set_status("ClinVar re-annotation running…", "running")
+                else:
+                    ui.notify("Could not start ClinVar re-annotation.", type="negative")
+                    _set_status("Failed to start ClinVar re-annotation", "error")
+
+            reannotate_button = ui.button(
+                "Re-annotate with current ClinVar",
+                on_click=_start_reannotation,
+            ).props("dense no-caps outline color=secondary")
+            if not can_reannotate:
+                reannotate_button.disable()
+                reannotate_button.props('title="Requires clair3/output_done.vcf.gz"')
+
+
+VARIANT_TABLE_PAGE_MAX = 250
+_UI_ONLY_FIELDS = {"action", "details", "__row_id", "__row_idx"}
+
+
+def _to_float(value: Any) -> Optional[float]:
+    if value is None:
+        return None
+    text = str(value).strip().replace(",", "")
+    if text == "":
+        return None
+    try:
+        return float(text)
+    except (TypeError, ValueError):
+        return None
+
+
+def _compact_variant_row(
+    row: Dict[str, Any],
+    visible_fields: List[str],
+    *,
+    wide_fields: set[str],
+    max_field_length: int = 80,
+) -> Dict[str, Any]:
+    compact: Dict[str, Any] = {}
+    for field_name in visible_fields:
+        value = row.get(field_name, "")
+        text = "" if value is None else str(value)
+        if field_name in wide_fields and len(text) > max_field_length:
+            text = f"{text[:max_field_length - 1]}..."
+        compact[field_name] = text
+    compact["details"] = " "
+    compact["action"] = " "
+    compact["__row_idx"] = int(row.get("__row_idx", -1))
+    return compact
+
+
+def _mount_paged_variant_table(
+    store: VariantDisplayStore,
+    *,
+    details_title: str,
+    event_prefix: str,
+    navigate_region: Callable[[str], None],
+) -> None:
+    """Render one paged SNP/INDEL table backed by ``VariantDisplayStore``."""
+    from robin.gui.theme import (
+        clamp_qtable_server_pagination,
+        styled_server_paged_table,
+        wire_qtable_server_pagination_handlers,
+    )
+
+    columns = list(store.columns or [])
+    column_lookup = {
+        col.get("field"): col
+        for col in columns
+        if isinstance(col, dict) and col.get("field")
+    }
+    visible_fields = [
+        field_name for field_name in VARIANT_TABLE_FIELDS if field_name in column_lookup
+    ]
+    if not visible_fields:
+        visible_fields = [
+            col.get("field")
+            for col in columns[:12]
+            if isinstance(col, dict) and col.get("field") not in _UI_ONLY_FIELDS
+        ]
+
+    display_columns = [column_lookup[field_name].copy() for field_name in visible_fields if field_name in column_lookup]
+    if "details" not in {col.get("field") for col in display_columns}:
+        display_columns.append(
+            {"name": "details", "label": "Details", "field": "details", "sortable": False}
+        )
+    if "action" not in {col.get("field") for col in display_columns}:
+        display_columns.append(
+            {"name": "action", "label": "View in IGV", "field": "action", "sortable": False}
+        )
+    _apply_variant_column_labels(display_columns)
+
+    total_variants = store.total_variants
+    summary = store.summary
+    pathogenic_count = int(summary.get("pathogenic_variants") or 0)
+    significant_count = int(
+        summary.get("clinvar_significant_variants", pathogenic_count) or 0
+    )
+
+    with ui.row().classes("w-full gap-3 mb-3 flex-wrap items-baseline"):
+        ui.label(f"Total variants: {total_variants:,}").classes("classification-insight-meta")
+        if total_variants > 5_000:
+            ui.label(
+                "Large dataset: paging and filters query Parquet on the server "
+                "(only the current page is sent to the browser)."
+            ).classes("classification-insight-meta w-full")
+        if significant_count > 0:
+            ui.label(f"ClinVar significant variants: {significant_count:,}").classes(
+                "classification-insight-level classification-insight-level--low w-auto"
+            )
+        elif pathogenic_count > 0:
+            ui.label(f"Pathogenic variants: {pathogenic_count:,}").classes(
+                "classification-insight-level classification-insight-level--low w-auto"
+            )
+
+    has_dp = store.has_column("DP")
+    with ui.row().classes("w-full gap-2 mb-2 flex-wrap items-end"):
+        pass_only = ui.checkbox("PASS only").props("dense")
+        significant_only = ui.checkbox("ClinVar significant only").props("dense")
+        min_qual = ui.number("Min QUAL", value=None).props("dense outlined clearable").classes("w-32")
+        min_dp = (
+            ui.number("Min DP", value=None).props("dense outlined clearable").classes("w-32")
+            if has_dp
+            else None
+        )
+        search = ui.input("Search (gene/variant)").props(
+            "dense outlined clearable debounce=400"
+        ).classes("w-64")
+        reset_button = ui.button("Reset").props("dense no-caps")
+
+    page_state: Dict[str, Any] = {
+        "filters": VariantTableFilters(search_fields=tuple(visible_fields)),
+    }
+
+    def _current_filters() -> VariantTableFilters:
+        return VariantTableFilters(
+            pass_only=bool(getattr(pass_only, "value", False)),
+            significant_only=bool(getattr(significant_only, "value", False)),
+            min_qual=_to_float(getattr(min_qual, "value", None)),
+            min_dp=_to_float(getattr(min_dp, "value", None)) if has_dp else None,
+            search_text=str(getattr(search, "value", "") or ""),
+            search_fields=tuple(visible_fields),
+        )
+
+    if page_state["filters"].is_active:
+        _rows0, total_filtered0 = store.page(page_state["filters"], offset=0, limit=0)
+    else:
+        total_filtered0 = total_variants
+    init_pagination = clamp_qtable_server_pagination(
+        {
+            "sortBy": None,
+            "descending": False,
+            "page": 1,
+            "rowsPerPage": 100,
+            "rowsNumber": total_filtered0,
+        },
+        rows_number=total_filtered0,
+        rows_per_page_default=100,
+        rows_per_page_max=VARIANT_TABLE_PAGE_MAX,
+    )
+    _, table = styled_server_paged_table(
+        columns=display_columns,
+        rows=[],
+        pagination=init_pagination,
+        row_key="__row_idx",
+        class_size="table-xs",
+    )
+    filtered_count_label = ui.label(
+        f"{total_filtered0:,} variants match filters (of {total_variants:,} total)"
+    ).classes("classification-insight-meta")
+
+    def _fill_from_pagination(pag: Dict[str, Any]) -> None:
+        filters = page_state["filters"]
+        pag = clamp_qtable_server_pagination(
+            pag,
+            rows_number=int(pag.get("rowsNumber") or total_variants),
+            rows_per_page_default=100,
+            rows_per_page_max=VARIANT_TABLE_PAGE_MAX,
+        )
+        rpp = int(pag["rowsPerPage"])
+        page = int(pag["page"])
+        start = (page - 1) * rpp
+        rows, total_filtered = store.page(filters, offset=start, limit=rpp)
+        pag = clamp_qtable_server_pagination(
+            pag,
+            rows_number=total_filtered,
+            rows_per_page_default=100,
+            rows_per_page_max=VARIANT_TABLE_PAGE_MAX,
+        )
+        if int(pag["page"]) != page or int(pag["rowsPerPage"]) != rpp:
+            rpp = int(pag["rowsPerPage"])
+            page = int(pag["page"])
+            start = (page - 1) * rpp
+            rows, total_filtered = store.page(filters, offset=start, limit=rpp)
+        table.rows = [
+            _compact_variant_row(
+                row,
+                visible_fields,
+                wide_fields=VARIANT_WIDE_FIELDS,
+            )
+            for row in rows
+        ]
+        pag["rowsNumber"] = total_filtered
+        table.pagination = pag
+        filtered_count_label.text = (
+            f"{total_filtered:,} variants match filters (of {total_variants:,} total)"
+        )
+        table.update()
+
+    wire_qtable_server_pagination_handlers(table, _fill_from_pagination)
+
+    def _apply_filters() -> None:
+        page_state["filters"] = _current_filters()
+        pag = clamp_qtable_server_pagination(
+            dict(table.pagination),
+            rows_number=0,
+            rows_per_page_default=100,
+            rows_per_page_max=VARIANT_TABLE_PAGE_MAX,
+        )
+        pag["page"] = 1
+        _fill_from_pagination(pag)
+
+    pass_only.on("update:model-value", lambda _e: _apply_filters())
+    significant_only.on("update:model-value", lambda _e: _apply_filters())
+    min_qual.on("update:model-value", lambda _e: _apply_filters())
+    if has_dp and min_dp is not None:
+        min_dp.on("update:model-value", lambda _e: _apply_filters())
+    search.on("update:model-value", lambda _e: _apply_filters())
+    reset_button.on_click(
+        lambda: (
+            setattr(pass_only, "value", False),
+            setattr(significant_only, "value", False),
+            setattr(min_qual, "value", None),
+            has_dp and setattr(min_dp, "value", None),
+            setattr(search, "value", ""),
+            _apply_filters(),
+        )
+    )
+
+    with ui.dialog() as details_dialog, ui.card().classes(
+        "robin-dialog-surface w-[95vw] max-w-6xl max-h-[85vh] overflow-auto "
+        "p-4 md:p-5"
+    ):
+        ui.label(details_title).classes("classification-insight-heading text-headline-small")
+        ui.separator().classes("mgmt-detail-separator")
+        details_container = ui.column().classes("w-full gap-2")
+        with ui.row().classes("w-full justify-end pt-2"):
+            ui.button("Close", on_click=details_dialog.close).props(
+                "color=primary no-caps outline"
+            )
+
+    def show_variant_details(row_idx: int) -> None:
+        row_data = store.fetch_row(int(row_idx))
+        if not row_data:
+            ui.notify("Variant details not found.", type="warning")
+            return
+        details_container.clear()
+        ordered_fields = list(VARIANT_DETAIL_FIELDS) + sorted(
+            [
+                key
+                for key in row_data.keys()
+                if key not in VARIANT_DETAIL_FIELDS and key not in _UI_ONLY_FIELDS
+            ]
+        )
+        with details_container:
+            for field_name in ordered_fields:
+                value = row_data.get(field_name, "")
+                if value is None or str(value) == "":
+                    continue
+                label = VARIANT_COLUMN_LABELS.get(field_name, field_name.replace("_", " "))
+                with ui.row().classes("w-full items-start gap-2"):
+                    ui.label(f"{label}:").classes("text-xs font-semibold min-w-[180px]")
+                    ui.label(str(value)).classes("text-xs whitespace-pre-wrap break-all flex-1")
+        details_dialog.open()
+
+    table.add_slot(
+        "body-cell-details",
+        f"""
+<q-td key="details" :props="props">
+  <q-btn
+    icon="description"
+    size="sm"
+    dense
+    flat
+    color="secondary"
+    @click="$parent.$emit('{event_prefix}-show-details', props.row.__row_idx)"
+    title="Show full details"
+  />
+</q-td>
+""",
+    )
+    table.add_slot(
+        "body-cell-action",
+        f"""
+<q-td key="action" :props="props">
+  <q-btn
+    icon="visibility"
+    size="sm"
+    dense
+    flat
+    color="primary"
+    @click="$parent.$emit('{event_prefix}-view-igv', props.row.__row_idx)"
+    title="View in IGV"
+  />
+</q-td>
+""",
+    )
+
+    def on_view_igv(e: Any) -> None:
+        try:
+            row_idx = getattr(e, "args", None)
+            if row_idx is None:
+                return
+            row = store.fetch_row(int(row_idx))
+            if not row:
+                return
+            chrom = str(row.get("CHROM", "")).strip()
+            pos_text = str(row.get("POS", "")).replace(",", "").strip()
+            if chrom and pos_text:
+                navigate_region(f"{chrom}:{pos_text}")
+        except Exception as exc:
+            logger.debug("Error handling %s IGV view: %s", event_prefix, exc)
+
+    def on_show_details(e: Any) -> None:
+        try:
+            row_idx = getattr(e, "args", None)
+            if row_idx is not None:
+                show_variant_details(int(row_idx))
+        except Exception as exc:
+            logger.debug("Error handling %s details view: %s", event_prefix, exc)
+
+    table.on(f"{event_prefix}-view-igv", on_view_igv)
+    table.on(f"{event_prefix}-show-details", on_show_details)
+    for col in table.columns:
+        col["sortable"] = False
+    _fill_from_pagination(init_pagination)
+    try:
+        def _cleanup() -> None:
+            table.rows = []
+        ui.context.client.on_disconnect(_cleanup)
+    except Exception:
+        pass
+
+
 def add_snp_section(launcher: Any, sample_dir: Path) -> None:
     """
     Add SNP analysis section to the sample details page.
-    
+
     Args:
         launcher: The GUI launcher instance
         sample_dir: Path to the sample directory
     """
     if not sample_dir or not sample_dir.exists():
         return
-    
-    # Look for VCF files in clair3 directory
+
     clair3_dir = sample_dir / "clair3"
     if not clair3_dir.exists():
         return
-    
-    # Look for snpsift_output.vcf (preferred) or other VCF files
-    display_file = clair3_dir / "snpsift_output_display.json"
 
-    if not display_file.exists():
+    snp_store = VariantDisplayStore.open_snp(clair3_dir)
+    if snp_store is None:
         with ui.element("div").classes("classification-insight-shell w-full min-w-0"):
             ui.label("SNP analysis").classes(
                 "classification-insight-heading text-headline-small"
@@ -95,705 +660,125 @@ def add_snp_section(launcher: Any, sample_dir: Path) -> None:
                     ).classes("classification-insight-meta")
         return
 
-    try:
-        with display_file.open("r", encoding="utf-8") as f_in:
-            snp_display = json.load(f_in)
-    except Exception as exc:
-        logger.error(f"Failed to load SNP display data: {exc}")
-        with ui.element("div").classes("classification-insight-shell w-full min-w-0"):
-            ui.label("SNP analysis").classes(
-                "classification-insight-heading text-headline-small"
-            )
-            with ui.element("div").classes("classification-insight-card w-full min-w-0"):
-                with ui.column().classes("w-full min-w-0 gap-2 p-2 md:p-3"):
-                    ui.label(
-                        "Could not load SNP variant data. Check logs for details."
-                    ).classes("classification-insight-level classification-insight-level--low w-full")
-        return
-
-    columns: List[Dict[str, Any]] = snp_display.get("columns", [])
-    rows_all: List[Dict[str, Any]] = snp_display.get("rows_all", [])
-    rows_pathogenic: List[Dict[str, Any]] = snp_display.get("rows_pathogenic", [])
-    summary: Dict[str, Any] = snp_display.get("summary", {})
-    snp_regions_map: Dict[str, Dict[str, int]] = snp_display.get("snp_regions_map", {})
-
-    total_variants = summary.get("total_variants", len(rows_all))
-    pathogenic_count = summary.get("pathogenic_variants", len(rows_pathogenic))
-
-    js_snp_regions_json = json.dumps(snp_regions_map)
+    snp_regions_map = snp_store.regions_map
 
     def navigate_to_snp_region(snp_key: str) -> None:
         if snp_key in snp_regions_map:
             snp_data = snp_regions_map[snp_key]
             navigate_igv_to_snp(snp_data["chrom"], snp_data["pos"])
             return
-        # Fallback for non-pathogenic rows that are not in snp_regions_map.
         try:
             chrom, pos_str = snp_key.split(":", 1)
             navigate_igv_to_snp(chrom, int(str(pos_str).replace(",", "")))
         except (TypeError, ValueError):
-            logger.debug(f"Invalid SNP key for IGV navigation: {snp_key}")
+            logger.debug("Invalid SNP key for IGV navigation: %s", snp_key)
 
-    js_init_snp_regions = f"""
-        (function() {{
-            window.snpRegionsMap = window.snpRegionsMap || {{}};
-            Object.assign(window.snpRegionsMap, {js_snp_regions_json});
-            console.log('[SNP] Initialized SNP regions map with', Object.keys(window.snpRegionsMap).length, 'pathogenic SNPs');
-        }})();
-    """
-    ui.run_javascript(js_init_snp_regions, timeout=5.0)
-
-    def _to_float(value: Any) -> Optional[float]:
-        if value is None:
-            return None
-        text = str(value).strip().replace(",", "")
-        if text == "":
-            return None
-        try:
-            return float(text)
-        except (TypeError, ValueError):
-            return None
-
-    def _is_truthy(value: Any) -> bool:
-        if isinstance(value, bool):
-            return value
-        return str(value).strip().upper() in {"YES", "TRUE", "1", "PATHOGENIC"}
-
-    # Keep the SNP table readable by showing a concise default column set.
-    preferred_display_fields = [
-        "CHROM",
-        "POS",
-        "REF",
-        "ALT",
-        "Gene_Name",
-        "HGVS.p",
-        "Annotation",
-        "Annotation_Impact",
-        "CLNSIG",
-        "FILTER",
-        "QUAL",
-        "GT",
-        "is_pathogenic",
-        "details",
-        "action",
-    ]
-    wide_fields = {"Gene_Name", "Annotation", "HGVS.p", "CLNSIG"}
-    max_field_length = 80
-
-    column_lookup = {
-        col.get("field"): col for col in columns if isinstance(col, dict) and col.get("field")
-    }
-
-    visible_fields = [
-        field for field in preferred_display_fields if field in column_lookup
-    ]
-    if not visible_fields:
-        visible_fields = [
-            col.get("field") for col in columns[:12] if isinstance(col, dict) and col.get("field")
-        ]
-
-    display_columns = [column_lookup[field].copy() for field in visible_fields]
-    if "details" not in {col.get("field") for col in display_columns}:
-        display_columns.append(
-            {
-                "name": "details",
-                "label": "Details",
-                "field": "details",
-                "sortable": False,
-            }
-        )
-    if "action" not in {col.get("field") for col in display_columns}:
-        display_columns.append(
-            {
-                "name": "action",
-                "label": "View in IGV",
-                "field": "action",
-                "sortable": False,
-            }
-        )
-
-    def _compact_row(row: Dict[str, Any], row_id: str) -> Dict[str, Any]:
-        compact: Dict[str, Any] = {}
-        for field in visible_fields:
-            value = row.get(field, "")
-            text = "" if value is None else str(value)
-            if field in wide_fields and len(text) > max_field_length:
-                text = f"{text[:max_field_length - 1]}..."
-            compact[field] = text
-        compact["details"] = " "
-        compact["action"] = " "
-        compact["__row_id"] = row_id
-        return compact
-
-    full_row_lookup: Dict[str, Dict[str, Any]] = {}
-    display_rows_all: List[Dict[str, Any]] = []
-    for idx, row in enumerate(rows_all):
-        row_id = f"{row.get('CHROM', '')}:{row.get('POS', '')}:{idx}"
-        full_row_lookup[row_id] = row
-        display_rows_all.append(_compact_row(row, row_id))
+    clinvar_status = compare_sample_clinvar_to_installed(sample_dir)
 
     with ui.element("div").classes("classification-insight-shell w-full min-w-0"):
         ui.label("SNP analysis").classes(
             "classification-insight-heading text-headline-small"
         )
 
-        with ui.row().classes("w-full gap-3 mb-3 flex-wrap items-baseline"):
-            ui.label(f"Total variants: {total_variants}").classes(
-                "classification-insight-meta"
-            )
-            if pathogenic_count > 0:
-                ui.label(f"Pathogenic variants: {pathogenic_count}").classes(
-                    "classification-insight-level classification-insight-level--low w-auto"
+        snp_clinvar_status_label: Dict[str, Any] = {"element": None}
+
+        def _update_snp_clinvar_status(text: str, tone: str = "meta") -> None:
+            label = snp_clinvar_status_label.get("element")
+            if label is None:
+                return
+            label.text = text
+            classes = "classification-insight-meta"
+            if tone == "running":
+                classes = "text-sm text-blue-600"
+            elif tone == "error":
+                classes = "classification-insight-level classification-insight-level--low w-full"
+            label.classes(replace=classes)
+
+        with ui.element("div").classes("classification-insight-card w-full min-w-0"):
+            with ui.column().classes("w-full min-w-0 gap-2 p-2 md:p-3"):
+                _add_clinvar_annotation_controls(
+                    launcher,
+                    sample_dir,
+                    on_status_change=_update_snp_clinvar_status,
+                    clinvar_status=clinvar_status,
+                )
+                snp_clinvar_status_label["element"] = ui.label("").classes(
+                    "classification-insight-meta"
                 )
 
-        from robin.gui.theme import styled_table
-
-        snp_has_dp = "DP" in column_lookup
-
-        with ui.row().classes("w-full gap-2 mb-2 flex-wrap items-end"):
-            snp_pass_only = ui.checkbox("PASS only").props("dense")
-            snp_pathogenic_only = ui.checkbox("Pathogenic only").props("dense")
-            snp_min_qual = ui.number("Min QUAL", value=None).props(
-                "dense outlined clearable"
-            ).classes("w-32")
-            if snp_has_dp:
-                snp_min_dp = ui.number("Min DP", value=None).props(
-                    "dense outlined clearable"
-                ).classes("w-32")
-            else:
-                snp_min_dp = None
-            snp_reset_button = ui.button("Reset").props("dense no-caps")
-
-        table_container, snp_table = styled_table(
-            columns=display_columns,
-            rows=display_rows_all,
-            pagination=25,
-            class_size="table-xs",
+        _mount_paged_variant_table(
+            snp_store,
+            details_title="Variant details",
+            event_prefix="snp",
+            navigate_region=navigate_to_snp_region,
         )
-        snp_filtered_count_label = ui.label(
-            f"Showing {len(display_rows_all)} of {len(display_rows_all)} variants"
-        ).classes("classification-insight-meta")
-
-        def _apply_snp_filters() -> None:
-            pass_only = bool(getattr(snp_pass_only, "value", False))
-            pathogenic_only = bool(getattr(snp_pathogenic_only, "value", False))
-            min_qual = _to_float(getattr(snp_min_qual, "value", None))
-            min_dp = _to_float(getattr(snp_min_dp, "value", None)) if snp_has_dp else None
-
-            filtered_rows: List[Dict[str, Any]] = []
-            for compact_row in display_rows_all:
-                row_id = compact_row.get("__row_id")
-                full_row = full_row_lookup.get(str(row_id), {})
-
-                if pass_only and str(full_row.get("FILTER", "")).strip().upper() != "PASS":
-                    continue
-                if pathogenic_only and not _is_truthy(full_row.get("is_pathogenic", "")):
-                    continue
-
-                qual = _to_float(full_row.get("QUAL"))
-                if min_qual is not None and (qual is None or qual < min_qual):
-                    continue
-
-                if snp_has_dp and min_dp is not None:
-                    dp = _to_float(full_row.get("DP"))
-                    if dp is None or dp < min_dp:
-                        continue
-
-                filtered_rows.append(compact_row)
-
-            snp_table.rows = filtered_rows
-            snp_filtered_count_label.text = (
-                f"Showing {len(filtered_rows)} of {len(display_rows_all)} variants"
-            )
-            snp_table.update()
-
-        snp_pass_only.on("update:model-value", lambda _e: _apply_snp_filters())
-        snp_pathogenic_only.on("update:model-value", lambda _e: _apply_snp_filters())
-        snp_min_qual.on("update:model-value", lambda _e: _apply_snp_filters())
-        if snp_has_dp and snp_min_dp is not None:
-            snp_min_dp.on("update:model-value", lambda _e: _apply_snp_filters())
-        snp_reset_button.on_click(
-            lambda: (
-                setattr(snp_pass_only, "value", False),
-                setattr(snp_pathogenic_only, "value", False),
-                setattr(snp_min_qual, "value", None),
-                snp_has_dp and setattr(snp_min_dp, "value", None),
-                _apply_snp_filters(),
-            )
-        )
-
-        try:
-            with snp_table.add_slot("top-right"):
-                with ui.input(placeholder="Search variants…").props(
-                    "borderless dense clearable type=search"
-                ).bind_value(snp_table, "filter").add_slot("append"):
-                    ui.icon("search")
-        except Exception:
-            pass
-
-        if any(col.get("field") in {"action", "details"} for col in display_columns):
-            try:
-                with ui.dialog() as details_dialog, ui.card().classes(
-                    "robin-dialog-surface w-[95vw] max-w-6xl max-h-[85vh] overflow-auto "
-                    "p-4 md:p-5"
-                ):
-                    ui.label("Variant details").classes(
-                        "classification-insight-heading text-headline-small"
-                    )
-                    ui.separator().classes("mgmt-detail-separator")
-                    details_container = ui.column().classes("w-full gap-2")
-                    with ui.row().classes("w-full justify-end pt-2"):
-                        ui.button("Close", on_click=details_dialog.close).props(
-                            "color=primary no-caps outline"
-                        )
-
-                def show_variant_details(row_id: str) -> None:
-                    row_data = full_row_lookup.get(row_id)
-                    if not row_data:
-                        ui.notify("Variant details not found.", type="warning")
-                        return
-
-                    details_container.clear()
-                    detail_fields = [
-                        "CHROM",
-                        "POS",
-                        "ID",
-                        "REF",
-                        "ALT",
-                        "Gene_Name",
-                        "HGVS.c",
-                        "HGVS.p",
-                        "Annotation",
-                        "Annotation_Impact",
-                        "CLNSIG",
-                        "FILTER",
-                        "QUAL",
-                        "GT",
-                    ]
-                    ui_only_fields = {"action", "details", "__row_id"}
-                    ordered_fields = detail_fields + sorted(
-                        [
-                            k
-                            for k in row_data.keys()
-                            if k not in detail_fields and k not in ui_only_fields
-                        ]
-                    )
-                    with details_container:
-                        for field in ordered_fields:
-                            value = row_data.get(field, "")
-                            if value is None or str(value) == "":
-                                continue
-                            with ui.row().classes("w-full items-start gap-2"):
-                                ui.label(f"{field}:").classes(
-                                    "text-xs font-semibold min-w-[180px]"
-                                )
-                                ui.label(str(value)).classes(
-                                    "text-xs whitespace-pre-wrap break-all flex-1"
-                                )
-                    details_dialog.open()
-
-                snp_table.add_slot(
-                    "body-cell-details",
-                    """
-<q-td key="details" :props="props">
-  <q-btn
-    icon="description"
-    size="sm"
-    dense
-    flat
-    color="secondary"
-    @click="$parent.$emit('snp-show-details', props.row.__row_id)"
-    title="Show full details"
-  />
-</q-td>
-""",
-                )
-
-                snp_table.add_slot(
-                    "body-cell-action",
-                    """
-<q-td key="action" :props="props">
-  <q-btn 
-    icon="visibility" 
-    size="sm" 
-    dense 
-    flat 
-    color="primary"
-    @click="$parent.$emit('snp-view-igv', props.row.CHROM + ':' + props.row.POS)"
-    title="View in IGV"
-  />
-</q-td>
-""",
-                )
-
-                def on_snp_view_igv(e):
-                    try:
-                        snp_key = (
-                            e.args if isinstance(e.args, str) else getattr(e, "args", None)
-                        )
-                        if snp_key:
-                            logging.debug(f"[SNP] Button clicked for: {snp_key}")
-                            navigate_to_snp_region(snp_key)
-                    except Exception as ex:
-                        logger.debug(f"Error handling SNP IGV view: {ex}")
-
-                def on_snp_show_details(e):
-                    try:
-                        row_id = (
-                            e.args if isinstance(e.args, str) else getattr(e, "args", None)
-                        )
-                        if row_id:
-                            show_variant_details(row_id)
-                    except Exception as ex:
-                        logger.debug(f"Error handling SNP details view: {ex}")
-
-                snp_table.on("snp-view-igv", on_snp_view_igv)
-                snp_table.on("snp-show-details", on_snp_show_details)
-            except Exception as ex:
-                logger.warning(f"Could not add action button slot: {ex}")
-
-        for col in snp_table.columns:
-            col["sortable"] = True
 
     ui.separator().classes("mgmt-detail-separator")
 
-    # INDEL table for More Details page.
-    indel_vcf = clair3_dir / "snpsift_indel_output.vcf"
     with ui.element("div").classes("classification-insight-shell w-full min-w-0"):
         ui.label("INDEL analysis").classes(
             "classification-insight-heading text-headline-small"
         )
+        _add_clinvar_annotation_controls(
+            launcher,
+            sample_dir,
+            compact=True,
+            clinvar_status=clinvar_status,
+        )
 
-        if not indel_vcf.exists():
-            ui.label(
-                "INDEL VCF was not found. Run SNP analysis to generate INDEL output."
-            ).classes("classification-insight-meta")
+        indel_store = VariantDisplayStore.open_indel(clair3_dir, vcf_fallback=False)
+        if indel_store is None:
+            indel_host = ui.column().classes("w-full")
+            with indel_host:
+                ui.label("Loading INDEL variants…").classes("classification-insight-meta")
+
+            def _mount_indel_fallback() -> None:
+                indel_host.clear()
+                fallback_store = VariantDisplayStore.open_indel(clair3_dir)
+                if fallback_store is None:
+                    with indel_host:
+                        ui.label(
+                            "INDEL VCF was not found. Run SNP analysis to generate INDEL output."
+                        ).classes("classification-insight-meta")
+                    return
+                if fallback_store.total_variants == 0:
+                    with indel_host:
+                        ui.label("No INDEL variants were found.").classes(
+                            "classification-insight-meta"
+                        )
+                    return
+
+                def navigate_to_indel_region(indel_key: str) -> None:
+                    try:
+                        chrom, pos_str = indel_key.split(":", 1)
+                        navigate_igv_to_snp(chrom, int(str(pos_str).replace(",", "")))
+                    except (TypeError, ValueError):
+                        logger.debug("Invalid INDEL key for IGV navigation: %s", indel_key)
+
+                with indel_host:
+                    _mount_paged_variant_table(
+                        fallback_store,
+                        details_title="INDEL details",
+                        event_prefix="indel",
+                        navigate_region=navigate_to_indel_region,
+                    )
+
+            schedule_after_page_sent(_mount_indel_fallback)
             return
-
-        indel_df = parse_vcf(indel_vcf)
-        if indel_df is None:
-            ui.label(
-                "Could not parse INDEL VCF data. Check logs for details."
-            ).classes("classification-insight-level classification-insight-level--low w-full")
+        if indel_store.total_variants == 0:
+            ui.label("No INDEL variants were found.").classes("classification-insight-meta")
             return
-
-        if indel_df.empty:
-            ui.label("No INDEL variants were found.").classes(
-                "classification-insight-meta"
-            )
-            return
-
-        indel_column_lookup = {
-            str(field): {
-                "name": str(field),
-                "label": str(field).replace("_", " "),
-                "field": str(field),
-                "sortable": True,
-            }
-            for field in indel_df.columns
-        }
-        indel_visible_fields = [
-            field for field in preferred_display_fields if field in indel_column_lookup
-        ]
-        if not indel_visible_fields:
-            indel_visible_fields = list(indel_column_lookup.keys())[:12]
-
-        indel_display_columns = [
-            indel_column_lookup[field].copy() for field in indel_visible_fields
-        ]
-        if "details" not in {col.get("field") for col in indel_display_columns}:
-            indel_display_columns.append(
-                {
-                    "name": "details",
-                    "label": "Details",
-                    "field": "details",
-                    "sortable": False,
-                }
-            )
-        if "action" not in {col.get("field") for col in indel_display_columns}:
-            indel_display_columns.append(
-                {
-                    "name": "action",
-                    "label": "View in IGV",
-                    "field": "action",
-                    "sortable": False,
-                }
-            )
-
-        indel_full_row_lookup: Dict[str, Dict[str, Any]] = {}
-        indel_rows_all: List[Dict[str, Any]] = []
-        indel_rows_pathogenic: List[Dict[str, Any]] = []
-        indel_regions_map: Dict[str, Dict[str, int]] = {}
-
-        def _compact_indel_row(row: Dict[str, Any], row_id: str) -> Dict[str, Any]:
-            compact: Dict[str, Any] = {}
-            for field in indel_visible_fields:
-                value = row.get(field, "")
-                text = "" if value is None else str(value)
-                if field in wide_fields and len(text) > max_field_length:
-                    text = f"{text[:max_field_length - 1]}..."
-                compact[field] = text
-            compact["details"] = " "
-            compact["action"] = " "
-            compact["__row_id"] = row_id
-            return compact
-
-        for idx, record in enumerate(indel_df.to_dict("records")):
-            formatted_full: Dict[str, Any] = {}
-            for field in indel_df.columns:
-                value = record.get(field)
-                if value is None:
-                    formatted_full[str(field)] = ""
-                elif isinstance(value, bool):
-                    formatted_full[str(field)] = "Yes" if value else "No"
-                else:
-                    formatted_full[str(field)] = str(value)
-
-            pathogenic_value = record.get("is_pathogenic", False)
-            if isinstance(pathogenic_value, str):
-                pathogenic_bool = pathogenic_value.upper() in {"YES", "TRUE", "1"}
-            else:
-                pathogenic_bool = bool(pathogenic_value)
-
-            formatted_full["is_pathogenic"] = "Yes" if pathogenic_bool else "No"
-            row_id = (
-                f"{formatted_full.get('CHROM', '')}:{formatted_full.get('POS', '')}:{idx}"
-            )
-            indel_full_row_lookup[row_id] = formatted_full
-            compact_row = _compact_indel_row(formatted_full, row_id)
-            indel_rows_all.append(compact_row)
-
-            if pathogenic_bool:
-                indel_rows_pathogenic.append(dict(compact_row))
-                chrom = formatted_full.get("CHROM")
-                pos_text = str(formatted_full.get("POS", "")).replace(",", "")
-                try:
-                    pos = int(pos_text)
-                    if chrom:
-                        indel_regions_map[f"{chrom}:{pos}"] = {
-                            "chrom": str(chrom),
-                            "pos": pos,
-                        }
-                except (TypeError, ValueError):
-                    pass
-
-        with ui.row().classes("w-full gap-3 mb-3 flex-wrap items-baseline"):
-            ui.label(f"Total variants: {len(indel_rows_all)}").classes(
-                "classification-insight-meta"
-            )
-            if indel_rows_pathogenic:
-                ui.label(
-                    f"Pathogenic variants: {len(indel_rows_pathogenic)}"
-                ).classes(
-                    "classification-insight-level classification-insight-level--low w-auto"
-                )
-
-        from robin.gui.theme import styled_table
-
-        indel_has_dp = "DP" in indel_column_lookup
-
-        with ui.row().classes("w-full gap-2 mb-2 flex-wrap items-end"):
-            indel_pass_only = ui.checkbox("PASS only").props("dense")
-            indel_pathogenic_only = ui.checkbox("Pathogenic only").props("dense")
-            indel_min_qual = ui.number("Min QUAL", value=None).props(
-                "dense outlined clearable"
-            ).classes("w-32")
-            if indel_has_dp:
-                indel_min_dp = ui.number("Min DP", value=None).props(
-                    "dense outlined clearable"
-                ).classes("w-32")
-            else:
-                indel_min_dp = None
-            indel_reset_button = ui.button("Reset").props("dense no-caps")
-
-        _, indel_table = styled_table(
-            columns=indel_display_columns,
-            rows=indel_rows_all,
-            pagination=25,
-            class_size="table-xs",
-        )
-        indel_filtered_count_label = ui.label(
-            f"Showing {len(indel_rows_all)} of {len(indel_rows_all)} variants"
-        ).classes("classification-insight-meta")
-
-        def _apply_indel_filters() -> None:
-            pass_only = bool(getattr(indel_pass_only, "value", False))
-            pathogenic_only = bool(getattr(indel_pathogenic_only, "value", False))
-            min_qual = _to_float(getattr(indel_min_qual, "value", None))
-            min_dp = (
-                _to_float(getattr(indel_min_dp, "value", None)) if indel_has_dp else None
-            )
-
-            filtered_rows: List[Dict[str, Any]] = []
-            for compact_row in indel_rows_all:
-                row_id = compact_row.get("__row_id")
-                full_row = indel_full_row_lookup.get(str(row_id), {})
-
-                if pass_only and str(full_row.get("FILTER", "")).strip().upper() != "PASS":
-                    continue
-                if pathogenic_only and not _is_truthy(full_row.get("is_pathogenic", "")):
-                    continue
-
-                qual = _to_float(full_row.get("QUAL"))
-                if min_qual is not None and (qual is None or qual < min_qual):
-                    continue
-
-                if indel_has_dp and min_dp is not None:
-                    dp = _to_float(full_row.get("DP"))
-                    if dp is None or dp < min_dp:
-                        continue
-
-                filtered_rows.append(compact_row)
-
-            indel_table.rows = filtered_rows
-            indel_filtered_count_label.text = (
-                f"Showing {len(filtered_rows)} of {len(indel_rows_all)} variants"
-            )
-            indel_table.update()
-
-        indel_pass_only.on("update:model-value", lambda _e: _apply_indel_filters())
-        indel_pathogenic_only.on("update:model-value", lambda _e: _apply_indel_filters())
-        indel_min_qual.on("update:model-value", lambda _e: _apply_indel_filters())
-        if indel_has_dp and indel_min_dp is not None:
-            indel_min_dp.on("update:model-value", lambda _e: _apply_indel_filters())
-        indel_reset_button.on_click(
-            lambda: (
-                setattr(indel_pass_only, "value", False),
-                setattr(indel_pathogenic_only, "value", False),
-                setattr(indel_min_qual, "value", None),
-                indel_has_dp and setattr(indel_min_dp, "value", None),
-                _apply_indel_filters(),
-            )
-        )
-
-        try:
-            with indel_table.add_slot("top-right"):
-                with ui.input(placeholder="Search INDELs…").props(
-                    "borderless dense clearable type=search"
-                ).bind_value(indel_table, "filter").add_slot("append"):
-                    ui.icon("search")
-        except Exception:
-            pass
-
-        with ui.dialog() as indel_details_dialog, ui.card().classes(
-            "robin-dialog-surface w-[95vw] max-w-6xl max-h-[85vh] overflow-auto "
-            "p-4 md:p-5"
-        ):
-            ui.label("INDEL details").classes(
-                "classification-insight-heading text-headline-small"
-            )
-            ui.separator().classes("mgmt-detail-separator")
-            indel_details_container = ui.column().classes("w-full gap-2")
-            with ui.row().classes("w-full justify-end pt-2"):
-                ui.button("Close", on_click=indel_details_dialog.close).props(
-                    "color=primary no-caps outline"
-                )
-
-        def show_indel_details(row_id: str) -> None:
-            row_data = indel_full_row_lookup.get(row_id)
-            if not row_data:
-                ui.notify("INDEL details not found.", type="warning")
-                return
-            indel_details_container.clear()
-            detail_fields = [
-                "CHROM",
-                "POS",
-                "ID",
-                "REF",
-                "ALT",
-                "Gene_Name",
-                "HGVS.c",
-                "HGVS.p",
-                "Annotation",
-                "Annotation_Impact",
-                "CLNSIG",
-                "FILTER",
-                "QUAL",
-                "GT",
-            ]
-            ui_only_fields = {"action", "details", "__row_id"}
-            ordered_fields = detail_fields + sorted(
-                [
-                    k
-                    for k in row_data.keys()
-                    if k not in detail_fields and k not in ui_only_fields
-                ]
-            )
-            with indel_details_container:
-                for field in ordered_fields:
-                    value = row_data.get(field, "")
-                    if value in (None, ""):
-                        continue
-                    with ui.row().classes("w-full items-start gap-2"):
-                        ui.label(f"{field}:").classes("text-xs font-semibold min-w-[180px]")
-                        ui.label(str(value)).classes("text-xs whitespace-pre-wrap break-all flex-1")
-            indel_details_dialog.open()
-
-        indel_table.add_slot(
-            "body-cell-details",
-            """
-<q-td key="details" :props="props">
-  <q-btn
-    icon="description"
-    size="sm"
-    dense
-    flat
-    color="secondary"
-    @click="$parent.$emit('indel-show-details', props.row.__row_id)"
-    title="Show full details"
-  />
-</q-td>
-""",
-        )
-
-        indel_table.add_slot(
-            "body-cell-action",
-            """
-<q-td key="action" :props="props">
-  <q-btn
-    icon="visibility"
-    size="sm"
-    dense
-    flat
-    color="primary"
-    @click="$parent.$emit('indel-view-igv', props.row.CHROM + ':' + props.row.POS)"
-    title="View in IGV"
-  />
-</q-td>
-""",
-        )
 
         def navigate_to_indel_region(indel_key: str) -> None:
-            region_data = indel_regions_map.get(indel_key)
-            if region_data:
-                navigate_igv_to_snp(region_data["chrom"], region_data["pos"])
-                return
-            # Fallback for non-pathogenic INDEL rows.
             try:
                 chrom, pos_str = indel_key.split(":", 1)
                 navigate_igv_to_snp(chrom, int(str(pos_str).replace(",", "")))
             except (TypeError, ValueError):
-                logger.debug(f"Invalid INDEL key for IGV navigation: {indel_key}")
+                logger.debug("Invalid INDEL key for IGV navigation: %s", indel_key)
 
-        def on_indel_view_igv(e):
-            try:
-                indel_key = e.args if isinstance(e.args, str) else getattr(e, "args", None)
-                if not indel_key:
-                    return
-                navigate_to_indel_region(indel_key)
-            except Exception as ex:
-                logger.debug(f"Error handling INDEL IGV view: {ex}")
-
-        def on_indel_show_details(e):
-            try:
-                row_id = e.args if isinstance(e.args, str) else getattr(e, "args", None)
-                if row_id:
-                    show_indel_details(row_id)
-            except Exception as ex:
-                logger.debug(f"Error handling INDEL details view: {ex}")
-
-        indel_table.on("indel-view-igv", on_indel_view_igv)
-        indel_table.on("indel-show-details", on_indel_show_details)
-
-        for col in indel_table.columns:
-            col["sortable"] = True
+        _mount_paged_variant_table(
+            indel_store,
+            details_title="INDEL details",
+            event_prefix="indel",
+            navigate_region=navigate_to_indel_region,
+        )

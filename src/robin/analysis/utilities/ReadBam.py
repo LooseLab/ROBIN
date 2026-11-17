@@ -196,6 +196,17 @@ class ReadBam:
 
         return None
 
+    def _library_sample_id(self, lb_tag: Optional[str]) -> Optional[str]:
+        """Library name from the read group. Does not invent an id from the filename."""
+        sample_id = (lb_tag or "").strip() or None
+        if sample_id:
+            return sample_id
+        logger.warning(
+            "No sample name (read group LB) in %s; this file is not assigned a sample id",
+            os.path.basename(self.bam_file or ""),
+        )
+        return None
+
     def read_bam(self) -> Generator[Tuple[Optional[str], ...], None, None]:
         """
         Reads the BAM file and extracts RG tags.
@@ -236,12 +247,7 @@ class ReadBam:
                                       or None if processing fails.
         """
         for rg_tags in self.read_bam():
-            # Ensure sample_id is not None - use a fallback if needed
-            sample_id = (
-                rg_tags[4]
-                if rg_tags[4]
-                else f"unknown_sample_{os.path.basename(self.bam_file)}"
-            )
+            sample_id = self._library_sample_id(rg_tags[4])
 
             bam_read = BamRead(
                 ID=rg_tags[0],
@@ -358,12 +364,7 @@ class ReadBam:
                 logger.warning("No reads found in the BAM file")
                 return None
 
-            # Ensure sample_id is not None - use a fallback if needed
-            sample_id = (
-                rg_tags[4]
-                if rg_tags[4]
-                else f"unknown_sample_{os.path.basename(self.bam_file)}"
-            )
+            sample_id = self._library_sample_id(rg_tags[4])
 
             bam_read = BamRead(
                 ID=rg_tags[0],

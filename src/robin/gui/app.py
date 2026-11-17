@@ -24,6 +24,7 @@ def launch_gui(
     monitored_directory: str = "",
     reload: bool = False,
     center: str = None,
+    workflow_toml: Optional[str] = None,
 ) -> GUILauncher:
     """Central entrypoint for launching the robin GUI (refactored).
 
@@ -42,7 +43,14 @@ def launch_gui(
     abs_mon_dir = (
         str(Path(monitored_directory).resolve()) if monitored_directory else ""
     )
-    success = launcher.launch_gui(workflow_runner, workflow_steps, abs_mon_dir, reload, center)
+    success = launcher.launch_gui(
+        workflow_runner,
+        workflow_steps,
+        abs_mon_dir,
+        reload,
+        center,
+        workflow_toml=workflow_toml,
+    )
     if not success:
         raise RuntimeError("Failed to launch GUI")
 

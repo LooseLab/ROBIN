@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from typing import Any, Dict, List, Optional
 from pathlib import Path
 import logging
@@ -31,23 +32,145 @@ except ImportError:
     DNA_FEATURES_AVAILABLE = False
     logging.warning("DNA Features Viewer not available - using fallback visualization")
 
-    
+
 # chrov ideograms removed - not working properly
 
 try:
-    from nicegui import ui
+    from nicegui import ui, background_tasks
 except ImportError:  # pragma: no cover
     ui = None
+    background_tasks = None
+
+from robin.gui.theme import get_user_dark_mode
+
+
+def _render_paged_df_table(
+    df: pd.DataFrame,
+    columns: List[Dict[str, Any]],
+    *,
+    pagination_default: int = 100,
+    class_size: str = "table-xs",
+    search_placeholder: str = "Search...",
+) -> Any:
+    """Render a DataFrame with Quasar server-side pagination (Python slices rows per page)."""
+    from robin.gui.theme import (
+        clamp_qtable_server_pagination,
+        styled_server_paged_table,
+        wire_qtable_server_pagination_handlers,
+    )
+
+    preview_mode = len(df) > 50_000
+    source_df = df.iloc[:5_000].copy() if preview_mode else df
+    n_rows = len(source_df)
+    page_state: Dict[str, Any] = {
+        "filtered_positions": list(range(n_rows)),
+    }
+
+    total0 = len(page_state["filtered_positions"])
+    pd_default = int(pagination_default)
+    init_pagination = clamp_qtable_server_pagination(
+        {
+            "sortBy": None,
+            "descending": False,
+            "page": 1,
+            "rowsPerPage": pd_default,
+            "rowsNumber": total0,
+        },
+        rows_number=total0,
+        rows_per_page_default=pd_default,
+    )
+    _, table = styled_server_paged_table(
+        columns=columns,
+        rows=[],
+        pagination=init_pagination,
+        row_key="__row_idx",
+        class_size=class_size,
+        rows_per_page_options=[25, 50, 100, 250],
+    )
+
+    count_label = ui.label("").classes("text-xs text-gray-500")
+    if preview_mode:
+        ui.label(
+            f"Preview mode: showing first {len(source_df):,} rows of {len(df):,}."
+        ).classes("text-xs text-amber-600")
+
+    def _fill_from_pagination(pag: Dict[str, Any]) -> None:
+        total = len(page_state["filtered_positions"])
+        pag = clamp_qtable_server_pagination(
+            pag,
+            rows_number=total,
+            rows_per_page_default=pd_default,
+        )
+        rpp = int(pag["rowsPerPage"])
+        page = int(pag["page"])
+        start = (page - 1) * rpp
+        end = start + rpp
+        positions = page_state["filtered_positions"]
+        slice_pos = positions[start:end]
+        page_rows = (
+            source_df.iloc[slice_pos].reset_index(drop=True).to_dict("records")
+            if slice_pos
+            else []
+        )
+        for i, pos in enumerate(slice_pos):
+            page_rows[i]["__row_idx"] = int(pos)
+        table.rows = page_rows
+        table.pagination = pag
+        count_label.text = (
+            f"{total} rows match search ({len(df)} total in source)"
+            if total
+            else f"0 rows match ({len(df)} total in source)"
+        )
+        table.update()
+
+    wire_qtable_server_pagination_handlers(table, _fill_from_pagination)
+
+    def _apply_search(term: str) -> None:
+        txt = str(term or "").strip().lower()
+        if not txt:
+            page_state["filtered_positions"] = list(range(n_rows))
+        else:
+            filtered: List[int] = []
+            for pos in range(n_rows):
+                row = source_df.iloc[pos]
+                for col in source_df.columns:
+                    value = row.get(col)
+                    if value is not None and txt in str(value).lower():
+                        filtered.append(pos)
+                        break
+            page_state["filtered_positions"] = filtered
+        pag = clamp_qtable_server_pagination(
+            dict(table.pagination),
+            rows_number=len(page_state["filtered_positions"]),
+            rows_per_page_default=pd_default,
+        )
+        pag["page"] = 1
+        _fill_from_pagination(pag)
+
+    with table.add_slot("top-right"):
+        search_input = ui.input(placeholder=search_placeholder).props(
+            "type=search dense clearable"
+        )
+        search_input.on("update:model-value", lambda e: _apply_search(getattr(e, "value", "")))
+
+    for col in table.columns:
+        col["sortable"] = False
+
+    _fill_from_pagination(init_pagination)
+    try:
+        def _cleanup_table_state() -> None:
+            page_state["filtered_positions"] = []
+            table.rows = []
+
+        ui.context.client.on_disconnect(_cleanup_table_state)
+    except Exception:
+        pass
+    return table
 
 
 def _is_dark_mode() -> bool:
-    """Match Quasar ``body--dark`` via app storage (see theme.frame)."""
-    try:
-        from nicegui import app
-
-        return bool(app.storage.user.get("dark_mode"))
-    except Exception:
-        return False
+    """Return normalized per-user dark mode."""
+    return get_user_dark_mode(default=False)
 
 
 def _apply_fusion_figure_theme(fig: Any, dark: bool) -> None:
@@ -124,121 +247,238 @@ def _create_data_hash(data: Dict[str, Any]) -> str:
     try:
         if not data:
             return ""
-        
+
         # Create hash from key data components
         hash_components = []
-        
+
         # Hash the annotated data DataFrame
         if "annotated_data" in data and data["annotated_data"] is not None:
             df_str = data["annotated_data"].to_string()
             df_hash = hashlib.md5(df_str.encode()).hexdigest()
             hash_components.append(f"df:{df_hash}")
-        
+
         # Hash the goodpairs Series
         if "goodpairs" in data and data["goodpairs"] is not None:
             pairs_str = data["goodpairs"].to_string()
             pairs_hash = hashlib.md5(pairs_str.encode()).hexdigest()
             hash_components.append(f"pairs:{pairs_hash}")
-        
+
         # Hash gene groups
         if "gene_groups" in data and data["gene_groups"] is not None:
             groups_str = str(sorted(data["gene_groups"]))
             groups_hash = hashlib.md5(groups_str.encode()).hexdigest()
             hash_components.append(f"groups:{groups_hash}")
-        
+
         # Hash candidate count
         if "candidate_count" in data:
             hash_components.append(f"count:{data['candidate_count']}")
-        
+
         return hashlib.md5("|".join(hash_components).encode()).hexdigest()
     except Exception as e:
         logging.warning(f"[Fusion] Failed to create data hash: {e}")
         return ""
 
 
-def _count_unique_fusion_pairs(data: Dict[str, Any]) -> int:
-    """Count unique fusion pairs from fusion data.
-    
-    Args:
-        data: Dictionary containing fusion data with annotated_data and goodpairs
-        
-    Returns:
-        Number of unique fusion pairs
-    """
+def _validated_fusion_cluster_table(data: Dict[str, Any]) -> pd.DataFrame:
+    """Return breakpoint-validated fusion clusters, or an empty frame."""
     try:
         if not data or data.get("annotated_data") is None:
-            return 0
-        
+            return pd.DataFrame()
+
         annotated_data = data.get("annotated_data", pd.DataFrame())
         goodpairs = data.get("goodpairs", pd.Series())
-        
+
         if annotated_data.empty:
-            return 0
-        
-        # Filter to good pairs if available
+            return pd.DataFrame()
+
         if not goodpairs.empty and goodpairs.sum() > 0:
             aligned_goodpairs = goodpairs.reindex(annotated_data.index, fill_value=False)
             filtered_data = annotated_data[aligned_goodpairs]
         else:
             filtered_data = annotated_data
-        
+
         if filtered_data.empty:
-            return 0
-        
-        # Get validated fusion pairs using breakpoint validation
-        clustered_data = _cluster_fusion_reads(filtered_data, max_distance=10000, use_breakpoint_validation=True)
-        
-        if clustered_data.empty:
-            return 0
-        
-        # Count unique fusion pairs
-        unique_pairs = clustered_data["fusion_pair"].nunique()
-        return int(unique_pairs)
-        
+            return pd.DataFrame()
+
+        clustered_data = _cluster_fusion_reads(
+            filtered_data, max_distance=10000, use_breakpoint_validation=True
+        )
+        if clustered_data is None or clustered_data.empty:
+            return pd.DataFrame()
+        return clustered_data
     except Exception as e:
-        logging.warning(f"[Fusion] Failed to count unique fusion pairs: {e}")
-        return 0
+        logging.warning(f"[Fusion] Failed to cluster validated fusion pairs: {e}")
+        return pd.DataFrame()
+
+
+def _cluster_row_breakpoint(row: pd.Series, prefix: str) -> str:
+    """Return a compact start-end (or single) coordinate for one fusion partner."""
+    pos_col = f"{prefix}_position"
+    if pos_col in row.index:
+        pos_raw = row.get(pos_col)
+        if pd.notna(pos_raw):
+            pos_text = str(pos_raw).strip().replace(",", "")
+            if pos_text and pos_text.lower() not in {"nan", "none"}:
+                return pos_text
+
+    start_col, end_col = f"{prefix}_start", f"{prefix}_end"
+    if start_col in row.index and end_col in row.index:
+        try:
+            start = int(row[start_col])
+            end = int(row[end_col])
+        except (TypeError, ValueError):
+            return ""
+        if start == end:
+            return str(start)
+        return f"{min(start, end)}-{max(start, end)}"
+    return ""
+
+
+def _format_fusion_locus(chrom: Any, position: str) -> str:
+    chrom_s = str(chrom or "").strip()
+    if chrom_s.lower() in {"nan", "none", "unknown"}:
+        chrom_s = ""
+    pos_s = str(position or "").strip()
+    if chrom_s and pos_s:
+        return f"{chrom_s}:{pos_s}"
+    return chrom_s or pos_s
+
+
+def _format_fusion_pair_with_breakpoints(row: pd.Series) -> str:
+    """Format one clustered fusion as ``PAIR|chr:pos|chr:pos``."""
+    pair = str(row.get("fusion_pair", "") or "").strip()
+    if not pair or pair.lower() in {"nan", "none"}:
+        return ""
+    loc1 = _format_fusion_locus(row.get("chr1"), _cluster_row_breakpoint(row, "gene1"))
+    loc2 = _format_fusion_locus(row.get("chr2"), _cluster_row_breakpoint(row, "gene2"))
+    parts = [part for part in (pair, loc1, loc2) if part]
+    return "|".join(parts)
+
+
+def _unique_fusion_pair_labels_from_table(clustered: pd.DataFrame) -> List[str]:
+    if clustered.empty or "fusion_pair" not in clustered.columns:
+        return []
+    pairs = {
+        str(p).strip()
+        for p in clustered["fusion_pair"].dropna().tolist()
+        if str(p).strip()
+    }
+    return sorted(pairs)
+
+
+def _fusion_pair_export_items_from_table(clustered: pd.DataFrame) -> List[str]:
+    """One TSV item per clustered breakpoint (pair plus coordinates)."""
+    if clustered.empty:
+        return []
+    items: List[str] = []
+    seen = set()
+    for _, row in clustered.iterrows():
+        formatted = _format_fusion_pair_with_breakpoints(row)
+        if formatted and formatted not in seen:
+            seen.add(formatted)
+            items.append(formatted)
+    return sorted(items)
+
+
+def _unique_fusion_pair_labels(data: Dict[str, Any]) -> List[str]:
+    """Return unique validated fusion pair labels, sorted.
+
+    Uses the same breakpoint-validation clustering as the fusion GUI / counts,
+    so exported pair names match ``target_fusions`` / ``genome_fusions``.
+    """
+    return _unique_fusion_pair_labels_from_table(_validated_fusion_cluster_table(data))
+
+
+def _fusion_pair_export_items(data: Dict[str, Any]) -> List[str]:
+    """Return sorted ``PAIR|chr:pos|chr:pos`` strings for validated clusters."""
+    return _fusion_pair_export_items_from_table(_validated_fusion_cluster_table(data))
+
+
+def _format_fusion_pair_list(pairs: List[str]) -> str:
+    """Join fusion pair labels for a single TSV cell."""
+    return "; ".join(pairs)
+
+
+def fusion_pair_lists_for_sample(sample_dir: Path) -> Dict[str, str]:
+    """Load processed fusion pickles and return TSV-ready pair lists.
+
+    ``target_pair_list`` comes from ``fusion_candidates_master_processed.pkl``.
+    ``genome_pair_list`` comes from ``fusion_candidates_all_processed.pkl``.
+    Each item is ``PAIR|chr:pos|chr:pos`` for a validated breakpoint cluster.
+    """
+    sample_dir = Path(sample_dir)
+    result = {"target_pair_list": "", "genome_pair_list": ""}
+    try:
+        target_file = sample_dir / "fusion_candidates_master_processed.pkl"
+        genome_file = sample_dir / "fusion_candidates_all_processed.pkl"
+        if target_file.exists():
+            target_data = _load_processed_pickle(target_file)
+            if target_data and isinstance(target_data, dict):
+                result["target_pair_list"] = _format_fusion_pair_list(
+                    _fusion_pair_export_items(target_data)
+                )
+        if genome_file.exists():
+            genome_data = _load_processed_pickle(genome_file)
+            if genome_data and isinstance(genome_data, dict):
+                result["genome_pair_list"] = _format_fusion_pair_list(
+                    _fusion_pair_export_items(genome_data)
+                )
+    except Exception as e:
+        logging.warning(f"[Fusion] Failed to build fusion pair lists for {sample_dir}: {e}")
+    return result
+
+
+def _count_unique_fusion_pairs(data: Dict[str, Any]) -> int:
+    """Count unique fusion pairs from fusion data.
+
+    Args:
+        data: Dictionary containing fusion data with annotated_data and goodpairs
+
+    Returns:
+        Number of unique fusion pairs
+    """
+    return len(_unique_fusion_pair_labels(data))
 
 
 def _get_validated_fusion_groups(data: Dict[str, Any]) -> List[List[str]]:
     """Get validated fusion groups from fusion data.
-    
+
     A fusion group is validated if it contains at least one validated fusion pair
     (meeting the minimum read support threshold).
-    
+
     Args:
         data: Dictionary containing fusion data with annotated_data, goodpairs, and gene_groups
-        
+
     Returns:
         List of validated fusion groups (each group is a list of gene names)
     """
     try:
         if not data:
             return []
-        
+
         annotated_data = data.get("annotated_data", pd.DataFrame())
         goodpairs = data.get("goodpairs", pd.Series())
         gene_groups = data.get("gene_groups")
-        
+
         if annotated_data.empty or not gene_groups or len(gene_groups) == 0:
             return []
-        
+
         # Filter to good pairs if available
         if not goodpairs.empty and goodpairs.sum() > 0:
             aligned_goodpairs = goodpairs.reindex(annotated_data.index, fill_value=False)
             filtered_data = annotated_data[aligned_goodpairs]
         else:
             filtered_data = annotated_data
-        
+
         if filtered_data.empty:
             return []
-        
+
         # Get validated fusion pairs (these meet the minimum read support threshold)
         clustered_data = _cluster_fusion_reads(filtered_data, max_distance=10000, use_breakpoint_validation=True)
-        
+
         if clustered_data.empty:
             return []
-        
+
         # Extract validated gene pairs from validated breakpoints
         validated_pairs_set = set()
         for _, row in clustered_data.iterrows():
@@ -249,18 +489,18 @@ def _get_validated_fusion_groups(data: Dict[str, Any]) -> List[List[str]]:
                     # Normalize pair (sorted) for consistent comparison
                     normalized_pair = tuple(sorted(genes))
                     validated_pairs_set.add(normalized_pair)
-        
+
         # Filter gene groups to only include those with at least one validated pair
         validated_groups = []
         for group in gene_groups:
             if not isinstance(group, (list, tuple)) or len(group) < 2:
                 continue
-            
+
             # Normalize group genes
             normalized_group_genes = sorted([str(g).strip() for g in group if g])
             if len(normalized_group_genes) < 2:
                 continue
-            
+
             # Check if this group contains at least one validated pair
             group_has_validated_pair = False
             for i in range(len(normalized_group_genes)):
@@ -271,13 +511,13 @@ def _get_validated_fusion_groups(data: Dict[str, Any]) -> List[List[str]]:
                         break
                 if group_has_validated_pair:
                     break
-            
+
             if group_has_validated_pair:
                 validated_groups.append(normalized_group_genes)
-        
+
         logging.info(f"[Fusion] Validated {len(validated_groups)} fusion groups from {len(gene_groups)} total groups")
         return validated_groups
-        
+
     except Exception as e:
         logging.warning(f"[Fusion] Failed to get validated fusion groups: {e}")
         return []
@@ -285,20 +525,20 @@ def _get_validated_fusion_groups(data: Dict[str, Any]) -> List[List[str]]:
 
 def _count_unique_fusion_groups(data: Dict[str, Any]) -> int:
     """Count unique fusion groups from fusion data.
-    
+
     Only counts groups that contain at least one validated fusion pair
     (meeting the minimum read support threshold).
-    
+
     Args:
         data: Dictionary containing fusion data with gene_groups
-        
+
     Returns:
         Number of unique validated fusion groups
     """
     try:
         validated_groups = _get_validated_fusion_groups(data)
         return len(validated_groups)
-        
+
     except Exception as e:
         logging.warning(f"[Fusion] Failed to count unique fusion groups: {e}")
         return 0
@@ -306,76 +546,76 @@ def _count_unique_fusion_groups(data: Dict[str, Any]) -> int:
 
 def _generate_summary_files_from_pickle(sample_dir: Path, force_regenerate: bool = False) -> bool:
     """Generate summary files from existing pickle files if they don't exist.
-    
+
     This provides backward compatibility for existing analyses that were run
     before the summary file generation was implemented.
-    
+
     Returns True if summary files were generated, False otherwise.
     """
     try:
         import csv
         from pathlib import Path
-        
+
         # Check if summary files already exist
         summary_file = sample_dir / "fusion_summary.csv"
         if summary_file.exists() and not force_regenerate:
             return True  # Already have summary files
         elif summary_file.exists() and force_regenerate:
             pass  # Will overwrite existing file
-        
+
         # Load data from pickle files
         target_file = sample_dir / "fusion_candidates_master_processed.pkl"
         genome_file = sample_dir / "fusion_candidates_all_processed.pkl"
-        
+
         logging.info(f"[Fusion] Checking for target file: {target_file}")
         logging.info(f"[Fusion] Target file exists: {target_file.exists()}")
         logging.info(f"[Fusion] Checking for genome-wide file: {genome_file}")
         logging.info(f"[Fusion] Genome-wide file exists: {genome_file.exists()}")
-        
+
         # Debug: List all fusion-related files in the directory
         fusion_files = list(sample_dir.glob("*fusion*"))
         logging.info(f"[Fusion] All fusion files in directory: {[f.name for f in fusion_files]}")
-        
+
         # Debug: Check file sizes
         if target_file.exists():
             logging.info(f"[Fusion] Target file size: {target_file.stat().st_size} bytes")
         if genome_file.exists():
             logging.info(f"[Fusion] Genome-wide file size: {genome_file.stat().st_size} bytes")
-        
+
         target_data = _load_processed_pickle(target_file)
         genome_data = _load_processed_pickle(genome_file)
-        
+
         if target_data is not None:
             logging.info(f"[Fusion] Target data loaded: candidate_count={target_data.get('candidate_count', 0)}")
         else:
             logging.warning(f"[Fusion] Failed to load target data from: {target_file}")
-            
+
         if genome_data is not None:
             logging.info(f"[Fusion] Genome-wide data loaded: candidate_count={genome_data.get('candidate_count', 0)}")
         else:
             logging.warning(f"[Fusion] Failed to load genome-wide data from: {genome_file}")
-        
+
         # Extract counts using the same filtering logic as the display code
         # This ensures consistency between summary panel and fusion section
         target_count = 0
         genome_count = 0
-        
+
         if target_data is not None and isinstance(target_data, dict):
             target_count = _count_unique_fusion_pairs(target_data)
             logging.info(f"[Fusion] Summary: Target count (filtered): {target_count}")
-        
+
         if genome_data is not None and isinstance(genome_data, dict):
             genome_count = _count_unique_fusion_pairs(genome_data)
             logging.info(f"[Fusion] Summary: Genome-wide count (filtered): {genome_count}")
-        
+
         # Generate fusion_summary.csv
         with open(summary_file, "w", newline="") as f:
             writer = csv.writer(f)
             writer.writerow(["target_fusions", "genome_fusions"])
             writer.writerow([target_count, genome_count])
-        
+
         logging.info(f"[Fusion] Generated summary file from pickle: target={target_count}, genome={genome_count}")
-        
+
         # Generate fusion_results.csv (use the one with more data)
         results_file = sample_dir / "fusion_results.csv"
         if target_count > 0:
@@ -390,15 +630,15 @@ def _generate_summary_files_from_pickle(sample_dir: Path, force_regenerate: bool
                 writer = csv.writer(f)
                 writer.writerow(["target_fusions", "genome_fusions"])
                 writer.writerow([0, genome_count])
-        
+
         # Generate sv_count.txt (use genome count for backward compatibility)
         sv_count_file = sample_dir / "sv_count.txt"
         with open(sv_count_file, "w") as f:
             f.write(str(genome_count))
-        
+
         logging.info(f"[Fusion] Generated summary files from pickle data - target: {target_count}, genome: {genome_count}")
         return True
-        
+
     except Exception as e:
         logging.warning(f"[Fusion] Failed to generate summary files from pickle: {e}")
         return False
@@ -417,7 +657,7 @@ def _load_processed_pickle(file_path: Path) -> Optional[Dict[str, Any]]:
         if file_path.stat().st_size == 0:
             logging.warning(f"[Fusion] File is empty: {file_path}")
             return None
-        
+
         # Try to load the pickle with better error handling
         with open(file_path, "rb") as f:
             try:
@@ -433,30 +673,30 @@ def _load_processed_pickle(file_path: Path) -> Optional[Dict[str, Any]]:
                     # If all else fails, return None and let the system regenerate
                     logging.error(f"[Fusion] Could not recover truncated pickle: {file_path}")
                     return None
-        
+
         # Expected keys: annotated_data (DataFrame), goodpairs (Series), gene_groups (list), candidate_count (int)
         if isinstance(data, dict):
             logging.info(f"[Fusion] Loaded pickle data with keys: {list(data.keys())}")
             logging.info(f"[Fusion] Raw candidate_count: {data.get('candidate_count', 'not found')}")
             logging.info(f"[Fusion] Raw gene_groups count: {len(data.get('gene_groups', []))}")
-            
+
             # Apply the same filtering logic as the reporting code
             annotated_data = data.get("annotated_data", pd.DataFrame())
             goodpairs = data.get("goodpairs", pd.Series())
-            
+
             logging.info(f"[Fusion] Raw annotated_data shape: {annotated_data.shape}")
             logging.info(f"[Fusion] Raw goodpairs length: {len(goodpairs)}")
-            
+
             if not annotated_data.empty and not goodpairs.empty:
                 # Only keep the good pairs (same as reporting code does)
                 data["annotated_data"] = annotated_data[goodpairs]
                 logging.info(f"[Fusion] Filtered data: {len(annotated_data)} -> {len(data['annotated_data'])} good pairs")
             else:
                 logging.info(f"[Fusion] No filtering applied - annotated_data empty: {annotated_data.empty}, goodpairs empty: {goodpairs.empty}")
-            
+
             logging.info(f"[Fusion] Final candidate_count: {data.get('candidate_count', 'not found')}")
             logging.info(f"[Fusion] Final gene_groups count: {len(data.get('gene_groups', []))}")
-            
+
             return data
         else:
             logging.warning(f"[Fusion] Loaded data is not a dict, type: {type(data)}")
@@ -466,6 +706,337 @@ def _load_processed_pickle(file_path: Path) -> Optional[Dict[str, Any]]:
             f"[Fusion] Failed to load processed fusion pickle: {file_path} - {e}"
         )
         return None
+
+
+def build_fusion_pairs_table_rows(
+    sample_dir: Path,
+    *,
+    show_fusion_target: bool = True,
+    show_fusion_genome: bool = False,
+) -> List[Dict[str, Any]]:
+    """Load fusion pickle data, cluster breakpoints, and return table rows.
+
+    Intended for the More Details page. Call from a worker thread so page
+    construction does not wait on pickle load + clustering.
+    """
+    import re
+
+    sample_dir = Path(sample_dir)
+    fusion_data = None
+    target_file = sample_dir / "fusion_candidates_master_processed.pkl"
+    genome_file = sample_dir / "fusion_candidates_all_processed.pkl"
+    try:
+        if show_fusion_target and target_file.exists():
+            fusion_data = _load_processed_pickle(target_file)
+        elif show_fusion_genome and genome_file.exists():
+            fusion_data = _load_processed_pickle(genome_file)
+    except Exception as exc:
+        logging.warning("Failed to load fusion data: %s", exc)
+        return []
+
+    if not fusion_data:
+        return []
+    annotated_data = fusion_data.get("annotated_data", pd.DataFrame())
+    if annotated_data is None or annotated_data.empty:
+        return []
+    goodpairs = fusion_data.get("goodpairs", pd.Series())
+    if goodpairs is not None and not goodpairs.empty and goodpairs.sum() > 0:
+        aligned_goodpairs = goodpairs.reindex(annotated_data.index, fill_value=False)
+        filtered_data = annotated_data[aligned_goodpairs]
+    else:
+        filtered_data = annotated_data
+    clustered_data = _cluster_fusion_reads(
+        filtered_data,
+        max_distance=10000,
+        use_breakpoint_validation=True,
+    )
+    if clustered_data is None or clustered_data.empty:
+        return []
+
+    built_rows: List[Dict[str, Any]] = []
+    for _, row in clustered_data.iterrows():
+        if all(col in row for col in ["gene1_start", "gene1_end", "gene2_start", "gene2_end"]):
+            start1_raw = int(row["gene1_start"])
+            end1_raw = int(row["gene1_end"])
+            start2_raw = int(row["gene2_start"])
+            end2_raw = int(row["gene2_end"])
+        else:
+            pos1_str = str(row.get("gene1_position", ""))
+            pos2_str = str(row.get("gene2_position", ""))
+            pos1_match = re.match(r"(\d+)[-–—](\d+)", pos1_str.replace(",", ""))
+            pos2_match = re.match(r"(\d+)[-–—](\d+)", pos2_str.replace(",", ""))
+            if pos1_match and pos2_match:
+                start1_raw = int(pos1_match.group(1))
+                end1_raw = int(pos1_match.group(2))
+                start2_raw = int(pos2_match.group(1))
+                end2_raw = int(pos2_match.group(2))
+            else:
+                pos1_single = re.search(r"(\d+)", pos1_str.replace(",", ""))
+                pos2_single = re.search(r"(\d+)", pos2_str.replace(",", ""))
+                if pos1_single and pos2_single:
+                    start1_raw = end1_raw = int(pos1_single.group(1))
+                    start2_raw = end2_raw = int(pos2_single.group(1))
+                else:
+                    continue
+        padding = 10000
+        min1 = min(start1_raw, end1_raw)
+        max1 = max(start1_raw, end1_raw)
+        min2 = min(start2_raw, end2_raw)
+        max2 = max(start2_raw, end2_raw)
+        chr1 = str(row.get("chr1", "Unknown"))
+        chr2 = str(row.get("chr2", "Unknown"))
+        built_rows.append(
+            {
+                "fusion_pair": row.get("fusion_pair", ""),
+                "chr1": chr1,
+                "pos1": f"{min1:,}-{max1:,}" if min1 != max1 else f"{min1:,}",
+                "chr2": chr2,
+                "pos2": f"{min2:,}-{max2:,}" if min2 != max2 else f"{min2:,}",
+                "reads": int(row.get("reads", 0)),
+                "region": (
+                    f"{chr1}:{max(1, min1 - padding)}-{max1 + padding} "
+                    f"{chr2}:{max(1, min2 - padding)}-{max2 + padding}"
+                ),
+                "__row_idx": len(built_rows),
+                "action": "",
+            }
+        )
+    return built_rows
+
+
+def _navigate_igv_to_region(region: str) -> None:
+    """Jump the More Details IGV browser to ``region`` without blocking the UI."""
+    if ui is None or not region:
+        return
+    from robin.gui.client_notify import run_javascript_when_connected
+
+    escaped_region = str(region).replace("\\", "\\\\").replace("'", "\\'").replace('"', '\\"')
+    run_javascript_when_connected(
+        f"""
+        (function() {{
+            try {{
+                if (window.lj_igv && window.lj_igv_browser_ready) {{
+                    window.lj_igv.search('{escaped_region}');
+                    return;
+                }}
+                setTimeout(function() {{
+                    if (window.lj_igv && window.lj_igv_browser_ready) {{
+                        window.lj_igv.search('{escaped_region}');
+                    }}
+                }}, 500);
+            }} catch (error) {{
+                console.error('[IGV] Navigation error:', error);
+            }}
+        }})();
+        """
+    )
+
+
+def _fusion_pairs_file_sig(sample_dir: Path) -> tuple:
+    target_file = Path(sample_dir) / "fusion_candidates_master_processed.pkl"
+    genome_file = Path(sample_dir) / "fusion_candidates_all_processed.pkl"
+    return (
+        target_file.stat().st_mtime if target_file.exists() else None,
+        genome_file.stat().st_mtime if genome_file.exists() else None,
+    )
+
+
+def _mount_fusion_pairs_table(rows: List[Dict[str, Any]]) -> None:
+    """Render a paged fusion-pairs table from already-built rows."""
+    from robin.gui.theme import (
+        clamp_qtable_server_pagination,
+        styled_server_paged_table,
+        wire_qtable_server_pagination_handlers,
+    )
+
+    with ui.element("div").classes("classification-insight-shell w-full min-w-0"):
+        ui.label("Fusion pairs").classes("classification-insight-heading text-headline-small")
+        if not rows:
+            ui.label("No validated fusion pairs found in this run.").classes(
+                "classification-insight-meta"
+            )
+            return
+        ui.label("Click a row to open the fusion region in IGV.").classes(
+            "classification-insight-meta w-full mb-2"
+        )
+        columns = [
+            {"name": "fusion_pair", "label": "Fusion Pair", "field": "fusion_pair", "sortable": False},
+            {"name": "chr1", "label": "Chr 1", "field": "chr1", "sortable": False},
+            {"name": "pos1", "label": "Breakpoint 1", "field": "pos1", "sortable": False},
+            {"name": "chr2", "label": "Chr 2", "field": "chr2", "sortable": False},
+            {"name": "pos2", "label": "Breakpoint 2", "field": "pos2", "sortable": False},
+            {"name": "reads", "label": "Supporting Reads", "field": "reads", "sortable": False},
+            {"name": "action", "label": "View in IGV", "field": "action", "sortable": False},
+        ]
+        fusion_preview_mode = len(rows) > 50_000
+        fusion_rows_source = rows[:5_000] if fusion_preview_mode else list(rows)
+        fusion_total = len(fusion_rows_source)
+        fusion_init_pagination = clamp_qtable_server_pagination(
+            {
+                "sortBy": None,
+                "descending": False,
+                "page": 1,
+                "rowsPerPage": 100,
+                "rowsNumber": fusion_total,
+            },
+            rows_number=fusion_total,
+            rows_per_page_default=100,
+        )
+        _, fusion_table = styled_server_paged_table(
+            columns=columns,
+            rows=[],
+            pagination=fusion_init_pagination,
+            row_key="__row_idx",
+            class_size="table-xs",
+        )
+        if fusion_preview_mode:
+            ui.label(
+                f"Preview mode: showing first {len(fusion_rows_source):,} rows of {len(rows):,}."
+            ).classes("classification-insight-level classification-insight-level--low w-full")
+
+        def _fill_fusion_from_pagination(pag: Dict[str, Any]) -> None:
+            total = len(fusion_rows_source)
+            pag = clamp_qtable_server_pagination(
+                pag, rows_number=total, rows_per_page_default=100
+            )
+            rpp = int(pag["rowsPerPage"])
+            page = int(pag["page"])
+            start = (page - 1) * rpp
+            fusion_table.rows = fusion_rows_source[start : start + rpp]
+            fusion_table.pagination = pag
+            fusion_table.update()
+
+        wire_qtable_server_pagination_handlers(fusion_table, _fill_fusion_from_pagination)
+        _fill_fusion_from_pagination(fusion_init_pagination)
+
+        fusion_table.add_slot(
+            "body-cell-action",
+            """
+<q-td key="action" :props="props">
+  <q-btn icon="visibility" size="sm" dense flat color="primary"
+    @click="$parent.$emit('fusion-view-igv', props.row.__row_idx)"
+    title="View in IGV" />
+</q-td>
+""",
+        )
+
+        def _region_for_idx(row_idx: Any) -> str:
+            try:
+                idx = int(row_idx)
+            except (TypeError, ValueError):
+                return ""
+            if 0 <= idx < len(fusion_rows_source):
+                return str(fusion_rows_source[idx].get("region", "") or "")
+            return ""
+
+        def on_fusion_view_igv(e: Any) -> None:
+            region = _region_for_idx(getattr(e, "args", None))
+            if region:
+                _navigate_igv_to_region(region)
+
+        fusion_table.on("fusion-view-igv", on_fusion_view_igv)
+
+        def on_fusion_row_click(e: Any) -> None:
+            args = getattr(e, "args", None)
+            row = None
+            if isinstance(args, dict):
+                row = args
+            elif isinstance(args, (list, tuple)):
+                if args and isinstance(args[0], dict):
+                    row = args[0]
+                elif len(args) > 1 and isinstance(args[1], dict):
+                    row = args[1]
+            if isinstance(row, dict):
+                region = str(row.get("region", "") or "")
+                if not region:
+                    region = _region_for_idx(row.get("__row_idx"))
+                if region:
+                    _navigate_igv_to_region(region)
+
+        try:
+            fusion_table.on("rowClick", on_fusion_row_click)
+        except Exception:
+            pass
+
+        total_reads = sum(int(r.get("reads", 0) or 0) for r in rows)
+        ui.label(
+            f"Total fusions: {len(rows)} | Total supporting reads: {total_reads}"
+        ).classes("classification-insight-foot")
+
+        try:
+            def _cleanup() -> None:
+                fusion_rows_source.clear()
+                fusion_table.rows = []
+            ui.context.client.on_disconnect(_cleanup)
+        except Exception:
+            pass
+
+
+def add_sample_details_fusion_pairs(
+    launcher: Any,
+    sample_dir: Path,
+    *,
+    show_fusion_target: bool = True,
+    show_fusion_genome: bool = False,
+) -> None:
+    """Mount the More Details fusion-pairs table without blocking first paint."""
+    from robin.gui.client_notify import schedule_after_page_sent
+
+    sample_dir = Path(sample_dir)
+    sample_key = str(sample_dir)
+    fusion_state = getattr(launcher, "_fusion_state", None)
+    if not isinstance(fusion_state, dict):
+        fusion_state = {}
+        launcher._fusion_state = fusion_state
+    cache_entry = fusion_state.setdefault(sample_key, {})
+    file_sig = _fusion_pairs_file_sig(sample_dir)
+    cached_rows = cache_entry.get("details_pairs_rows")
+    cache_hit = (
+        isinstance(cached_rows, list) and cache_entry.get("details_pairs_sig") == file_sig
+    )
+
+    host = ui.column().classes("w-full min-w-0")
+
+    def _render(rows: List[Dict[str, Any]]) -> None:
+        host.clear()
+        with host:
+            _mount_fusion_pairs_table(rows)
+
+    if cache_hit:
+        _render(list(cached_rows))
+        return
+
+    with host:
+        with ui.element("div").classes("classification-insight-shell w-full min-w-0"):
+            ui.label("Fusion pairs").classes(
+                "classification-insight-heading text-headline-small"
+            )
+            ui.label("Loading fusion pairs…").classes("classification-insight-meta")
+
+    def _load_sync() -> List[Dict[str, Any]]:
+        return build_fusion_pairs_table_rows(
+            sample_dir,
+            show_fusion_target=show_fusion_target,
+            show_fusion_genome=show_fusion_genome,
+        )
+
+    async def _load_async() -> None:
+        try:
+            rows = await asyncio.to_thread(_load_sync)
+        except Exception as exc:
+            logging.warning("Fusion pairs background load failed: %s", exc)
+            rows = []
+        cache_entry["details_pairs_sig"] = _fusion_pairs_file_sig(sample_dir)
+        cache_entry["details_pairs_rows"] = [dict(r) for r in rows]
+        _render(rows)
+
+    def _start_load() -> None:
+        if background_tasks is not None:
+            background_tasks.create(_load_async())
+            return
+        _render(_load_sync())
+
+    schedule_after_page_sent(_start_load)
 
 
 def _make_fusion_table(container: Any, df: pd.DataFrame) -> Any:
@@ -478,10 +1049,10 @@ def _make_fusion_table(container: Any, df: pd.DataFrame) -> Any:
     with container:
         # Use styled_table for consistent styling
         from robin.gui.theme import styled_table
-        
+
         # Convert DataFrame to rows format for styled_table
         processed_df = _rename_and_sort(df)
-        
+
         # Create columns definition from DataFrame
         columns = []
         for col in processed_df.columns:
@@ -491,67 +1062,53 @@ def _make_fusion_table(container: Any, df: pd.DataFrame) -> Any:
                 "field": col,
                 "sortable": True
             })
-        
-        # Create rows from DataFrame
-        rows = processed_df.to_dict('records')
-        
-        # Create styled table
-        table_container, table = styled_table(
-            columns=columns,
-            rows=rows,
-            pagination=25,
-            class_size="table-xs"
+
+        table = _render_paged_df_table(
+            processed_df,
+            columns,
+            pagination_default=100,
+            class_size="table-xs",
+            search_placeholder="Search",
         )
-        
-        # Add search functionality
-        try:
-            with table.add_slot("top-right"):
-                with ui.input(placeholder="Search").props("type=search").bind_value(
-                    table, "filter"
-                ).add_slot("append"):
-                    ui.icon("search")
-        except Exception:
-            pass
-        
         return table
 
 
 def _cluster_nearby_regions(regions_df: pd.DataFrame, max_distance: int = 200) -> pd.DataFrame:
     """
     Cluster nearby regions together to merge similar breakpoint events.
-    
+
     Args:
         regions_df: DataFrame with region data (chromosome, start, end, read_ids, etc.)
         max_distance: Maximum distance for clustering regions (default: 200bp)
-        
+
     Returns:
         DataFrame with clustered/merged regions
     """
     if regions_df.empty:
         return pd.DataFrame()
-    
+
     clustered_results = []
     used_indices = set()
-    
+
     # Group by chromosome first
     for chromosome, chr_group in regions_df.groupby("chromosome", observed=True):
         chr_regions = chr_group.reset_index(drop=True)
-        
+
         for i, row in chr_regions.iterrows():
             if i in used_indices:
                 continue
-            
+
             # Start a new cluster with this region
             cluster_indices = [i]
             used_indices.add(i)
-            
+
             cluster_start = row["start"]
             cluster_end = row["end"]
             cluster_reads = set()
             cluster_mapqs = []
             cluster_spans = []
             cluster_types = set()
-            
+
             # Add reads from this region (using set to ensure uniqueness)
             if "read_ids" in row:
                 read_ids = row["read_ids"]
@@ -570,22 +1127,22 @@ def _cluster_nearby_regions(regions_df: pd.DataFrame, max_distance: int = 200) -
                 logging.warning(f"[Fusion] Missing read_ids for region, using read_count estimate")
                 for k in range(int(row["read_count"])):
                     cluster_reads.add(f"read_{i}_{k}")
-            
+
             if "avg_mapping_quality" in row:
                 cluster_mapqs.append(row["avg_mapping_quality"])
             if "avg_mapping_span" in row:
                 cluster_spans.append(row["avg_mapping_span"])
             if "event_type" in row:
                 cluster_types.add(row["event_type"])
-            
+
             # Find nearby regions to merge
             for j, other_row in chr_regions.iterrows():
                 if j in used_indices:
                     continue
-                
+
                 other_start = other_row["start"]
                 other_end = other_row["end"]
-                
+
                 # Check if regions overlap or are close
                 overlap = not (cluster_end < other_start or cluster_start > other_end)
                 # Check if start/end positions are within max_distance
@@ -595,15 +1152,15 @@ def _cluster_nearby_regions(regions_df: pd.DataFrame, max_distance: int = 200) -
                 midpoint1 = (cluster_start + cluster_end) // 2
                 midpoint2 = (other_start + other_end) // 2
                 midpoints_close = abs(midpoint1 - midpoint2) <= max_distance
-                
+
                 if overlap or (start_close and end_close) or midpoints_close:
                     cluster_indices.append(j)
                     used_indices.add(j)
-                    
+
                     # Expand cluster boundaries
                     cluster_start = min(cluster_start, other_start)
                     cluster_end = max(cluster_end, other_end)
-                    
+
                     # Merge read counts and statistics (using set to ensure uniqueness)
                     if "read_ids" in other_row:
                         other_read_ids = other_row["read_ids"]
@@ -622,14 +1179,14 @@ def _cluster_nearby_regions(regions_df: pd.DataFrame, max_distance: int = 200) -
                         logging.warning(f"[Fusion] Missing read_ids for merged region, using read_count estimate")
                         for k in range(int(other_row["read_count"])):
                             cluster_reads.add(f"read_{j}_{k}")
-                    
+
                     if "avg_mapping_quality" in other_row:
                         cluster_mapqs.append(other_row["avg_mapping_quality"])
                     if "avg_mapping_span" in other_row:
                         cluster_spans.append(other_row["avg_mapping_span"])
                     if "event_type" in other_row:
                         cluster_types.add(other_row["event_type"])
-            
+
             # Create merged region
             # read_count is the number of UNIQUE reads supporting this clustered event
             # (using len() on the set ensures we count each read only once, even if it appears in multiple merged regions)
@@ -642,38 +1199,38 @@ def _cluster_nearby_regions(regions_df: pd.DataFrame, max_distance: int = 200) -
                 "avg_mapping_quality": round(sum(cluster_mapqs) / len(cluster_mapqs), 1) if cluster_mapqs else 0,
                 "avg_mapping_span": round(sum(cluster_spans) / len(cluster_spans), 0) if cluster_spans else 0,
             })
-    
+
     if not clustered_results:
         return pd.DataFrame()
-    
+
     return pd.DataFrame(clustered_results)
 
 
-def _summarize_master_bed_events(df: pd.DataFrame, min_read_support: int = 3, min_mapq: int = 50, 
+def _summarize_master_bed_events(df: pd.DataFrame, min_read_support: int = 3, min_mapq: int = 50,
                                   cluster_distance: int = 5000) -> pd.DataFrame:
     """
     Summarize master BED data into detected breakpoint pair events.
-    
+
     Uses the same breakpoint pair extraction logic as _extract_master_bed_breakpoints:
     - Identifies reads with both primary and supplementary alignments
     - Creates breakpoint pairs (primary + supplementary for each read)
     - Clusters similar breakpoint pairs (both primary and supplementary locations must be close)
     - Returns both primary and supplementary regions as separate events
-    
+
     Only includes high-quality supplementary mappings (MapQ >= min_mapq).
-    
+
     Args:
         df: DataFrame with master BED fusion candidates (individual reads)
         min_read_support: Minimum number of reads required to show an event (default: 3)
         min_mapq: Minimum mapping quality for supplementary mappings (default: 50)
         cluster_distance: Maximum distance for clustering breakpoint pairs (default: 5000bp)
-        
+
     Returns:
         DataFrame with summarized breakpoint pair events (both primary and supplementary regions)
     """
     if df is None or df.empty:
         return pd.DataFrame()
-    
+
     try:
         # Early exit: if dataset is very large, limit processing to avoid blocking UI
         # This prevents the GUI from freezing when processing very large datasets
@@ -682,14 +1239,14 @@ def _summarize_master_bed_events(df: pd.DataFrame, min_read_support: int = 3, mi
             logging.warning(f"[Fusion] Master BED dataset too large ({len(df)} rows), limiting to {MAX_ROWS_TO_PROCESS} rows for UI performance")
             # Sample rows rather than just taking head() to get better coverage
             df = df.sample(n=MAX_ROWS_TO_PROCESS, random_state=42).copy() if len(df) > MAX_ROWS_TO_PROCESS else df.copy()
-        
+
         # Check required columns
         if "read_id" not in df.columns:
             logging.debug("[Fusion] Missing required column (read_id) in master BED candidates")
             return pd.DataFrame()
-        
+
         df = df.copy()
-        
+
         # Filter to only high-quality supplementary mappings (MapQ >= min_mapq)
         # For master_bed_region entries, we keep them all (they're primary alignments)
         # For supplementary entries, we filter by MapQ
@@ -701,11 +1258,11 @@ def _summarize_master_bed_events(df: pd.DataFrame, min_read_support: int = 3, mi
                 (df["mapping_quality"] >= min_mapq)
             )
             df = df[high_quality_mask].copy()
-            
+
             if df.empty:
                 logging.debug(f"[Fusion] No high-quality mappings found (MapQ >= {min_mapq})")
                 return pd.DataFrame()
-        
+
         # Separate primary and supplementary alignments using col4
         # col4 is more reliable: "master_bed_region" = primary alignment, "master_bed_supplementary" = supplementary
         if "col4" in df.columns:
@@ -718,39 +1275,39 @@ def _summarize_master_bed_events(df: pd.DataFrame, min_read_support: int = 3, mi
                 return pd.DataFrame()
             primary_df = df[df["is_supplementary"] == False].copy()
             supplementary_df = df[df["is_supplementary"] == True].copy()
-        
+
         if primary_df.empty or supplementary_df.empty:
             logging.debug("[Fusion] Need both primary and supplementary alignments to identify breakpoint pairs")
             return pd.DataFrame()
-        
+
         # Find reads that have both primary and supplementary alignments
         primary_read_ids = set(primary_df["read_id"].unique())
         supplementary_read_ids = set(supplementary_df["read_id"].unique())
         reads_with_both = primary_read_ids & supplementary_read_ids
-        
+
         if not reads_with_both:
             logging.debug("[Fusion] No reads have both primary and supplementary alignments")
             return pd.DataFrame()
-        
+
         # Filter to only reads with both primary and supplementary alignments
         primary_filtered = primary_df[primary_df["read_id"].isin(reads_with_both)].copy()
         supplementary_filtered = supplementary_df[supplementary_df["read_id"].isin(reads_with_both)].copy()
-        
+
         # Build breakpoint pairs: for each read, pair its primary alignment with each supplementary alignment
         breakpoint_pairs = []
-        
+
         # Group by read_id for efficient lookup
         primary_by_read = primary_filtered.groupby("read_id", observed=True)
         supplementary_by_read = supplementary_filtered.groupby("read_id", observed=True)
-        
+
         for read_id in reads_with_both:
             # Get all primary and supplementary alignments for this read
             read_primaries = primary_by_read.get_group(read_id) if read_id in primary_by_read.groups else pd.DataFrame()
             read_supplementaries = supplementary_by_read.get_group(read_id) if read_id in supplementary_by_read.groups else pd.DataFrame()
-            
+
             if read_primaries.empty or read_supplementaries.empty:
                 continue
-            
+
             # Create pairs using cross product
             # Get columns that exist (mapping_quality and mapping_span may not always be present)
             primary_cols = ["reference_id", "reference_start", "reference_end"]
@@ -763,31 +1320,49 @@ def _summarize_master_bed_events(df: pd.DataFrame, min_read_support: int = 3, mi
                 supp_cols.append("mapping_quality")
             if "mapping_span" in read_supplementaries.columns:
                 supp_cols.append("mapping_span")
-            
-            primaries_list = read_primaries[primary_cols].to_dict("records")
-            supplementaries_list = read_supplementaries[supp_cols].to_dict("records")
-            
+
+            primaries_list = list(read_primaries[primary_cols].itertuples(index=False, name=None))
+            supplementaries_list = list(read_supplementaries[supp_cols].itertuples(index=False, name=None))
+
             # Create all combinations
+            p_idx = {name: i for i, name in enumerate(primary_cols)}
+            s_idx = {name: i for i, name in enumerate(supp_cols)}
             for primary_row in primaries_list:
                 for supp_row in supplementaries_list:
                     breakpoint_pairs.append({
                         "read_id": read_id,
-                        "primary_chrom": primary_row["reference_id"],
-                        "primary_start": int(primary_row["reference_start"]),
-                        "primary_end": int(primary_row["reference_end"]),
-                        "primary_mapq": primary_row.get("mapping_quality", 0) if "mapping_quality" in primary_row else 0,
-                        "primary_span": primary_row.get("mapping_span", 0) if "mapping_span" in primary_row else 0,
-                        "supp_chrom": supp_row["reference_id"],
-                        "supp_start": int(supp_row["reference_start"]),
-                        "supp_end": int(supp_row["reference_end"]),
-                        "supp_mapq": supp_row.get("mapping_quality", 0) if "mapping_quality" in supp_row else 0,
-                        "supp_span": supp_row.get("mapping_span", 0) if "mapping_span" in supp_row else 0,
+                        "primary_chrom": primary_row[p_idx["reference_id"]],
+                        "primary_start": int(primary_row[p_idx["reference_start"]]),
+                        "primary_end": int(primary_row[p_idx["reference_end"]]),
+                        "primary_mapq": (
+                            primary_row[p_idx["mapping_quality"]]
+                            if "mapping_quality" in p_idx
+                            else 0
+                        ),
+                        "primary_span": (
+                            primary_row[p_idx["mapping_span"]]
+                            if "mapping_span" in p_idx
+                            else 0
+                        ),
+                        "supp_chrom": supp_row[s_idx["reference_id"]],
+                        "supp_start": int(supp_row[s_idx["reference_start"]]),
+                        "supp_end": int(supp_row[s_idx["reference_end"]]),
+                        "supp_mapq": (
+                            supp_row[s_idx["mapping_quality"]]
+                            if "mapping_quality" in s_idx
+                            else 0
+                        ),
+                        "supp_span": (
+                            supp_row[s_idx["mapping_span"]]
+                            if "mapping_span" in s_idx
+                            else 0
+                        ),
                     })
-        
+
         if not breakpoint_pairs:
             logging.debug("[Fusion] No breakpoint pairs created")
             return pd.DataFrame()
-        
+
         # Early exit: if too many breakpoint pairs, limit to prevent UI blocking
         MAX_PAIRS_TO_PROCESS = 10000  # Limit clustering to prevent UI blocking
         if len(breakpoint_pairs) > MAX_PAIRS_TO_PROCESS:
@@ -795,14 +1370,14 @@ def _summarize_master_bed_events(df: pd.DataFrame, min_read_support: int = 3, mi
             # Sample pairs to get better coverage
             import random
             breakpoint_pairs = random.sample(breakpoint_pairs, MAX_PAIRS_TO_PROCESS)
-        
+
         # Cluster similar breakpoint pairs
         # Two breakpoint pairs are similar if:
         # - Primary locations are close (same chromosome, within cluster_distance)
         # - Supplementary locations are close (same chromosome, within cluster_distance)
         clustered_pairs = []
         used_indices = set()
-        
+
         # Group pairs by chromosome combination for faster clustering
         pairs_by_chrom = {}
         for i, pair in enumerate(breakpoint_pairs):
@@ -810,22 +1385,22 @@ def _summarize_master_bed_events(df: pd.DataFrame, min_read_support: int = 3, mi
             if chrom_key not in pairs_by_chrom:
                 pairs_by_chrom[chrom_key] = []
             pairs_by_chrom[chrom_key].append((i, pair))
-        
+
         # Cluster within each chromosome combination
         for chrom_key, chrom_pairs in pairs_by_chrom.items():
             if len(chrom_pairs) == 0:
                 continue
-            
+
             # Sort pairs within this chromosome combination
             sorted_chrom_pairs = sorted(chrom_pairs, key=lambda x: (
                 x[1]["primary_start"], x[1]["supp_start"]
             ))
-            
+
             # Cluster pairs in this chromosome group
             for idx, (orig_i, pair) in enumerate(sorted_chrom_pairs):
                 if orig_i in used_indices:
                     continue
-                
+
                 # Start a new cluster
                 cluster_read_ids = {pair["read_id"]}
                 cluster_primary_chrom = pair["primary_chrom"]
@@ -839,13 +1414,13 @@ def _summarize_master_bed_events(df: pd.DataFrame, min_read_support: int = 3, mi
                 cluster_supp_mapqs = [pair["supp_mapq"]]
                 cluster_supp_spans = [pair["supp_span"]]
                 used_indices.add(orig_i)
-                
+
                 # Calculate cluster bounds once
                 cluster_primary_min = min(cluster_primary_starts)
                 cluster_primary_max = max(cluster_primary_ends)
                 cluster_supp_min = min(cluster_supp_starts)
                 cluster_supp_max = max(cluster_supp_ends)
-                
+
                 # Iteratively find all similar breakpoint pairs in this chromosome group
                 changed = True
                 while changed:
@@ -853,19 +1428,19 @@ def _summarize_master_bed_events(df: pd.DataFrame, min_read_support: int = 3, mi
                     for j, (other_orig_i, other_pair) in enumerate(sorted_chrom_pairs):
                         if other_orig_i in used_indices:
                             continue
-                        
+
                         # Check if primary locations are similar (same chromosome, close coordinates)
                         primary_similar = (
                             other_pair["primary_start"] <= cluster_primary_max + cluster_distance and
                             other_pair["primary_end"] >= cluster_primary_min - cluster_distance
                         )
-                        
+
                         # Check if supplementary locations are similar (same chromosome, close coordinates)
                         supp_similar = (
                             other_pair["supp_start"] <= cluster_supp_max + cluster_distance and
                             other_pair["supp_end"] >= cluster_supp_min - cluster_distance
                         )
-                        
+
                         # Both primary and supplementary must be similar to cluster
                         if primary_similar and supp_similar:
                             cluster_read_ids.add(other_pair["read_id"])
@@ -884,7 +1459,7 @@ def _summarize_master_bed_events(df: pd.DataFrame, min_read_support: int = 3, mi
                             cluster_primary_max = max(cluster_primary_ends)
                             cluster_supp_min = min(cluster_supp_starts)
                             cluster_supp_max = max(cluster_supp_ends)
-                
+
                 # Create clustered breakpoint pair
                 clustered_pairs.append({
                     "primary_chrom": cluster_primary_chrom,
@@ -899,17 +1474,17 @@ def _summarize_master_bed_events(df: pd.DataFrame, min_read_support: int = 3, mi
                     "supp_avg_span": sum(cluster_supp_spans) / len(cluster_supp_spans) if cluster_supp_spans else 0,
                     "read_count": len(cluster_read_ids),
                 })
-        
+
         # Filter for breakpoint pairs with sufficient read support
         supported_pairs = [
-            p for p in clustered_pairs 
+            p for p in clustered_pairs
             if p["read_count"] >= min_read_support
         ]
-        
+
         if not supported_pairs:
             logging.debug(f"[Fusion] No breakpoint pairs found with >= {min_read_support} read support")
             return pd.DataFrame()
-        
+
         # Convert to DataFrame format - include both primary and supplementary regions
         events = []
         for pair in supported_pairs:
@@ -924,7 +1499,7 @@ def _summarize_master_bed_events(df: pd.DataFrame, min_read_support: int = 3, mi
                     "avg_mapping_quality": round(pair["primary_avg_mapq"], 1),
                     "avg_mapping_span": round(pair["primary_avg_span"], 0),
                 })
-            
+
             # Add supplementary region event
             if pair["supp_start"] > 0 and pair["supp_end"] > pair["supp_start"]:
                 events.append({
@@ -936,20 +1511,20 @@ def _summarize_master_bed_events(df: pd.DataFrame, min_read_support: int = 3, mi
                     "avg_mapping_quality": round(pair["supp_avg_mapq"], 1),
                     "avg_mapping_span": round(pair["supp_avg_span"], 0),
                 })
-        
+
         if not events:
             return pd.DataFrame()
-        
+
         result_df = pd.DataFrame(events)
-        
+
         # Sort by read count (descending), then by chromosome and start
         result_df = result_df.sort_values(
             ["read_count", "chromosome", "start"],
             ascending=[False, True, True]
         )
-        
+
         return result_df
-        
+
     except Exception as e:
         logging.warning(f"[Fusion] Failed to summarize master BED events: {e}")
         import traceback
@@ -959,7 +1534,7 @@ def _summarize_master_bed_events(df: pd.DataFrame, min_read_support: int = 3, mi
 
 def _make_master_bed_summary_table(container: Any, df: pd.DataFrame, sample_dir: Optional[Path] = None) -> Any:
     """Create a summary table for master BED events (regions) instead of individual reads.
-    
+
     Args:
         container: UI container for the table
         df: Master BED candidates DataFrame (for backward compatibility, but not used if summary file exists)
@@ -975,21 +1550,21 @@ def _make_master_bed_summary_table(container: Any, df: pd.DataFrame, sample_dir:
                 logging.debug(f"[Fusion] Loaded pre-computed master BED events summary from {summary_file}")
             except Exception as e:
                 logging.warning(f"[Fusion] Failed to load pre-computed summary: {e}")
-    
+
     # Fallback to computing on the fly if summary file doesn't exist (backward compatibility)
     if summary_df.empty and df is not None and not df.empty:
         logging.debug("[Fusion] Pre-computed summary not found, computing on the fly (this may be slow)")
         summary_df = _summarize_master_bed_events(df, min_read_support=3, min_mapq=50, cluster_distance=5000)
-    
+
     if summary_df.empty:
         with container:
             ui.label("No master BED events found").classes("text-gray-600")
         return None
-    
+
     with container:
         # Use styled_table for consistent styling
         from robin.gui.theme import styled_table
-        
+
         # Define columns for the summary table
         columns = [
             {
@@ -1035,66 +1610,53 @@ def _make_master_bed_summary_table(container: Any, df: pd.DataFrame, sample_dir:
                 "sortable": True,
             },
         ]
-        
-        # Convert to rows
-        rows = summary_df.to_dict('records')
-        
-        # Create styled table
-        table_container, table = styled_table(
-            columns=columns,
-            rows=rows,
-            pagination=20,
-            class_size="table-xs"
+
+        table = _render_paged_df_table(
+            summary_df,
+            columns,
+            pagination_default=100,
+            class_size="table-xs",
+            search_placeholder="Search events...",
         )
-        
-        # Add search functionality
-        try:
-            with table.add_slot("top-right"):
-                with ui.input(placeholder="Search events...").props("type=search").bind_value(
-                    table, "filter"
-                ).add_slot("append"):
-                    ui.icon("search")
-        except Exception:
-            pass
-        
+
         # Add summary information
         total_events = len(summary_df)
         total_reads = summary_df["read_count"].sum()
         ui.label(
             f"Total events: {total_events} | Total supporting reads: {total_reads}"
         ).classes("text-xs text-gray-500 mt-1")
-        
+
         return table
 
 
-def _cluster_fusion_reads(filtered_data: pd.DataFrame, max_distance: int = 10000, 
+def _cluster_fusion_reads(filtered_data: pd.DataFrame, max_distance: int = 10000,
                          use_breakpoint_validation: bool = True) -> pd.DataFrame:
     """
     Cluster fusion reads by similar mapping coordinates with optional breakpoint validation.
-    
+
     Args:
         filtered_data: DataFrame with fusion candidate data
         max_distance: Maximum distance for clustering (used differently for breakpoint vs coordinate clustering)
         use_breakpoint_validation: If True, use breakpoint validation; if False, use original coordinate clustering
-        
+
     Returns:
         DataFrame with clustered fusion results
     """
     if use_breakpoint_validation:
         # Use breakpoint validation for more accurate fusion detection
         logging.info("[Fusion] Using breakpoint validation for clustering")
-        
+
         # Validate fusion breakpoints
         validated_breakpoints = _validate_fusion_breakpoints(
-            filtered_data, 
-            min_read_support=4, 
+            filtered_data,
+            min_read_support=4,
             max_breakpoint_distance=100  # Much tighter clustering for breakpoints
         )
-        
+
         if validated_breakpoints.empty:
             logging.info("[Fusion] No validated breakpoints found")
             return pd.DataFrame()
-        
+
         # Convert to the expected format for the summary table
         clustered_results = []
         for _, row in validated_breakpoints.iterrows():
@@ -1111,15 +1673,15 @@ def _cluster_fusion_reads(filtered_data: pd.DataFrame, max_distance: int = 10000
                 "avg_mapping_span": row["avg_mapping_span"],
                 "cluster_id": row["cluster_id"]
             })
-        
+
         logging.info(f"[Fusion] Breakpoint validation found {len(clustered_results)} validated fusion clusters")
         return pd.DataFrame(clustered_results)
-    
+
     else:
         # Original coordinate-based clustering (fallback)
         logging.info("[Fusion] Using original coordinate clustering")
         fusion_summary = []
-        
+
         # Group by read_id to get gene pairs
         for read_id, group in filtered_data.groupby("read_id", observed=True):
             genes = group["col4"].unique()
@@ -1127,7 +1689,7 @@ def _cluster_fusion_reads(filtered_data: pd.DataFrame, max_distance: int = 10000
                 # Sort genes for consistent pair representation
                 genes_sorted = sorted(genes)
                 gene_pair = "-".join(genes_sorted)
-                
+
                 # Get chromosome and position information for each gene
                 gene_info = {}
                 for gene in genes_sorted:
@@ -1139,13 +1701,13 @@ def _cluster_fusion_reads(filtered_data: pd.DataFrame, max_distance: int = 10000
                             "start": first_row.get("reference_start", 0),
                             "end": first_row.get("reference_end", 0)
                         }
-                
+
                 # Only add if we have info for at least 2 genes
                 if len(gene_info) >= 2:
                     genes_with_info = [g for g in genes_sorted if g in gene_info]
                     if len(genes_with_info) >= 2:
                         gene1, gene2 = genes_with_info[0], genes_with_info[1]
-                        
+
                         fusion_summary.append({
                             "fusion_pair": gene_pair,
                             "chr1": gene_info[gene1]["chromosome"],
@@ -1158,28 +1720,28 @@ def _cluster_fusion_reads(filtered_data: pd.DataFrame, max_distance: int = 10000
                             "gene2_end": gene_info[gene2]["end"],
                             "read_id": read_id
                         })
-        
+
         if not fusion_summary:
             return pd.DataFrame()
-        
+
         summary_df = pd.DataFrame(fusion_summary)
-        
+
         # Cluster by fusion pair and similar coordinates
         clustered_results = []
-        
+
         for fusion_pair in summary_df["fusion_pair"].unique():
             pair_data = summary_df[summary_df["fusion_pair"] == fusion_pair]
-            
+
             # Group by chromosome combination
             for (chr1, chr2), chr_group in pair_data.groupby(["chr1", "chr2"]):
                 # Cluster gene1 positions
                 gene1_positions = chr_group[["gene1_start", "gene1_end"]].values
                 gene1_clusters = _cluster_positions(gene1_positions, max_distance)
-                
+
                 # Cluster gene2 positions
                 gene2_positions = chr_group[["gene2_start", "gene2_end"]].values
                 gene2_clusters = _cluster_positions(gene2_positions, max_distance)
-                
+
                 # Create cluster combinations
                 for i, gene1_cluster in enumerate(gene1_clusters):
                     for j, gene2_cluster in enumerate(gene2_clusters):
@@ -1188,12 +1750,12 @@ def _cluster_fusion_reads(filtered_data: pd.DataFrame, max_distance: int = 10000
                         for idx, row in chr_group.iterrows():
                             gene1_start, gene1_end = row["gene1_start"], row["gene1_end"]
                             gene2_start, gene2_end = row["gene2_start"], row["gene2_end"]
-                            
+
                             # Check if this read belongs to both clusters
                             if (_position_in_cluster(gene1_start, gene1_end, gene1_cluster, max_distance) and
                                 _position_in_cluster(gene2_start, gene2_end, gene2_cluster, max_distance)):
                                 cluster_reads.append(row["read_id"])
-                        
+
                         # Only include clusters with minimum read support (4 or more reads)
                         if len(cluster_reads) >= 4:
                             # Calculate cluster boundaries
@@ -1201,7 +1763,7 @@ def _cluster_fusion_reads(filtered_data: pd.DataFrame, max_distance: int = 10000
                             gene1_max_end = max(gene1_cluster[:, 1])
                             gene2_min_start = min(gene2_cluster[:, 0])
                             gene2_max_end = max(gene2_cluster[:, 1])
-                            
+
                             clustered_results.append({
                                 "fusion_pair": fusion_pair,
                                 "chr1": chr1,
@@ -1212,7 +1774,7 @@ def _cluster_fusion_reads(filtered_data: pd.DataFrame, max_distance: int = 10000
                                 "gene2_position": f"{gene2_min_start}-{gene2_max_end}",
                                 "reads": len(cluster_reads)
                             })
-        
+
         return pd.DataFrame(clustered_results)
 
 
@@ -1220,30 +1782,30 @@ def _cluster_positions(positions: np.ndarray, max_distance: int) -> List[np.ndar
     """Cluster genomic positions based on distance."""
     if len(positions) == 0:
         return []
-    
+
     # Simple clustering: group positions that are within max_distance
     clusters = []
     used = set()
-    
+
     for i, (start, end) in enumerate(positions):
         if i in used:
             continue
-            
+
         cluster = [positions[i]]
         used.add(i)
-        
+
         for j, (other_start, other_end) in enumerate(positions):
             if j in used:
                 continue
-                
+
             # Check if positions overlap or are close
             if (_positions_overlap(start, end, other_start, other_end) or
                 _positions_close(start, end, other_start, other_end, max_distance)):
                 cluster.append(positions[j])
                 used.add(j)
-        
+
         clusters.append(np.array(cluster))
-    
+
     return clusters
 
 
@@ -1254,7 +1816,7 @@ def _positions_overlap(start1: int, end1: int, start2: int, end2: int) -> bool:
 
 def _positions_close(start1: int, end1: int, start2: int, end2: int, max_distance: int) -> bool:
     """Check if two genomic positions are within max_distance."""
-    distance = min(abs(start1 - start2), abs(end1 - end2), 
+    distance = min(abs(start1 - start2), abs(end1 - end2),
                    abs(start1 - end2), abs(end1 - start2))
     return distance <= max_distance
 
@@ -1275,29 +1837,29 @@ def _position_in_cluster(start: int, end: int, cluster: np.ndarray, max_distance
 def _extract_fusion_breakpoints(annotated_data: pd.DataFrame) -> pd.DataFrame:
     """
     Extract fusion breakpoints from annotated fusion data.
-    
+
     This function analyzes reads that map to multiple genes and extracts
     the actual fusion junction points (breakpoints) from their supplementary alignments.
-    
+
     Args:
         annotated_data: DataFrame with fusion candidate data
-        
+
     Returns:
         DataFrame with breakpoint information for each read
     """
     breakpoint_data = []
-    
+
     # Group by read_id to analyze each read's alignments
     for read_id, read_group in annotated_data.groupby("read_id", observed=True):
         genes = read_group["col4"].unique()
-        
+
         # Only process reads that map to multiple genes (fusion candidates)
         if len(genes) < 2:
             continue
-            
+
         # Sort genes for consistent ordering
         genes_sorted = sorted(genes)
-        
+
         # Extract breakpoint information for each gene
         gene_breakpoints = {}
         for gene in genes_sorted:
@@ -1313,7 +1875,7 @@ def _extract_fusion_breakpoints(annotated_data: pd.DataFrame) -> pd.DataFrame:
                     "mapping_quality": first_row.get("mapping_quality", 0),
                     "mapping_span": first_row.get("mapping_span", 0)
                 }
-        
+
         # Only proceed if we have breakpoint info for at least 2 genes
         if len(gene_breakpoints) >= 2:
             # Create breakpoint pairs for all gene combinations
@@ -1321,7 +1883,7 @@ def _extract_fusion_breakpoints(annotated_data: pd.DataFrame) -> pd.DataFrame:
             for i in range(len(gene_list)):
                 for j in range(i + 1, len(gene_list)):
                     gene1, gene2 = gene_list[i], gene_list[j]
-                    
+
                     breakpoint_data.append({
                         "read_id": read_id,
                         "gene_pair": f"{gene1}-{gene2}",
@@ -1344,42 +1906,42 @@ def _extract_fusion_breakpoints(annotated_data: pd.DataFrame) -> pd.DataFrame:
                             gene_breakpoints[gene2]["mapping_span"]
                         )
                     })
-    
+
     return pd.DataFrame(breakpoint_data)
 
 
 def _cluster_breakpoints(breakpoint_data: pd.DataFrame, max_distance: int = 100) -> pd.DataFrame:
     """
     Cluster breakpoints by similar coordinates within each gene pair.
-    
+
     This function groups reads that have similar breakpoint coordinates,
     which indicates they support the same fusion event.
-    
+
     Args:
         breakpoint_data: DataFrame with breakpoint information
         max_distance: Maximum distance for clustering breakpoints
-        
+
     Returns:
         DataFrame with clustered breakpoint information
     """
     if breakpoint_data.empty:
         return pd.DataFrame()
-    
+
     clustered_results = []
-    
+
     # Group by gene pair and chromosome combination
     for (gene_pair, chr1, chr2), group in breakpoint_data.groupby(["gene_pair", "gene1_chr", "gene2_chr"]):
         if group.empty:
             continue
-            
+
         # Cluster gene1 breakpoints
         gene1_positions = group[["gene1_start", "gene1_end"]].values
         gene1_clusters = _cluster_positions(gene1_positions, max_distance)
-        
+
         # Cluster gene2 breakpoints
         gene2_positions = group[["gene2_start", "gene2_end"]].values
         gene2_clusters = _cluster_positions(gene2_positions, max_distance)
-        
+
         # Create cluster combinations
         for i, gene1_cluster in enumerate(gene1_clusters):
             for j, gene2_cluster in enumerate(gene2_clusters):
@@ -1387,29 +1949,29 @@ def _cluster_breakpoints(breakpoint_data: pd.DataFrame, max_distance: int = 100)
                 cluster_reads = []
                 cluster_mapping_qualities = []
                 cluster_mapping_spans = []
-                
+
                 for idx, row in group.iterrows():
                     gene1_start, gene1_end = row["gene1_start"], row["gene1_end"]
                     gene2_start, gene2_end = row["gene2_start"], row["gene2_end"]
-                    
+
                     # Check if this read belongs to both clusters
                     if (_position_in_cluster(gene1_start, gene1_end, gene1_cluster, max_distance) and
                         _position_in_cluster(gene2_start, gene2_end, gene2_cluster, max_distance)):
                         cluster_reads.append(row["read_id"])
                         cluster_mapping_qualities.append(row["min_mapping_quality"])
                         cluster_mapping_spans.append(row["min_mapping_span"])
-                
+
                 if cluster_reads:
                     # Calculate cluster boundaries
                     gene1_min_start = min(gene1_cluster[:, 0])
                     gene1_max_end = max(gene1_cluster[:, 1])
                     gene2_min_start = min(gene2_cluster[:, 0])
                     gene2_max_end = max(gene2_cluster[:, 1])
-                    
+
                     # Calculate average quality metrics
                     avg_mapping_quality = np.mean(cluster_mapping_qualities) if cluster_mapping_qualities else 0
                     avg_mapping_span = np.mean(cluster_mapping_spans) if cluster_mapping_spans else 0
-                    
+
                     clustered_results.append({
                         "gene_pair": gene_pair,
                         "gene1": group.iloc[0]["gene1"],
@@ -1428,67 +1990,67 @@ def _cluster_breakpoints(breakpoint_data: pd.DataFrame, max_distance: int = 100)
                         "avg_mapping_span": avg_mapping_span,
                         "cluster_id": f"{gene_pair}_{i}_{j}"
                     })
-    
+
     return pd.DataFrame(clustered_results)
 
 
-def _validate_fusion_breakpoints(annotated_data: pd.DataFrame, min_read_support: int = 4, 
+def _validate_fusion_breakpoints(annotated_data: pd.DataFrame, min_read_support: int = 4,
                                 max_breakpoint_distance: int = 100) -> pd.DataFrame:
     """
     Validate fusion candidates by requiring consistent breakpoint support.
-    
+
     This function implements the breakpoint validation logic you requested:
     - Extracts fusion breakpoints from supplementary alignments
     - Clusters reads by similar breakpoint coordinates
     - Only returns fusions with consistent breakpoint support across gene regions
-    
+
     Args:
         annotated_data: DataFrame with fusion candidate data
         min_read_support: Minimum number of reads supporting the same breakpoint
         max_breakpoint_distance: Maximum distance for clustering breakpoints
-        
+
     Returns:
         DataFrame with validated fusion breakpoints
     """
     if annotated_data.empty:
         return pd.DataFrame()
-    
+
     logging.info(f"[Fusion] Validating breakpoints for {len(annotated_data)} fusion candidates")
-    
+
     # Extract breakpoints from fusion data
     breakpoint_data = _extract_fusion_breakpoints(annotated_data)
-    
+
     if breakpoint_data.empty:
         logging.info("[Fusion] No breakpoint data extracted")
         return pd.DataFrame()
-    
+
     logging.info(f"[Fusion] Extracted {len(breakpoint_data)} breakpoint records")
-    
+
     # Cluster breakpoints by similar coordinates
     clustered_breakpoints = _cluster_breakpoints(breakpoint_data, max_breakpoint_distance)
-    
+
     if clustered_breakpoints.empty:
         logging.info("[Fusion] No clustered breakpoints found")
         return pd.DataFrame()
-    
+
     logging.info(f"[Fusion] Found {len(clustered_breakpoints)} clustered breakpoint groups")
-    
+
     # Filter by minimum read support
     validated_breakpoints = clustered_breakpoints[
         clustered_breakpoints["supporting_reads"] >= min_read_support
     ]
-    
+
     logging.info(f"[Fusion] {len(validated_breakpoints)} breakpoint groups meet minimum support threshold ({min_read_support})")
-    
+
     # Sort by supporting reads (descending)
     validated_breakpoints = validated_breakpoints.sort_values("supporting_reads", ascending=False)
-    
+
     return validated_breakpoints
 
 
 def _get_validated_fusion_pairs(annotated_data: pd.DataFrame, goodpairs: pd.Series) -> List[List[str]]:
     """Extract validated fusion pairs from annotated_data for dropdown options.
-    
+
     Returns a list of gene pairs as lists (e.g., [["GENE1", "GENE2"], ...])
     representing validated fusion pairs from breakpoint validation.
     """
@@ -1500,20 +2062,20 @@ def _get_validated_fusion_pairs(annotated_data: pd.DataFrame, goodpairs: pd.Seri
             filtered_data = annotated_data[aligned_goodpairs]
         else:
             filtered_data = annotated_data
-        
+
         if filtered_data.empty:
             return []
-        
+
         # Get validated fusion pairs using breakpoint validation
         clustered_data = _cluster_fusion_reads(filtered_data, max_distance=10000, use_breakpoint_validation=True)
-        
+
         if clustered_data.empty:
             return []
-        
+
         # Extract unique gene pairs and convert to list format
         validated_pairs = []
         seen_pairs = set()
-        
+
         for _, row in clustered_data.iterrows():
             fusion_pair_str = row["fusion_pair"]  # e.g., "GENE1-GENE2"
             if fusion_pair_str and fusion_pair_str not in seen_pairs:
@@ -1526,10 +2088,10 @@ def _get_validated_fusion_pairs(annotated_data: pd.DataFrame, goodpairs: pd.Seri
                     if pair_key not in seen_pairs:
                         validated_pairs.append(genes_sorted)
                         seen_pairs.add(pair_key)
-        
+
         logging.info(f"[Fusion] Extracted {len(validated_pairs)} validated fusion pairs for dropdown")
         return validated_pairs
-        
+
     except Exception as e:
         logging.exception(f"[Fusion] Failed to extract validated fusion pairs: {e}")
         return []
@@ -1545,7 +2107,7 @@ def _make_fusion_summary_table(container: Any, annotated_data: pd.DataFrame, goo
     with container:
         # Use styled_table for consistent styling
         from robin.gui.theme import styled_table
-        
+
         try:
             # Filter to good pairs if available
             if not goodpairs.empty and goodpairs.sum() > 0:
@@ -1554,21 +2116,21 @@ def _make_fusion_summary_table(container: Any, annotated_data: pd.DataFrame, goo
                 filtered_data = annotated_data[aligned_goodpairs]
             else:
                 filtered_data = annotated_data
-            
+
             if filtered_data.empty:
                 ui.label("No fusion pairs found").classes("text-gray-600")
                 return None
-            
+
             # Cluster fusion reads by similar coordinates
             clustered_data = _cluster_fusion_reads(filtered_data, max_distance=10000, use_breakpoint_validation=True)
-            
+
             if clustered_data.empty:
                 ui.label("No fusion pairs found").classes("text-gray-600")
                 return None
-            
+
             # Sort by read count (descending)
             aggregated = clustered_data.sort_values("reads", ascending=False)
-            
+
             # Create columns definition with breakpoint validation info
             columns = [
                 {"name": "fusion_pair", "label": "Fusion Pair", "field": "fusion_pair", "sortable": True},
@@ -1580,13 +2142,13 @@ def _make_fusion_summary_table(container: Any, annotated_data: pd.DataFrame, goo
                 {"name": "gene2_position", "label": "Gene 2 Breakpoint", "field": "gene2_position", "sortable": True},
                 {"name": "reads", "label": "Supporting Reads", "field": "reads", "sortable": True}
             ]
-            
+
             # Add quality metrics if available (from breakpoint validation)
             if "avg_mapping_quality" in aggregated.columns:
                 columns.append({"name": "avg_mapping_quality", "label": "Avg MapQ", "field": "avg_mapping_quality", "sortable": True})
             if "avg_mapping_span" in aggregated.columns:
                 columns.append({"name": "avg_mapping_span", "label": "Avg Span", "field": "avg_mapping_span", "sortable": True})
-            
+
             # Format the data for display
             rows = []
             for _, row in aggregated.iterrows():
@@ -1600,18 +2162,18 @@ def _make_fusion_summary_table(container: Any, annotated_data: pd.DataFrame, goo
                     "gene2_position": row["gene2_position"],
                     "reads": int(row["reads"]),
                 }
-                
+
                 # Add quality metrics if available
                 if "avg_mapping_quality" in row:
                     formatted_row["avg_mapping_quality"] = f"{row['avg_mapping_quality']:.1f}"
                 if "avg_mapping_span" in row:
                     formatted_row["avg_mapping_span"] = f"{row['avg_mapping_span']:.0f}"
-                
+
                 rows.append(formatted_row)
-            
+
             # Add title
             ui.label("Fusion Summary").classes("text-sm font-medium mb-2")
-            
+
             # Create styled table
             table_container, table = styled_table(
                 columns=columns,
@@ -1619,7 +2181,7 @@ def _make_fusion_summary_table(container: Any, annotated_data: pd.DataFrame, goo
                 pagination=20,
                 class_size="table-xs"
             )
-            
+
             # Add search functionality
             try:
                 with table.add_slot("top-right"):
@@ -1629,14 +2191,14 @@ def _make_fusion_summary_table(container: Any, annotated_data: pd.DataFrame, goo
                         ui.icon("search")
             except Exception:
                 pass
-            
+
             # Add summary information
             total_fusions = len(aggregated)
             total_reads = aggregated["reads"].sum()
             ui.label(f"Total fusions: {total_fusions} | Total supporting reads: {total_reads}").classes("text-xs text-gray-500 mt-1")
-            
+
             return table
-            
+
         except Exception as e:
             logging.exception(f"[Fusion] Failed to create summary table: {e}")
             ui.label(f"Error creating fusion summary: {str(e)}").classes("text-red-600")
@@ -1645,16 +2207,16 @@ def _make_fusion_summary_table(container: Any, annotated_data: pd.DataFrame, goo
 
 def _make_fusion_groups_table(container: Any, data: Dict[str, Any]) -> Any:
     """Create a table showing validated fusion groups (gene lists that may contain 2+ genes).
-    
+
     Only shows groups that contain at least one validated fusion pair
     (meeting the minimum read support threshold).
-    
+
     Args:
         container: UI container to place the table in
         data: Dictionary containing fusion data with annotated_data, goodpairs, and gene_groups
     """
     validated_groups = _get_validated_fusion_groups(data)
-    
+
     if not validated_groups or len(validated_groups) == 0:
         with container:
             ui.label("No validated fusion groups found").classes("text-gray-600")
@@ -1663,7 +2225,7 @@ def _make_fusion_groups_table(container: Any, data: Dict[str, Any]) -> Any:
     with container:
         # Use styled_table for consistent styling
         from robin.gui.theme import styled_table
-        
+
         try:
             # Create columns definition
             columns = [
@@ -1671,34 +2233,34 @@ def _make_fusion_groups_table(container: Any, data: Dict[str, Any]) -> Any:
                 {"name": "genes", "label": "Genes", "field": "genes", "sortable": True},
                 {"name": "gene_count", "label": "Gene Count", "field": "gene_count", "sortable": True},
             ]
-            
+
             # Format the data for display
             rows = []
             for idx, group in enumerate(validated_groups):
                 if not isinstance(group, (list, tuple)) or len(group) == 0:
                     continue
-                
+
                 # Sort genes for consistent display
                 sorted_genes = sorted([str(g).strip() for g in group if g])
                 if len(sorted_genes) == 0:
                     continue
-                
+
                 rows.append({
                     "group_id": idx + 1,
                     "genes": " - ".join(sorted_genes),
                     "gene_count": len(sorted_genes),
                 })
-            
+
             if not rows:
                 ui.label("No valid fusion groups found").classes("text-gray-600")
                 return None
-            
+
             # Sort by gene count (descending), then by gene names
             rows.sort(key=lambda x: (-x["gene_count"], x["genes"]))
-            
+
             # Add title
             ui.label("Fusion Groups").classes("text-sm font-medium mb-2")
-            
+
             # Create styled table
             table_container, table = styled_table(
                 columns=columns,
@@ -1706,7 +2268,7 @@ def _make_fusion_groups_table(container: Any, data: Dict[str, Any]) -> Any:
                 pagination=20,
                 class_size="table-xs"
             )
-            
+
             # Add search functionality
             try:
                 with table.add_slot("top-right"):
@@ -1716,14 +2278,14 @@ def _make_fusion_groups_table(container: Any, data: Dict[str, Any]) -> Any:
                         ui.icon("search")
             except Exception:
                 pass
-            
+
             # Add summary information
             total_groups = len(rows)
             multi_gene_groups = sum(1 for r in rows if r["gene_count"] > 2)
             ui.label(f"Total groups: {total_groups} | Multi-gene groups (>2): {multi_gene_groups}").classes("text-xs text-gray-500 mt-1")
-            
+
             return table
-            
+
         except Exception as e:
             logging.exception(f"[Fusion] Failed to create fusion groups table: {e}")
             ui.label(f"Error creating fusion groups table: {str(e)}").classes("text-red-600")
@@ -1740,10 +2302,10 @@ def _make_fusion_reads_table(container: Any, reads_df: pd.DataFrame, gene_pair: 
     with container:
         # Use styled_table for consistent styling
         from robin.gui.theme import styled_table
-        
+
         # The reads_df is already filtered for the gene pair, so use it directly
         filtered_reads = reads_df.copy()
-        
+
         # Debug logging
         logging.info(f"[Fusion] Reads table - gene_pair: {gene_pair}")
         logging.info(f"[Fusion] Reads table - filtered_reads shape: {filtered_reads.shape}")
@@ -1751,22 +2313,22 @@ def _make_fusion_reads_table(container: Any, reads_df: pd.DataFrame, gene_pair: 
         if not filtered_reads.empty:
             logging.info(f"[Fusion] Reads table - unique genes in data: {filtered_reads['col4'].unique()}")
             logging.info(f"[Fusion] Reads table - sample data: {filtered_reads.head(2).to_dict('records')}")
-        
+
         if filtered_reads.empty:
             ui.label("No reads found for selected gene pair").classes("text-gray-600")
             return None
-        
+
         # Select and rename relevant columns for the reads table
         columns_to_show = [
-            "read_id", "col4", "reference_id", "reference_start", "reference_end", 
-            "mapping_quality", "strand", "read_start", "read_end", "is_secondary", 
+            "read_id", "col4", "reference_id", "reference_start", "reference_end",
+            "mapping_quality", "strand", "read_start", "read_end", "is_secondary",
             "is_supplementary", "mapping_span"
         ]
-        
+
         # Only include columns that exist in the DataFrame
         available_columns = [col for col in columns_to_show if col in filtered_reads.columns]
         logging.info(f"[Fusion] Reads table - available columns: {available_columns}")
-        
+
         if not available_columns:
             # Fallback: show all available columns if none of the expected ones exist
             logging.warning(f"[Fusion] No expected columns found, using all available columns: {list(filtered_reads.columns)}")
@@ -1774,14 +2336,14 @@ def _make_fusion_reads_table(container: Any, reads_df: pd.DataFrame, gene_pair: 
             if not available_columns:
                 ui.label("No columns found in fusion data").classes("text-gray-600")
                 return None
-            
+
         reads_subset = filtered_reads[available_columns].copy()
-        
+
         # Rename columns to user-friendly names
         column_rename_map = {
             "read_id": "Read ID",
             "col4": "Gene",
-            "reference_id": "Chromosome", 
+            "reference_id": "Chromosome",
             "reference_start": "Read Start",
             "reference_end": "Read End",
             "mapping_quality": "Map Quality",
@@ -1792,11 +2354,11 @@ def _make_fusion_reads_table(container: Any, reads_df: pd.DataFrame, gene_pair: 
             "is_supplementary": "Supplementary",
             "mapping_span": "Span"
         }
-        
+
         # Only rename columns that exist
         final_rename_map = {k: v for k, v in column_rename_map.items() if k in reads_subset.columns}
         reads_subset = reads_subset.rename(columns=final_rename_map)
-        
+
         # Sort by gene and then by read start position (if available)
         sort_columns = []
         if "Gene" in reads_subset.columns:
@@ -1805,10 +2367,10 @@ def _make_fusion_reads_table(container: Any, reads_df: pd.DataFrame, gene_pair: 
             sort_columns.append("Read Start")
         elif "Query Start" in reads_subset.columns:
             sort_columns.append("Query Start")
-            
+
         if sort_columns:
             reads_subset = reads_subset.sort_values(sort_columns)
-        
+
         # Create columns definition
         columns = []
         for col in reads_subset.columns:
@@ -1818,31 +2380,17 @@ def _make_fusion_reads_table(container: Any, reads_df: pd.DataFrame, gene_pair: 
                 "field": col,
                 "sortable": True
             })
-        
-        # Create rows from DataFrame
-        rows = reads_subset.to_dict('records')
-        
+
         # Add title
         ui.label(f"Reads supporting fusion: {'-'.join(gene_pair)}").classes("text-sm font-medium mb-2")
-        
-        # Create styled table
-        table_container, table = styled_table(
-            columns=columns,
-            rows=rows,
-            pagination=20,
-            class_size="table-xs"
+        table = _render_paged_df_table(
+            reads_subset,
+            columns,
+            pagination_default=100,
+            class_size="table-xs",
+            search_placeholder="Search reads...",
         )
-        
-        # Add search functionality
-        try:
-            with table.add_slot("top-right"):
-                with ui.input(placeholder="Search reads...").props("type=search").bind_value(
-                    table, "filter"
-                ).add_slot("append"):
-                    ui.icon("search")
-        except Exception:
-            pass
-        
+
         # Add summary information
         total_reads = len(reads_subset)
         if "Read ID" in reads_subset.columns:
@@ -1850,7 +2398,7 @@ def _make_fusion_reads_table(container: Any, reads_df: pd.DataFrame, gene_pair: 
             ui.label(f"Total reads: {total_reads} | Unique reads: {unique_reads}").classes("text-xs text-gray-500 mt-1")
         else:
             ui.label(f"Total reads: {total_reads}").classes("text-xs text-gray-500 mt-1")
-        
+
         return table
 
 
@@ -1883,10 +2431,10 @@ def _plot_gene_group(
                 # Align indices to avoid reindexing warning
                 aligned_goodpairs = goodpairs.reindex(annotated_data.index, fill_value=False)
                 subset = annotated_data[aligned_goodpairs]
-                
+
                 # Strip whitespace from gene names to handle leading/trailing spaces
                 subset = subset[subset["col4"].str.strip().isin(gene_group)]
-                
+
                 logging.info(f"[Fusion] Using filtered data for target gene group {gene_group}: {len(subset)} rows")
             except Exception as e:
                 # Fallback to raw data if indexing fails
@@ -1894,7 +2442,7 @@ def _plot_gene_group(
                 # Strip whitespace from gene names to handle leading/trailing spaces
                 subset = annotated_data[annotated_data["col4"].str.strip().isin(gene_group)]
                 logging.info(f"[Fusion] Using raw data (fallback) for gene group {gene_group}: {len(subset)} rows")
-        
+
         if subset.empty:
             with container:
                 ui.label("No reads for selected gene group").classes("text-gray-600")
@@ -1907,7 +2455,7 @@ def _plot_gene_group(
             with ui.tabs().classes("w-full") as tabs:
                 visualization_tab = ui.tab("Visualization")
                 reads_tab = ui.tab("Reads Table")
-            
+
             with ui.tab_panels(tabs, value=visualization_tab).classes("w-full"):
                 with ui.tab_panel(visualization_tab):
                     # Create matplotlib element for the sophisticated plot with ideograms
@@ -1929,7 +2477,7 @@ def _plot_gene_group(
                     if section_state is not None:
                         section_state["fusion_mpl"] = mpl_element
                         section_state["fusion_plot_theme_dark"] = _dark
-                
+
                 with ui.tab_panel(reads_tab):
                     # Create reads table
                     reads_table_container = ui.column().classes("w-full")
@@ -1973,7 +2521,7 @@ def _create_advanced_fusion_plot(
     if len(unique_genes) == 0:
         logging.warning(f"[Fusion] No genes found for group {gene_group}, using fallback plot")
         return _create_simple_fallback_plot(gene_group, subset)
-    
+
     # Ensure we have valid data to prevent zero-size axes
     if subset.empty:
         logging.warning(f"[Fusion] Empty subset for group {gene_group}, using fallback plot")
@@ -2065,7 +2613,7 @@ def _load_gene_annotations() -> Optional[pd.DataFrame]:
     try:
         # Try to find the gene annotation file using robin resources
         gene_data_path = None
-        
+
         # First try to use robin resources to find the correct path
         try:
             from robin import resources
@@ -2075,7 +2623,7 @@ def _load_gene_annotations() -> Optional[pd.DataFrame]:
                 gene_data_path = None
         except ImportError:
             pass
-        
+
         # Fallback to relative path if resources import failed
         if not gene_data_path or not os.path.exists(gene_data_path):
             # Try relative path from current working directory
@@ -2084,13 +2632,13 @@ def _load_gene_annotations() -> Optional[pd.DataFrame]:
                 "robin/resources/rCNS2_data.csv.gz",
                 os.path.join(os.path.dirname(__file__), "..", "..", "resources", "rCNS2_data.csv.gz"),
             ]
-            
+
             for path in possible_paths:
                 abs_path = os.path.abspath(path)
                 if os.path.exists(abs_path):
                     gene_data_path = abs_path
                     break
-        
+
         if gene_data_path and os.path.exists(gene_data_path):
             gene_table = pd.read_csv(gene_data_path)
             return gene_table
@@ -2112,12 +2660,12 @@ def _plot_gene_structure_with_dna_features(
     try:
         # Strip whitespace from gene name to handle leading/trailing spaces in the data
         gene_name_clean = gene_name.strip() if isinstance(gene_name, str) else gene_name
-        
+
         # Filter gene table for this specific gene and chromosome
         # Also strip whitespace from gene_table gene_name column for matching
         gene_table_clean = gene_table.copy()
         gene_table_clean["gene_name"] = gene_table_clean["gene_name"].astype(str).str.strip()
-        
+
         gene_info = gene_table_clean[
             (gene_table_clean["gene_name"] == gene_name_clean) & (gene_table_clean["Seqid"] == chrom)
         ]
@@ -2144,14 +2692,14 @@ def _plot_gene_structure_with_dna_features(
             # Convert tick labels to megabases
             _format_ticks_to_megabases(ax)
             return
-        
+
         # Create DNA Features Viewer visualization
         features = []
-        
+
         # Determine the overall gene region from annotations
         gene_start = int(gene_info["Start"].min())
         gene_end = int(gene_info["End"].max())
-        
+
         # Use the wider of the annotation range or the read mapping range
         plot_start = min(start, gene_start)
         plot_end = max(end, gene_end)
@@ -2338,7 +2886,7 @@ def _plot_read_mapping_sophisticated(
 
         # Add grid
         ax.grid(True, alpha=0.3)
-        
+
         # Remove box edges/borders
         ax.spines['top'].set_visible(False)
         ax.spines['right'].set_visible(False)
@@ -2492,7 +3040,7 @@ def _plot_read_mapping_original(
         # Convert x-axis to megabases
         _format_ticks_to_megabases(ax)
         ax.grid(True, alpha=0.3)
-        
+
         # Remove box edges/borders
         ax.spines['top'].set_visible(False)
         ax.spines['right'].set_visible(False)
@@ -2603,7 +3151,7 @@ def _plot_read_mapping(
 
         # Add grid
         ax.grid(True, alpha=0.3)
-        
+
         # Remove box edges/borders
         ax.spines['top'].set_visible(False)
         ax.spines['right'].set_visible(False)
@@ -2669,10 +3217,26 @@ def add_fusion_section(launcher: Any, sample_dir: Path) -> None:
     - fusion_candidates_all_processed.pkl (pickle format)
     """
     logging.info(f"[Fusion] add_fusion_section() called with sample_dir: {sample_dir}")
-    
+
     if ui is None:
         logging.warning("[Fusion] ui is None, returning early")
         return
+
+    from robin.gui.config import is_section_visible, launcher_visibility_context
+
+    workflow_steps, display_config, viewer_role = launcher_visibility_context(launcher)
+    show_target = is_section_visible(
+        "fusion_target",
+        workflow_steps=workflow_steps,
+        display_config=display_config,
+        viewer_role=viewer_role,
+    )
+    show_genome = is_section_visible(
+        "fusion_genome",
+        workflow_steps=workflow_steps,
+        display_config=display_config,
+        viewer_role=viewer_role,
+    )
 
     # Local state for this section
     state: Dict[str, Any] = {
@@ -2733,35 +3297,57 @@ def add_fusion_section(launcher: Any, sample_dir: Path) -> None:
         except Exception as e:
             logging.exception(f"[Fusion] Failed to handle gene pair selection: {e}")
 
-    def refresh_fusion() -> None:
-        """Refresh fusion data."""
+    async def refresh_fusion_async() -> None:
+        """Load fusion pickles/CSVs off the event loop, then update UI on the main thread."""
         import time as _time
+
         t_start = _time.perf_counter()
         try:
             logging.info(f"[Fusion] refresh_fusion() called for sample_dir: {sample_dir}")
-            
-            # Simple directory check
             if not sample_dir or not sample_dir.exists():
                 logging.warning(f"[Fusion] Sample directory not found: {sample_dir}")
                 return
-            
             logging.info(f"[Fusion] Loading fusion data from: {sample_dir}")
             t_before_load = _time.perf_counter()
-            
-            # Load fusion data directly (already in background)
-            fusion_data = _load_fusion_data(sample_dir)
-            
+            fusion_data = await asyncio.to_thread(_load_fusion_data, sample_dir)
             t_after_load = _time.perf_counter()
-            logging.info(f"[Fusion] Loaded fusion data (load took {t_after_load - t_before_load:.2f}s): {fusion_data}")
-            
-            # Update UI directly
+            logging.info(
+                f"[Fusion] Loaded fusion data (load took {t_after_load - t_before_load:.2f}s): {fusion_data}"
+            )
             t_before_ui = _time.perf_counter()
             _update_fusion_ui(fusion_data, state, sample_dir)
             t_after_ui = _time.perf_counter()
-            logging.info(f"[Fusion] refresh_fusion() completed in {t_after_ui - t_start:.2f}s (load={t_after_load - t_before_load:.2f}s, ui={t_after_ui - t_before_ui:.2f}s)")
-                
+            logging.info(
+                f"[Fusion] refresh_fusion() completed in {t_after_ui - t_start:.2f}s "
+                f"(load={t_after_load - t_before_load:.2f}s, ui={t_after_ui - t_before_ui:.2f}s)"
+            )
         except Exception as e:
             logging.exception(f"[Fusion] Refresh failed: {e}")
+
+    def refresh_fusion() -> None:
+        """Schedule async refresh (pickle/CSV load off the NiceGUI event loop)."""
+        if background_tasks is not None:
+            try:
+                background_tasks.create(
+                    refresh_fusion_async(),
+                    name="fusion-refresh",
+                )
+                return
+            except RuntimeError:
+                pass
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            try:
+                if not sample_dir or not sample_dir.exists():
+                    logging.warning(f"[Fusion] Sample directory not found: {sample_dir}")
+                    return
+                fusion_data = _load_fusion_data(sample_dir)
+                _update_fusion_ui(fusion_data, state, sample_dir)
+            except Exception as e:
+                logging.exception(f"[Fusion] Refresh failed: {e}")
+            return
+        asyncio.create_task(refresh_fusion_async())
 
     def _load_fusion_data(sample_dir: Path) -> Dict[str, Any]:
         """Load fusion data from files with optional breakpoint validation."""
@@ -2769,27 +3355,27 @@ def add_fusion_section(launcher: Any, sample_dir: Path) -> None:
         t_load_start = _time.perf_counter()
         try:
             logging.info(f"[Fusion] _load_fusion_data() called with sample_dir: {sample_dir}")
-            
+
             # Configuration for breakpoint validation
             USE_BREAKPOINT_VALIDATION = True  # Set to False to disable breakpoint validation
             MIN_BREAKPOINT_SUPPORT = 4  # Minimum reads supporting same breakpoint
             MAX_BREAKPOINT_DISTANCE = 100  # Maximum distance for breakpoint clustering
-            
+
             # Load target panel processed
             target_file = sample_dir / "fusion_candidates_master_processed.pkl"
             genome_file = sample_dir / "fusion_candidates_all_processed.pkl"
             # Master BED CSV file loading has been deprecated
-            
+
             logging.info(f"[Fusion] Target file: {target_file}")
             logging.info(f"[Fusion] Genome file: {genome_file}")
 
             t = _load_processed_pickle(target_file)
             g = _load_processed_pickle(genome_file)
-            
+
             # Master BED CSV loading has been deprecated - the table is no longer displayed in the GUI
             # The Parquet file (master_bed_candidates.parquet) is still used for BED generation
             master_bed_df = None
-            
+
             # Apply breakpoint validation if enabled
             if USE_BREAKPOINT_VALIDATION:
                 if t:
@@ -2797,7 +3383,7 @@ def add_fusion_section(launcher: Any, sample_dir: Path) -> None:
                     annotated_data = t.get("annotated_data", pd.DataFrame())
                     if not annotated_data.empty:
                         validated_breakpoints = _validate_fusion_breakpoints(
-                            annotated_data, 
+                            annotated_data,
                             min_read_support=MIN_BREAKPOINT_SUPPORT,
                             max_breakpoint_distance=MAX_BREAKPOINT_DISTANCE
                         )
@@ -2809,13 +3395,13 @@ def add_fusion_section(launcher: Any, sample_dir: Path) -> None:
                         else:
                             t["candidate_count"] = 0
                             logging.info("[Fusion] No target fusions passed breakpoint validation")
-                
+
                 if g:
                     logging.info("[Fusion] Applying breakpoint validation to genome-wide data")
                     annotated_data = g.get("annotated_data", pd.DataFrame())
                     if not annotated_data.empty:
                         validated_breakpoints = _validate_fusion_breakpoints(
-                            annotated_data, 
+                            annotated_data,
                             min_read_support=MIN_BREAKPOINT_SUPPORT,
                             max_breakpoint_distance=MAX_BREAKPOINT_DISTANCE
                         )
@@ -2827,11 +3413,11 @@ def add_fusion_section(launcher: Any, sample_dir: Path) -> None:
                         else:
                             g["candidate_count"] = 0
                             logging.info("[Fusion] No genome-wide fusions passed breakpoint validation")
-            
+
             # Debug logging
             logging.info(f"[Fusion] Loaded target data: {t is not None}")
             logging.info(f"[Fusion] Loaded genome-wide data: {g is not None}")
-            
+
             # Apply same logic to target panel as genome-wide
             if t is not None:
                 logging.info(f"[Fusion] Target candidate count: {t.get('candidate_count', 0)}")
@@ -2841,13 +3427,13 @@ def add_fusion_section(launcher: Any, sample_dir: Path) -> None:
                 logging.info(f"[Fusion] Target goodpairs shape: {t.get('goodpairs', pd.Series()).shape}")
                 logging.info(f"[Fusion] Target gene_pairs count: {len(t.get('gene_pairs', []))}")
                 logging.info(f"[Fusion] Target gene_pairs: {t.get('gene_pairs', [])[:10]}...")  # Show first 10
-                
+
                 # Use the same logic as reporting code - count gene_pairs instead of relying on candidate_count
                 if t.get('gene_pairs') and len(t.get('gene_pairs', [])) > 0:
                     # Override candidate_count with the actual number of gene pairs (like reporting code does)
                     t['candidate_count'] = len(t.get('gene_pairs', []))
                     logging.info(f"[Fusion] Override target candidate_count to: {t['candidate_count']}")
-                    
+
                     # Generate gene_groups from gene_pairs if missing (like reporting code does)
                     if not t.get('gene_groups') or len(t.get('gene_groups', [])) == 0:
                         # Convert gene_pairs to gene_groups format
@@ -2857,7 +3443,7 @@ def add_fusion_section(launcher: Any, sample_dir: Path) -> None:
                                 gene_groups.append(list(gene_pair))
                         t['gene_groups'] = gene_groups
                         logging.info(f"[Fusion] Generated {len(gene_groups)} gene_groups from gene_pairs")
-            
+
             if g is not None:
                 logging.info(f"[Fusion] Genome-wide candidate count: {g.get('candidate_count', 0)}")
                 logging.info(f"[Fusion] Genome-wide gene groups: {len(g.get('gene_groups', []))}")
@@ -2866,13 +3452,13 @@ def add_fusion_section(launcher: Any, sample_dir: Path) -> None:
                 logging.info(f"[Fusion] Genome-wide goodpairs shape: {g.get('goodpairs', pd.Series()).shape}")
                 logging.info(f"[Fusion] Genome-wide gene_pairs count: {len(g.get('gene_pairs', []))}")
                 logging.info(f"[Fusion] Genome-wide gene_pairs: {g.get('gene_pairs', [])[:10]}...")  # Show first 10
-                
+
                 # Use the same logic as reporting code - count gene_pairs instead of relying on candidate_count
                 if g.get('gene_pairs') and len(g.get('gene_pairs', [])) > 0:
                     # Override candidate_count with the actual number of gene pairs (like reporting code does)
                     g['candidate_count'] = len(g.get('gene_pairs', []))
                     logging.info(f"[Fusion] Override genome-wide candidate_count to: {g['candidate_count']}")
-                    
+
                     # Generate gene_groups from gene_pairs if missing (like reporting code does)
                     if not g.get('gene_groups') or len(g.get('gene_groups', [])) == 0:
                         # Convert gene_pairs to gene_groups format
@@ -2892,11 +3478,11 @@ def add_fusion_section(launcher: Any, sample_dir: Path) -> None:
             genome_mtime = genome_file.stat().st_mtime if genome_file.exists() else None
             # Master BED CSV file has been deprecated - no longer track mtime
             master_bed_mtime = None
-            
+
             # Create data hashes
             target_data_hash = _create_data_hash(t) if t is not None else None
             genome_data_hash = _create_data_hash(g) if g is not None else None
-            
+
             elapsed = _time.perf_counter() - t_load_start
             logging.info(f"[Fusion] _load_fusion_data() completed in {elapsed:.2f}s")
             return {
@@ -2920,7 +3506,7 @@ def add_fusion_section(launcher: Any, sample_dir: Path) -> None:
             elapsed = _time.perf_counter() - t_load_start
             logging.exception(f"[Fusion] Failed to load fusion data after {elapsed:.2f}s: {e}")
             return {
-                "target": {"data": None, "mtime": None, "data_hash": None}, 
+                "target": {"data": None, "mtime": None, "data_hash": None},
                 "genome": {"data": None, "mtime": None, "data_hash": None},
                 "master_bed": {"data": None, "mtime": None}
             }
@@ -2931,37 +3517,37 @@ def add_fusion_section(launcher: Any, sample_dir: Path) -> None:
             target_data = fusion_data.get("target", {})
             genome_data = fusion_data.get("genome", {})
             master_bed_data = fusion_data.get("master_bed", {})
-            
+
             t = target_data.get("data")
             g = genome_data.get("data")
             master_bed_df = master_bed_data.get("data")
-            
+
             # Update target panel UI
             target_mtime = target_data.get("mtime")
             target_data_hash = target_data.get("data_hash")
-            
+
             # Handle case when target data is None (no data loaded)
             if t is None:
                 # Update if mtime changed or if this is initial load (both mtimes are None)
                 mtime_changed = target_mtime != state["target"].get("mtime")
                 is_initial_load = (
-                    target_mtime is None and 
+                    target_mtime is None and
                     state["target"].get("mtime") is None and
                     state["target"].get("data") is None
                 )
-                
+
                 if mtime_changed or is_initial_load:
                     state["target"]["data"] = None
                     state["target"]["mtime"] = target_mtime
                     state["target"]["data_hash"] = target_data_hash
-                    
+
                     # Update summary label
                     try:
                         if "summary" in state and state["summary"].get("target_lbl"):
                             state["summary"]["target_lbl"].text = "Target: -- pairs, -- groups"
                     except Exception:
                         pass
-                    
+
                     # Clear containers and show status messages
                     try:
                         state["target"]["summary_table_container"].clear()
@@ -2971,7 +3557,7 @@ def add_fusion_section(launcher: Any, sample_dir: Path) -> None:
                         state["target"]["status_container"].clear()
                     except Exception:
                         pass
-                    
+
                     # Show status messages
                     with state["target"]["summary_table_container"].classes("w-full"):
                         ui.label("No fusion data available").classes("text-gray-600")
@@ -2982,13 +3568,13 @@ def add_fusion_section(launcher: Any, sample_dir: Path) -> None:
                     with state["target"]["status_container"].classes("w-full"):
                         ui.label("Target panel fusion analysis not available").classes("text-gray-600 text-sm")
                         ui.label("(Fusion data file not found or could not be loaded)").classes("text-gray-500 text-xs")
-            
+
             # Always update summary and table when file changes
             elif t is not None and target_mtime != state["target"].get("mtime"):
                 state["target"]["data"] = t
                 state["target"]["mtime"] = target_mtime
                 state["target"]["data_hash"] = target_data_hash
-                
+
                 # summary
                 try:
                     if "summary" in state and state["summary"].get("target_lbl"):
@@ -3012,7 +3598,7 @@ def add_fusion_section(launcher: Any, sample_dir: Path) -> None:
                     t.get("annotated_data", pd.DataFrame()),
                     t.get("goodpairs", pd.Series()),
                 )
-                
+
                 # groups table
                 try:
                     state["target"]["groups_table_container"].clear()
@@ -3022,7 +3608,7 @@ def add_fusion_section(launcher: Any, sample_dir: Path) -> None:
                     state["target"]["groups_table_container"],
                     t,
                 )
-                
+
                 # table
                 try:
                     state["target"]["table_container"].clear()
@@ -3032,7 +3618,7 @@ def add_fusion_section(launcher: Any, sample_dir: Path) -> None:
                     state["target"]["table_container"],
                     t.get("annotated_data", pd.DataFrame()),
                 )
-                
+
                 # Create visualization on first load or when data changes
                 try:
                     state["target"]["plot_container"].clear()
@@ -3065,7 +3651,7 @@ def add_fusion_section(launcher: Any, sample_dir: Path) -> None:
                     with state["target"]["status_container"].classes("w-full"):
                         ui.label("Target panel fusion analysis not available").classes("text-gray-600 text-sm")
                         ui.label("(No validated fusion pairs found in target panel)").classes("text-gray-500 text-xs")
-                
+
                 # Restore selected gene pair if it exists (for both cases above)
                 if state["target"]["selected_gene_pair"] and state["target"]["dropdown"]:
                     try:
@@ -3073,7 +3659,7 @@ def add_fusion_section(launcher: Any, sample_dir: Path) -> None:
                         _handle_gene_pair_selection("target", state["target"]["selected_gene_pair"], t)
                     except Exception as e:
                         logging.warning(f"[Fusion] Failed to restore target selection: {e}")
-            
+
             # Only update visualization when data content actually changes (for background refreshes)
             elif t is not None and target_data_hash != state["target"].get("data_hash"):
                 state["target"]["data_hash"] = target_data_hash
@@ -3109,7 +3695,7 @@ def add_fusion_section(launcher: Any, sample_dir: Path) -> None:
                     with state["target"]["status_container"].classes("w-full"):
                         ui.label("Target panel fusion analysis not available").classes("text-gray-600 text-sm")
                         ui.label("(No validated fusion pairs found in target panel)").classes("text-gray-500 text-xs")
-                
+
                 # Restore selected gene pair if it exists (for both cases above)
                 if state["target"]["selected_gene_pair"] and state["target"]["dropdown"]:
                     try:
@@ -3122,13 +3708,13 @@ def add_fusion_section(launcher: Any, sample_dir: Path) -> None:
             genome_mtime = genome_data.get("mtime")
             genome_data_hash = genome_data.get("data_hash")
             logging.info(f"[Fusion] Genome-wide update check: g={g is not None}, mtime_changed={genome_mtime != state['genome'].get('mtime')}")
-            
+
             # Always update summary and table when file changes
             if g is not None and genome_mtime != state["genome"].get("mtime"):
                 state["genome"]["data"] = g
                 state["genome"]["mtime"] = genome_mtime
                 state["genome"]["data_hash"] = genome_data_hash
-                
+
                 # summary
                 try:
                     if "summary" in state and state["summary"].get("genome_lbl"):
@@ -3150,7 +3736,7 @@ def add_fusion_section(launcher: Any, sample_dir: Path) -> None:
                     g.get("annotated_data", pd.DataFrame()),
                     g.get("goodpairs", pd.Series()),
                 )
-                
+
                 # groups table
                 try:
                     state["genome"]["groups_table_container"].clear()
@@ -3160,7 +3746,7 @@ def add_fusion_section(launcher: Any, sample_dir: Path) -> None:
                     state["genome"]["groups_table_container"],
                     g,
                 )
-                
+
                 # table
                 try:
                     state["genome"]["table_container"].clear()
@@ -3170,7 +3756,7 @@ def add_fusion_section(launcher: Any, sample_dir: Path) -> None:
                     state["genome"]["table_container"],
                     g.get("annotated_data", pd.DataFrame()),
                 )
-                
+
                 # Create visualization on first load or when data changes
                 try:
                     state["genome"]["plot_container"].clear()
@@ -3203,7 +3789,7 @@ def add_fusion_section(launcher: Any, sample_dir: Path) -> None:
                     with state["genome"]["status_container"].classes("w-full"):
                         ui.label("Genome-wide fusion analysis not available").classes("text-gray-600 text-sm")
                         ui.label("(Requires supplementary reads in BAM file)").classes("text-gray-500 text-xs")
-                
+
                 # Restore selected gene pair if it exists (for both cases above)
                 if state["genome"]["selected_gene_pair"] and state["genome"]["dropdown"]:
                     try:
@@ -3211,7 +3797,7 @@ def add_fusion_section(launcher: Any, sample_dir: Path) -> None:
                         _handle_gene_pair_selection("genome", state["genome"]["selected_gene_pair"], g)
                     except Exception as e:
                         logging.warning(f"[Fusion] Failed to restore genome selection: {e}")
-            
+
             # Only update visualization when data content actually changes (for background refreshes)
             elif g is not None and genome_data_hash != state["genome"].get("data_hash"):
                 state["genome"]["data_hash"] = genome_data_hash
@@ -3247,7 +3833,7 @@ def add_fusion_section(launcher: Any, sample_dir: Path) -> None:
                     with state["genome"]["status_container"].classes("w-full"):
                         ui.label("Genome-wide fusion analysis not available").classes("text-gray-600 text-sm")
                         ui.label("(Requires supplementary reads in BAM file)").classes("text-gray-500 text-xs")
-                
+
                 # Restore selected gene pair if it exists (for both cases above)
                 if state["genome"]["selected_gene_pair"] and state["genome"]["dropdown"]:
                     try:
@@ -3255,22 +3841,22 @@ def add_fusion_section(launcher: Any, sample_dir: Path) -> None:
                         _handle_gene_pair_selection("genome", state["genome"]["selected_gene_pair"], g)
                     except Exception as e:
                         logging.warning(f"[Fusion] Failed to restore genome selection: {e}")
-            
+
             # Update master BED UI
             master_bed_mtime = master_bed_data.get("mtime")
-            
+
             # Always update when file changes
             if master_bed_mtime != state["master_bed"].get("mtime"):
                 state["master_bed"]["data"] = master_bed_df
                 state["master_bed"]["mtime"] = master_bed_mtime
-                
+
                 # Master BED summary label has been deprecated
                 try:
                     if "summary" in state and state["summary"].get("master_bed_lbl"):
                         state["summary"]["master_bed_lbl"].text = "Master BED: (deprecated)"
                 except Exception:
                     pass
-                
+
                 # Master BED table display has been deprecated
                 try:
                     state["master_bed"]["table_container"].clear()
@@ -3305,6 +3891,10 @@ def add_fusion_section(launcher: Any, sample_dir: Path) -> None:
                     state["summary"]["genome_lbl"] = ui.label(
                         "Genome-wide: -- pairs, -- groups"
                     ).classes("classification-insight-meta w-full")
+                    if not show_target:
+                        state["summary"]["target_lbl"].classes("hidden")
+                    if not show_genome:
+                        state["summary"]["genome_lbl"].classes("hidden")
                     state["summary"]["master_bed_lbl"] = ui.label(
                         "Master BED: (deprecated)"
                     ).classes("hidden")
@@ -3312,29 +3902,31 @@ def add_fusion_section(launcher: Any, sample_dir: Path) -> None:
                         "From supplementary alignments; tables and plots below."
                     ).classes("classification-insight-foot")
 
-            ui.label("Target panel").classes(
-                "target-coverage-panel__meta-label mt-4 mb-1"
-            )
-            state["target"]["summary_table_container"] = ui.column().classes("w-full")
-            state["target"]["groups_table_container"] = ui.column().classes(
-                "w-full mt-2"
-            )
-            state["target"]["plot_container"] = ui.column().classes("w-full")
-            state["target"]["table_container"] = ui.column().classes("w-full mt-2")
-            state["target"]["status_container"] = ui.column().classes("w-full mt-2")
+            if show_target:
+                ui.label("Target panel").classes(
+                    "target-coverage-panel__meta-label mt-4 mb-1"
+                )
+                state["target"]["summary_table_container"] = ui.column().classes("w-full")
+                state["target"]["groups_table_container"] = ui.column().classes(
+                    "w-full mt-2"
+                )
+                state["target"]["plot_container"] = ui.column().classes("w-full")
+                state["target"]["table_container"] = ui.column().classes("w-full mt-2")
+                state["target"]["status_container"] = ui.column().classes("w-full mt-2")
 
-            # Genome-wide
-            ui.separator().classes("mgmt-detail-separator")
-            ui.label("Genome-wide").classes(
-                "target-coverage-panel__meta-label mt-2 mb-1"
-            )
-            state["genome"]["summary_table_container"] = ui.column().classes("w-full")
-            state["genome"]["groups_table_container"] = ui.column().classes(
-                "w-full mt-2"
-            )
-            state["genome"]["plot_container"] = ui.column().classes("w-full")
-            state["genome"]["table_container"] = ui.column().classes("w-full mt-2")
-            state["genome"]["status_container"] = ui.column().classes("w-full mt-2")
+            if show_genome:
+                if show_target:
+                    ui.separator().classes("mgmt-detail-separator")
+                ui.label("Genome-wide").classes(
+                    "target-coverage-panel__meta-label mt-2 mb-1"
+                )
+                state["genome"]["summary_table_container"] = ui.column().classes("w-full")
+                state["genome"]["groups_table_container"] = ui.column().classes(
+                    "w-full mt-2"
+                )
+                state["genome"]["plot_container"] = ui.column().classes("w-full")
+                state["genome"]["table_container"] = ui.column().classes("w-full mt-2")
+                state["genome"]["status_container"] = ui.column().classes("w-full mt-2")
 
             # Master BED Targets section has been deprecated
             # Keep containers initialized for backward compatibility
@@ -3371,7 +3963,7 @@ def add_fusion_section(launcher: Any, sample_dir: Path) -> None:
                     state["summary"][
                         "genome_lbl"
                     ].text = f"Genome-wide: {g_pairs0} pairs, {g_groups0} groups"
-                    
+
                     # Master BED summary has been deprecated
                     try:
                         state["summary"]["master_bed_lbl"].text = "Master BED: (deprecated)"
@@ -3381,11 +3973,16 @@ def add_fusion_section(launcher: Any, sample_dir: Path) -> None:
                     pass
         except Exception:
             pass
-        
+
         # Start the refresh timer (every 30 seconds)
-        logging.info("[Fusion] Setting up refresh timer (30s interval + 0.5s deferred + immediate)")
-        refresh_timer = ui.timer(30.0, refresh_fusion, active=True, immediate=False)
-        ui.timer(0.5, refresh_fusion, once=True)
+        logging.info("[Fusion] Setting up refresh timer (30s interval + immediate async load)")
+        from robin.gui.theme import (
+            register_theme_sync_callback,
+            client_timer,
+            stop_timer,
+        )
+
+        refresh_timer = client_timer(30.0, refresh_fusion, active=True, immediate=False)
 
         def _sync_fusion_plot_theme_if_needed() -> None:
             try:
@@ -3409,8 +4006,6 @@ def add_fusion_section(launcher: Any, sample_dir: Path) -> None:
                     pass
                 st["fusion_plot_theme_dark"] = dark
 
-        from robin.gui.theme import register_theme_sync_callback
-
         unregister_fusion_theme_sync = register_theme_sync_callback(
             _sync_fusion_plot_theme_if_needed,
             element=state.get("target", {}).get("fusion_mpl"),
@@ -3420,7 +4015,7 @@ def add_fusion_section(launcher: Any, sample_dir: Path) -> None:
         try:
             ui.context.client.on_disconnect(
                 lambda: (
-                    refresh_timer.deactivate(),
+                    stop_timer(refresh_timer),
                     unregister_fusion_theme_sync(),
                 )
             )

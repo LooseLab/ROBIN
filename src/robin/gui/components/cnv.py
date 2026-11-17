@@ -1,12 +1,16 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 from pathlib import Path
 
+import asyncio
+import json
 import natsort
 import numpy as np
 from functools import lru_cache
 import logging
+import pickle
+import time
 import importlib.resources as importlib_resources
 import pandas as pd
 
@@ -15,8 +19,36 @@ try:
 except ImportError:  # pragma: no cover
     ui = None
 
-from robin.gui.theme import styled_table, register_theme_sync_callback
-from robin.analysis.cnv_classification import detect_cnv_events, get_cnv_summary, CNVEvent
+from robin.gui.theme import (
+    styled_table,
+    register_theme_sync_callback,
+    get_user_dark_mode,
+    client_timer,
+    stop_timer,
+)
+from robin.analysis.cnv_classification import (
+    CNVEvent,
+    detect_cnv_events,
+    format_cnv_events_card_lines,
+    format_cnv_events_section_summary,
+)
+from robin.analysis.cnv_analysis import (
+    compute_cnv_log2_from_ploidy,
+    downsample_cnv_for_plot,
+    gene_region_cnv_value,
+    prepare_cnv_calling_track,
+    resolve_cnv_calling_track,
+    resolve_cnv_plot_bin_width,
+)
+from robin.analysis.cnv_regional import (
+    SIGNIFICANT_CNV_STATES,
+    analyze_cytoband_cnv,
+    build_regional_cnv_events,
+    format_regional_event_table_row,
+    is_reportable_chromosome,
+    load_panel_gene_bed,
+)
+from robin.analysis.itd_work import load_gene_target_coverage
 from robin.classification_config import get_cnv_thresholds
 
 # Same chromosome set as reporting (plotting.py): chr0–chr22, chrX, chrY only
@@ -24,20 +56,1247 @@ CNV_PLOT_CONTIGS = frozenset(
     ["chr" + str(i) for i in range(0, 23)] + ["chrX", "chrY"]
 )
 
+_CNV_PLOT_BIN_KEY_DEFAULT = "Data default"
+_CNV_PLOT_BIN_OPTIONS = {
+    _CNV_PLOT_BIN_KEY_DEFAULT: "Data default",
+    "500 kb": "500 kb",
+    "1 Mb": "1 Mb",
+    "2 Mb": "2 Mb",
+    "5 Mb": "5 Mb",
+    "10 Mb": "10 Mb",
+}
+_CNV_PLOT_BIN_KEY_TO_BP = {
+    _CNV_PLOT_BIN_KEY_DEFAULT: None,
+    "500 kb": 500_000,
+    "1 Mb": 1_000_000,
+    "2 Mb": 2_000_000,
+    "5 Mb": 5_000_000,
+    "10 Mb": 10_000_000,
+}
+_CNV_PLOT_BIN_KEYS_ORDERED = list(_CNV_PLOT_BIN_KEY_TO_BP.keys())
+
+# ECharts JS: y values to at most 1 decimal place, trailing ".0" dropped, so
+# axis ticks and zoom-slider handles never show full float precision.
+_CNV_Y_VALUE_FORMATTER_JS = (
+    "(value) => { const n = Number(value); "
+    "return Number.isFinite(n) ? String(Number(n.toFixed(1))) : value; }"
+)
+_CONFIGURED_GENES_SERIES_NAME = "configured_genes_highlight"
+_CONFIGURED_GENES_LABELS_SERIES_NAME = "configured_genes_labels"
+_CNV_GENE_COVERAGE_FILTER_ALL = "all"
+_CNV_GENE_COVERAGE_FILTER_OUTLIERS = "outliers"
+_CNV_GENE_COVERAGE_FILTERS = (
+    _CNV_GENE_COVERAGE_FILTER_ALL,
+    _CNV_GENE_COVERAGE_FILTER_OUTLIERS,
+)
+
+# CNV scatter plot container height (Tailwind arbitrary values on the echart).
+_CNV_ABS_HEIGHT_CLASS = "h-[22.5rem]"
+_CNV_ABS_HEIGHT_CLASS_TALL = "h-[45rem]"
+_CNV_GENE_GAIN_COLOR = "#DC2626"
+_CNV_GENE_LOSS_COLOR = "#2563EB"
+_CNV_GENE_OUTLIER_SD = 3.0
+# Soft safety only — axis auto-scales to highlighted genes within this envelope.
+_CNV_LOLLIPOP_LOG_Y_SOFT_CAP = 20.0
+_CNV_LOLLIPOP_LINEAR_Y_SOFT_CAP_FACTOR = 20.0
+
+
+@lru_cache(maxsize=16)
+def _load_cnv_gene_locations(gene_names: tuple[str, ...]) -> tuple[Dict[str, Any], ...]:
+    """Resolve configured gene symbols to GRCh38 intervals in the packaged gene BED."""
+    requested = {name.casefold(): name for name in gene_names if name.strip()}
+    if not requested:
+        return ()
+
+    intervals: Dict[tuple[str, str], Dict[str, Any]] = {}
+    try:
+        resources = importlib_resources.files("robin.resources")
+        unresolved = set(requested)
+        # all_genes3 supplies gene-body coordinates. unique_genes includes a few
+        # panel aliases/non-coding genes absent from that reference.
+        for resource_name in ("all_genes3.bed", "unique_genes.bed"):
+            if not unresolved:
+                break
+            resource = resources / resource_name
+            with resource.open("r", encoding="utf-8") as handle:
+                for line in handle:
+                    fields = line.rstrip("\n").split("\t")
+                    if len(fields) < 4:
+                        continue
+                    chrom = fields[0].strip()
+                    try:
+                        start_pos, end_pos = int(fields[1]), int(fields[2])
+                    except ValueError:
+                        continue
+                    for raw_symbol in fields[3].split(","):
+                        symbol_key = raw_symbol.strip().casefold()
+                        if symbol_key not in unresolved:
+                            continue
+                        requested_name = requested[symbol_key]
+                        key = (symbol_key, chrom)
+                        existing = intervals.get(key)
+                        if existing is None:
+                            intervals[key] = {
+                                "gene": requested_name,
+                                "chrom": chrom,
+                                "start_pos": start_pos,
+                                "end_pos": end_pos,
+                            }
+                        else:
+                            existing["start_pos"] = min(
+                                existing["start_pos"], start_pos
+                            )
+                            existing["end_pos"] = max(existing["end_pos"], end_pos)
+            unresolved -= {key[0] for key in intervals}
+    except Exception:
+        logging.warning("Could not load CNV gene locations", exc_info=True)
+        return ()
+
+    order = {name.casefold(): index for index, name in enumerate(gene_names)}
+    return tuple(
+        sorted(
+            intervals.values(),
+            key=lambda row: (order.get(str(row["gene"]).casefold(), 10**9), row["chrom"]),
+        )
+    )
+
+
+def _configured_genes_on_chrom(
+    gene_locations: Sequence[Dict[str, Any]],
+    selected: str,
+) -> List[Dict[str, Any]]:
+    """Return configured gene intervals for one chromosome (or all when selected is All)."""
+    if selected == "All":
+        return list(gene_locations)
+    return [row for row in gene_locations if str(row["chrom"]) == selected]
+
+
+def _find_configured_gene_interval(
+    gene_locations: Sequence[Dict[str, Any]],
+    *,
+    selected: str,
+    gene_name: str,
+) -> Optional[Dict[str, Any]]:
+    """Look up a configured gene interval on the current chromosome."""
+    want = str(gene_name).casefold()
+    for row in _configured_genes_on_chrom(gene_locations, selected):
+        if str(row["gene"]).casefold() == want:
+            return row
+    return None
+
+
+def _configured_gene_mark_series(
+    gene_locations: Sequence[Dict[str, Any]],
+    *,
+    selected: str,
+    chrom_offsets: Dict[str, float],
+    dark: bool,
+) -> Dict[str, Any]:
+    """Build a dedicated ECharts overlay for configured CNV gene locations."""
+    lines: List[Dict[str, Any]] = []
+    areas: List[List[Dict[str, Any]]] = []
+    # Invisible anchors so ECharts keeps the series (empty scatter markLines can vanish).
+    anchors: List[List[float]] = []
+    label_color = "#d8b4fe" if dark else "#6b21a8"
+    line_color = "#a855f7" if dark else "#7e22ce"
+    for row in gene_locations:
+        chrom = str(row["chrom"])
+        if selected != "All" and chrom != selected:
+            continue
+        if selected == "All" and chrom not in chrom_offsets:
+            continue
+        start_pos = float(row["start_pos"])
+        end_pos = float(row["end_pos"])
+        midpoint = (start_pos + end_pos) / 2.0
+        offset = chrom_offsets.get(chrom, 0.0) if selected == "All" else 0.0
+        x_pos = midpoint + offset
+        gene = str(row["gene"])
+        anchors.append([x_pos, 0.0])
+        lines.append(
+            {
+                "name": gene,
+                "xAxis": x_pos,
+                "lineStyle": {
+                    "color": line_color,
+                    "width": 1 if selected == "All" else 1.5,
+                    "opacity": 0.75,
+                },
+                "label": {
+                    "show": True,
+                    "formatter": gene,
+                    "position": "insideEndTop",
+                    "rotate": 90,
+                    "fontSize": 9 if selected == "All" else 11,
+                    "color": label_color,
+                },
+            }
+        )
+        # Chromosome view also gets a labelled span so names remain readable.
+        if selected != "All":
+            areas.append(
+                [
+                    {
+                        "name": gene,
+                        "xAxis": start_pos,
+                        "itemStyle": {
+                            "color": (
+                                "rgba(168, 85, 247, 0.12)"
+                                if dark
+                                else "rgba(126, 34, 206, 0.10)"
+                            )
+                        },
+                        "label": {
+                            "show": True,
+                            "position": "insideTop",
+                            "formatter": gene,
+                            "color": label_color,
+                            "fontSize": 11,
+                        },
+                    },
+                    {"xAxis": end_pos},
+                ]
+            )
+    return {
+        "type": "scatter",
+        "name": _CONFIGURED_GENES_SERIES_NAME,
+        "data": anchors,
+        "symbolSize": 0,
+        "silent": True,
+        "zlevel": 2,
+        "markLine": {
+            "symbol": "none",
+            "animation": False,
+            "data": lines,
+        },
+        "markArea": {
+            "silent": True,
+            "data": areas,
+        },
+    }
+
+
+def _upsert_configured_gene_series(
+    chart: Any,
+    gene_locations: Sequence[Dict[str, Any]],
+    *,
+    selected: str,
+    chrom_offsets: Dict[str, float],
+    dark: bool,
+) -> None:
+    """Ensure the configured-gene overlay is present and last among chart series."""
+    series = chart.options.get("series")
+    if not isinstance(series, list):
+        return
+    chart.options["series"] = [
+        s
+        for s in series
+        if s.get("name")
+        not in (
+            _CONFIGURED_GENES_SERIES_NAME,
+            _CONFIGURED_GENES_LABELS_SERIES_NAME,
+        )
+    ]
+    if not gene_locations:
+        return
+    chart.options["series"].append(
+        _configured_gene_mark_series(
+            gene_locations,
+            selected=selected,
+            chrom_offsets=chrom_offsets,
+            dark=dark,
+        )
+    )
+
+
+def _is_configured_gene_cnv_outlier(
+    cnv_val: float,
+    mean_cnv: float,
+    std_cnv: float,
+) -> bool:
+    """True when gene CNV differs from the local expected average by >3 SD."""
+    if not np.isfinite(cnv_val) or not np.isfinite(mean_cnv):
+        return False
+    if not np.isfinite(std_cnv) or std_cnv < 1e-6:
+        return abs(cnv_val - mean_cnv) > 0.5
+    return abs(cnv_val - mean_cnv) > _CNV_GENE_OUTLIER_SD * std_cnv
+
+
+def _configured_gene_region_cnv(
+    values: np.ndarray,
+    *,
+    start_pos: float,
+    end_pos: float,
+    bin_width: int,
+    use_max_abs: bool,
+) -> Optional[float]:
+    """Representative gene CNV (mean + focal rescue on log2; peak on ploidy)."""
+    if use_max_abs:
+        # Log2 track: unbiased mean with focal rescue at 3× the calling cut-off.
+        gain_thr, _ = get_cnv_thresholds("chr1", "Female")
+        return gene_region_cnv_value(
+            values,
+            start_pos=start_pos,
+            end_pos=end_pos,
+            bin_width=bin_width,
+            calling_cutoff=float(gain_thr),
+        )
+    arr = np.asarray(values, dtype=float)
+    if arr.size == 0 or bin_width <= 0:
+        return None
+    start_bin = max(0, int(start_pos // bin_width))
+    end_bin = min(arr.size - 1, int(end_pos // bin_width))
+    if end_bin < start_bin:
+        return None
+    region = arr[start_bin : end_bin + 1]
+    finite = region[np.isfinite(region)]
+    if finite.size == 0:
+        return None
+    return float(np.nanmax(finite))
+
+
+def _chrom_track_stats(
+    values: np.ndarray,
+    *,
+    use_log: bool,
+) -> Tuple[float, float]:
+    """Mean/std for outlier + direction calls on one chromosome track."""
+    vals = np.asarray(values, dtype=float)
+    finite = vals[np.isfinite(vals)]
+    default_mean = 0.0 if use_log else 2.0
+    if finite.size == 0:
+        return default_mean, 1.0
+    return float(np.mean(finite)), float(np.std(finite))
+
+
+def _configured_gene_cnv_direction(
+    cnv_val: float,
+    *,
+    use_log: bool,
+    mean_cnv: float,
+) -> str:
+    """Classify gene CNV as gain or loss relative to the expected average."""
+    if use_log:
+        return "gain" if cnv_val >= 0.0 else "loss"
+    return "gain" if cnv_val >= mean_cnv else "loss"
+
+
+def _normalise_coverage_to_cnv_axis(
+    coverage: float,
+    *,
+    mean_cov: float,
+    scale_mean_cnv: float,
+    use_log: bool,
+) -> Optional[float]:
+    """Map target depth onto the CNV y-axis for visual comparison.
+
+    Linear/ploidy: ``scale_mean_cnv * (cov / mean_cov)`` so mean coverage sits
+    at the CNV mean. Log2: ``log2(cov / mean_cov)`` so mean coverage sits at 0.
+    """
+    if not np.isfinite(coverage) or coverage <= 0:
+        return None
+    if not np.isfinite(mean_cov) or mean_cov <= 0:
+        return None
+    ratio = float(coverage) / float(mean_cov)
+    if use_log:
+        return float(np.log2(ratio))
+    if not np.isfinite(scale_mean_cnv):
+        return None
+    return float(scale_mean_cnv) * ratio
+
+
+def _build_configured_gene_coverage_points(
+    gene_locations: Sequence[Dict[str, Any]],
+    *,
+    selected: str,
+    chrom_offsets: Dict[str, float],
+    abs_plot_map: Dict[str, np.ndarray],
+    bin_width: int,
+    coverage_by_gene: Dict[str, float],
+    filter_mode: str,
+    use_log: bool,
+    scale_mean_cnv: float,
+) -> Tuple[List[Dict[str, Any]], Optional[float]]:
+    """Join configured genes to target coverage for abs-chart lollipops."""
+    if not gene_locations or not coverage_by_gene:
+        return [], None
+
+    cov_lookup = {str(k).casefold(): float(v) for k, v in coverage_by_gene.items()}
+    cov_vals = [v for v in cov_lookup.values() if np.isfinite(v) and v > 0]
+    mean_cov = float(np.mean(cov_vals)) if cov_vals else None
+    if mean_cov is None:
+        return [], None
+
+    baseline_y = 0.0 if use_log else float(scale_mean_cnv)
+    chrom_stats: Dict[str, Tuple[float, float]] = {}
+    points: List[Dict[str, Any]] = []
+    for row in _configured_genes_on_chrom(gene_locations, selected):
+        gene = str(row["gene"])
+        chrom = str(row["chrom"])
+        if selected == "All" and chrom not in chrom_offsets and chrom not in abs_plot_map:
+            continue
+        coverage = cov_lookup.get(gene.casefold())
+        if coverage is None or not np.isfinite(coverage):
+            continue
+        track = abs_plot_map.get(chrom)
+        if track is None:
+            continue
+        if chrom not in chrom_stats:
+            chrom_stats[chrom] = _chrom_track_stats(track, use_log=use_log)
+        mean_cnv, std_cnv = chrom_stats[chrom]
+        cnv_val = _configured_gene_region_cnv(
+            track,
+            start_pos=float(row["start_pos"]),
+            end_pos=float(row["end_pos"]),
+            bin_width=int(bin_width),
+            use_max_abs=use_log,
+        )
+        if cnv_val is None:
+            continue
+        if filter_mode == _CNV_GENE_COVERAGE_FILTER_OUTLIERS and not (
+            _is_configured_gene_cnv_outlier(cnv_val, mean_cnv, std_cnv)
+        ):
+            continue
+        y_norm = _normalise_coverage_to_cnv_axis(
+            float(coverage),
+            mean_cov=mean_cov,
+            scale_mean_cnv=float(scale_mean_cnv),
+            use_log=use_log,
+        )
+        if y_norm is None:
+            continue
+        start_pos = float(row["start_pos"])
+        end_pos = float(row["end_pos"])
+        midpoint = (start_pos + end_pos) / 2.0
+        offset = chrom_offsets.get(chrom, 0.0) if selected == "All" else 0.0
+        points.append(
+            {
+                "gene": gene,
+                "chrom": chrom,
+                "x": midpoint + offset,
+                "coverage": float(coverage),
+                "y": float(y_norm),
+                "baseline_y": float(baseline_y),
+                "cnv_val": float(cnv_val),
+                "direction": _configured_gene_cnv_direction(
+                    float(cnv_val),
+                    use_log=use_log,
+                    mean_cnv=mean_cnv,
+                ),
+            }
+        )
+    return points, mean_cov
+
+
+def _stagger_lollipop_label_distances(
+    points: Sequence[Dict[str, Any]],
+    *,
+    base_distance: int = 10,
+    step: int = 14,
+    x_proximity_frac: float = 0.018,
+) -> List[int]:
+    """Push nearby gene labels apart vertically (pixel distance from the head)."""
+    if not points:
+        return []
+    xs = [float(p["x"]) for p in points]
+    x_span = max(xs) - min(xs) if len(xs) > 1 else 1.0
+    proximity = max(x_span * x_proximity_frac, 1.0)
+    order = sorted(range(len(points)), key=lambda idx: xs[idx])
+    distances = [base_distance] * len(points)
+    occupied: List[Tuple[float, int]] = []
+    for idx in order:
+        x_pos = xs[idx]
+        lane = 0
+        while any(
+            abs(x_pos - other_x) < proximity and lane == other_lane
+            for other_x, other_lane in occupied
+        ):
+            lane += 1
+            if lane > 8:
+                break
+        occupied.append((x_pos, lane))
+        distances[idx] = base_distance + lane * step
+    return distances
+
+
+def _lollipop_baseline_y_range(
+    *,
+    use_log: bool,
+    scale_mean_cnv: float,
+) -> Tuple[float, float]:
+    """Minimum CNV-friendly window before expanding for highlighted genes."""
+    if use_log:
+        return (-2.0, 2.0)
+    return (0.0, max(4.0, float(scale_mean_cnv) * 1.75))
+
+
+def _lollipop_view_y_range(
+    points: Sequence[Dict[str, Any]],
+    *,
+    use_log: bool,
+    scale_mean_cnv: float,
+) -> Tuple[float, float]:
+    """Auto-scale the Y window so highlighted genes and nearby labels stay in range."""
+    base_lo, base_hi = _lollipop_baseline_y_range(
+        use_log=use_log,
+        scale_mean_cnv=scale_mean_cnv,
+    )
+    gene_ys = [
+        float(p["y"])
+        for p in points
+        if p.get("y") is not None and np.isfinite(float(p["y"]))
+    ]
+    if not gene_ys:
+        span = max(base_hi - base_lo, 1.0)
+        return float(base_lo - 0.1 * span), float(base_hi + 0.1 * span)
+
+    g_lo = float(min(gene_ys))
+    g_hi = float(max(gene_ys))
+    lo = min(float(base_lo), g_lo)
+    hi = max(float(base_hi), g_hi)
+    span = max(hi - lo, 1.0)
+    # Room for labels placed just above gains / below losses.
+    label_pad = max(0.35, 0.18 * span)
+    lo -= label_pad
+    hi += label_pad
+    if not use_log:
+        lo = max(0.0, lo)
+    return float(lo), float(hi)
+
+
+def _soft_cap_lollipop_display_y(
+    y_norm: float,
+    *,
+    use_log: bool,
+    scale_mean_cnv: float,
+) -> Tuple[float, bool]:
+    """Only clip pathological extremes; normal gene values stay unscaled."""
+    if use_log:
+        lo, hi = -_CNV_LOLLIPOP_LOG_Y_SOFT_CAP, _CNV_LOLLIPOP_LOG_Y_SOFT_CAP
+    else:
+        lo = 0.0
+        hi = max(12.0, float(scale_mean_cnv) * _CNV_LOLLIPOP_LINEAR_Y_SOFT_CAP_FACTOR)
+    capped = bool(y_norm < lo or y_norm > hi)
+    return float(np.clip(y_norm, lo, hi)), capped
+
+
+def _layout_lollipop_label_placements(
+    points: Sequence[Dict[str, Any]],
+    *,
+    y_lo: float,
+    y_hi: float,
+    x_proximity_frac: float = 0.022,
+    n_lanes: int = 4,
+) -> List[Dict[str, Any]]:
+    """Place each gene badge beside its marker: above gains, below losses."""
+    if not points:
+        return []
+    span = max(float(y_hi) - float(y_lo), 1e-6)
+    base_offset = max(0.22, 0.08 * span)
+    lane_step = max(0.16, 0.045 * span)
+    lanes = n_lanes if len(points) > 8 else max(2, min(n_lanes, 3))
+
+    xs = [float(p["x"]) for p in points]
+    x_span = max(xs) - min(xs) if len(xs) > 1 else 1.0
+    proximity = max(x_span * x_proximity_frac, 1.0)
+    order = sorted(range(len(points)), key=lambda idx: xs[idx])
+
+    placements: List[Optional[Dict[str, Any]]] = [None] * len(points)
+    occupied: List[Tuple[float, str, int]] = []  # x, side, lane
+
+    for idx in order:
+        point = points[idx]
+        x_pos = float(point["x"])
+        y_head = float(point.get("y_disp", point.get("y", 0.0)))
+        baseline = float(point.get("baseline_y", 0.0))
+        direction = str(point.get("direction") or "")
+        # Prefer the side away from the CNV baseline / toward the stem tip.
+        if direction == "loss" or y_head < baseline:
+            side = "below"
+        else:
+            side = "above"
+
+        lane = 0
+        while any(
+            abs(x_pos - other_x) < proximity
+            and side == other_side
+            and lane == other_lane
+            for other_x, other_side, other_lane in occupied
+        ):
+            lane += 1
+            if lane >= lanes:
+                lane = lanes - 1
+                break
+        occupied.append((x_pos, side, lane))
+
+        offset = base_offset + lane * lane_step
+        if side == "above":
+            label_y = min(y_head + offset, float(y_hi) - 0.03 * span)
+            label_position = "top"
+        else:
+            label_y = max(y_head - offset, float(y_lo) + 0.03 * span)
+            label_position = "bottom"
+        placements[idx] = {
+            "y": float(label_y),
+            "side": side,
+            "position": label_position,
+        }
+
+    return [
+        p if p is not None else {"y": 0.0, "side": "above", "position": "top"}
+        for p in placements
+    ]
+
+
+def _configured_gene_coverage_lollipop_series(
+    points: Sequence[Dict[str, Any]],
+    *,
+    use_log: bool,
+    dark: bool,
+    scale_mean_cnv: float,
+    view_y_lo: float,
+    view_y_hi: float,
+    label_font_size: Optional[int] = None,
+) -> List[Dict[str, Any]]:
+    """Build head + callout-label series on the shared CNV axis."""
+    if not points:
+        return []
+
+    label_bg = "rgba(15, 23, 42, 0.94)" if dark else "rgba(255, 255, 255, 0.97)"
+    head_border = "#0f172a" if dark else "#ffffff"
+    if label_font_size is None:
+        label_font = 12 if len(points) <= 20 else 11
+    else:
+        label_font = int(label_font_size)
+
+    prepared: List[Dict[str, Any]] = []
+    for point in points:
+        y_raw = float(point["y"])
+        y_disp, capped = _soft_cap_lollipop_display_y(
+            y_raw,
+            use_log=use_log,
+            scale_mean_cnv=scale_mean_cnv,
+        )
+        prepared.append({**point, "y_disp": y_disp, "capped": capped})
+
+    placements = _layout_lollipop_label_placements(
+        prepared,
+        y_lo=view_y_lo,
+        y_hi=view_y_hi,
+    )
+
+    heads: List[Dict[str, Any]] = []
+    labels: List[Dict[str, Any]] = []
+    stems: List[Any] = []
+    leaders: List[Any] = []
+
+    for point, place in zip(prepared, placements):
+        x_pos = float(point["x"])
+        y_disp = float(point["y_disp"])
+        baseline = float(point.get("baseline_y", 0.0 if use_log else 2.0))
+        label_y = float(place["y"])
+        gene = str(point["gene"])
+        cov = float(point["coverage"])
+        capped = bool(point.get("capped"))
+        color = (
+            _CNV_GENE_GAIN_COLOR
+            if point.get("direction") == "gain"
+            else _CNV_GENE_LOSS_COLOR
+        )
+        heads.append(
+            {
+                "name": gene,
+                "value": [x_pos, y_disp],
+                "coverage": cov,
+                "capped": capped,
+                "itemStyle": {
+                    "color": color,
+                    "borderColor": head_border,
+                    "borderWidth": 2,
+                    "shadowBlur": 5,
+                    "shadowColor": "rgba(0, 0, 0, 0.3)",
+                },
+                "label": {"show": False},
+            }
+        )
+        labels.append(
+            {
+                "name": gene,
+                "value": [x_pos, label_y],
+                "coverage": cov,
+                "capped": capped,
+                "symbol": "roundRect",
+                "symbolSize": [2, 2],
+                "itemStyle": {
+                    "color": "transparent",
+                    "borderWidth": 0,
+                },
+                "label": {
+                    "show": True,
+                    "formatter": gene,
+                    "position": place["position"],
+                    "distance": 2,
+                    "rotate": 0,
+                    "fontSize": label_font,
+                    "fontWeight": "bold",
+                    "color": color,
+                    "backgroundColor": label_bg,
+                    "borderColor": color,
+                    "borderWidth": 1.5,
+                    "borderRadius": 4,
+                    "padding": [1, 2],
+                    "align": "center",
+                    "verticalAlign": "middle",
+                },
+            }
+        )
+        stems.append(
+            [
+                {
+                    "coord": [x_pos, baseline],
+                    "lineStyle": {
+                        "color": color,
+                        "type": "solid",
+                        "width": 2,
+                        "opacity": 0.9,
+                    },
+                },
+                {"coord": [x_pos, y_disp]},
+            ]
+        )
+        # Short leader from the marker head to the gene badge.
+        leaders.append(
+            [
+                {
+                    "coord": [x_pos, y_disp],
+                    "lineStyle": {
+                        "color": color,
+                        "type": "dashed",
+                        "width": 1.25,
+                        "opacity": 0.85,
+                    },
+                },
+                {"coord": [x_pos, label_y]},
+            ]
+        )
+
+    tooltip = {
+        "trigger": "item",
+        ":formatter": (
+            "(params) => { const d = params.data || {}; "
+            "const cov = Number(d.coverage); "
+            "const v = params.value; "
+            "const y = Array.isArray(v) ? Number(v[1]) : Number(v); "
+            "const covTxt = Number.isFinite(cov) ? cov.toFixed(1) + 'x' : 'n/a'; "
+            "const yTxt = Number.isFinite(y) ? y.toFixed(2) : ''; "
+            "const cap = d.capped ? ' (capped)' : ''; "
+            "return params.name + ': ' + covTxt + "
+            "(yTxt ? ' (norm ' + yTxt + ')' : '') + cap; }"
+        ),
+    }
+
+    head_series = {
+        "type": "scatter",
+        "name": _CONFIGURED_GENES_SERIES_NAME,
+        "yAxisIndex": 0,
+        "symbolSize": 13,
+        "zlevel": 4,
+        "z": 12,
+        "clip": False,
+        "animation": False,
+        "animationDuration": 0,
+        "progressive": 0,
+        "data": heads,
+        "markLine": {
+            "symbol": "none",
+            "animation": False,
+            "animationDuration": 0,
+            "silent": True,
+            "z": 11,
+            "data": stems + leaders,
+        },
+        "tooltip": tooltip,
+    }
+    label_series = {
+        "type": "scatter",
+        "name": _CONFIGURED_GENES_LABELS_SERIES_NAME,
+        "yAxisIndex": 0,
+        "symbolSize": 1,
+        "zlevel": 5,
+        "z": 14,
+        "clip": False,
+        "animation": False,
+        "animationDuration": 0,
+        "progressive": 0,
+        "data": labels,
+        "tooltip": tooltip,
+        "silent": False,
+    }
+    return [head_series, label_series]
+
+
+def _apply_cnv_abs_y_window(chart: Any, y_lo: float, y_hi: float) -> None:
+    """Pin the abs-chart Y axis and slider to a marker-aware window."""
+    try:
+        dz_list = chart.options.get("dataZoom")
+        if isinstance(dz_list, list) and len(dz_list) > 1 and isinstance(dz_list[1], dict):
+            dz_list[1]["startValue"] = float(y_lo)
+            dz_list[1]["endValue"] = float(y_hi)
+            dz_list[1]["filterMode"] = "none"
+            dz_list[1].pop("start", None)
+            dz_list[1].pop("end", None)
+    except Exception:
+        pass
+    try:
+        y_axes = chart.options.get("yAxis")
+        if isinstance(y_axes, list) and y_axes and isinstance(y_axes[0], dict):
+            y_axes[0]["min"] = float(y_lo)
+            y_axes[0]["max"] = float(y_hi)
+            y_axes[0]["scale"] = False
+    except Exception:
+        pass
+
+
+def _upsert_configured_gene_coverage_lollipops(
+    chart: Any,
+    points: Sequence[Dict[str, Any]],
+    *,
+    use_log: bool,
+    dark: bool,
+    scale_mean_cnv: float,
+    label_font_size: Optional[int] = None,
+) -> None:
+    """Replace the abs-chart gene series with coverage lollipops (or remove it)."""
+    series = chart.options.get("series")
+    if not isinstance(series, list):
+        return
+    chart.options["series"] = [
+        s
+        for s in series
+        if s.get("name")
+        not in (
+            _CONFIGURED_GENES_SERIES_NAME,
+            _CONFIGURED_GENES_LABELS_SERIES_NAME,
+        )
+    ]
+    if not points:
+        # No markers: restore a CNV-friendly baseline window.
+        base_lo, base_hi = _lollipop_baseline_y_range(
+            use_log=use_log,
+            scale_mean_cnv=scale_mean_cnv,
+        )
+        span = max(base_hi - base_lo, 1.0)
+        _apply_cnv_abs_y_window(chart, base_lo, base_hi + 0.15 * span)
+        return
+    view_y_lo, view_y_hi = _lollipop_view_y_range(
+        points,
+        use_log=use_log,
+        scale_mean_cnv=scale_mean_cnv,
+    )
+    _apply_cnv_abs_y_window(chart, view_y_lo, view_y_hi)
+    chart.options["series"].extend(
+        _configured_gene_coverage_lollipop_series(
+            points,
+            use_log=use_log,
+            dark=dark,
+            scale_mean_cnv=scale_mean_cnv,
+            view_y_lo=view_y_lo,
+            view_y_hi=view_y_hi,
+            label_font_size=label_font_size,
+        )
+    )
+
+
+def _set_cnv_abs_coverage_axis(chart: Any, *, show: bool = False) -> None:
+    """Keep the unused right-hand axis hidden (lollipops share the CNV axis)."""
+    y_axes = chart.options.get("yAxis")
+    if not isinstance(y_axes, list) or len(y_axes) < 2:
+        return
+    axis = y_axes[1]
+    if not isinstance(axis, dict):
+        return
+    axis["show"] = bool(show)
+    axis.pop("max", None)
+    grid = chart.options.get("grid")
+    if isinstance(grid, dict):
+        grid["right"] = "8%" if show else "5%"
+
+
+def _cnv_plot_bin_key_from_ui(value: Any) -> str:
+    """Resolve NiceGUI select value (key, index, or event payload) to a plot-bin option key."""
+    if value is None:
+        return _CNV_PLOT_BIN_KEY_DEFAULT
+    if isinstance(value, dict):
+        inner = value.get("value", value.get("label"))
+        if inner is not None and inner is not value:
+            return _cnv_plot_bin_key_from_ui(inner)
+    if isinstance(value, int) and not isinstance(value, bool):
+        if 0 <= value < len(_CNV_PLOT_BIN_KEYS_ORDERED):
+            return _CNV_PLOT_BIN_KEYS_ORDERED[value]
+    if isinstance(value, str):
+        if value in _CNV_PLOT_BIN_KEY_TO_BP:
+            return value
+        for key, label in _CNV_PLOT_BIN_OPTIONS.items():
+            if value == label:
+                return key
+    return _CNV_PLOT_BIN_KEY_DEFAULT
+
+
+def _cnv_plot_bin_bp_from_ui(value: Any) -> Optional[int]:
+    return _CNV_PLOT_BIN_KEY_TO_BP.get(_cnv_plot_bin_key_from_ui(value))
+
+
+def _cnv_plot_bin_key_from_bp(bp: Optional[int]) -> str:
+    if bp is None:
+        return _CNV_PLOT_BIN_KEY_DEFAULT
+    for key, width in _CNV_PLOT_BIN_KEY_TO_BP.items():
+        if width == bp:
+            return key
+    return _CNV_PLOT_BIN_KEY_DEFAULT
+
+
+def _cnv_gene_coverage_filter_from_ui(value: Any) -> str:
+    """Normalize Coverage genes switch value to a filter mode key.
+
+    Switch semantics: True / on = outliers only; False / off = all configured genes.
+    """
+    if isinstance(value, bool):
+        return (
+            _CNV_GENE_COVERAGE_FILTER_OUTLIERS
+            if value
+            else _CNV_GENE_COVERAGE_FILTER_ALL
+        )
+    if isinstance(value, dict):
+        inner = value.get("value", value.get("label"))
+        if inner is not None and inner is not value:
+            return _cnv_gene_coverage_filter_from_ui(inner)
+    vlow = str(value or "").strip().lower()
+    if vlow in (
+        _CNV_GENE_COVERAGE_FILTER_ALL,
+        "all genes",
+        "all",
+        "false",
+        "0",
+        "off",
+    ):
+        return _CNV_GENE_COVERAGE_FILTER_ALL
+    if vlow in (
+        _CNV_GENE_COVERAGE_FILTER_OUTLIERS,
+        "outliers only",
+        "outliers",
+        "≠ average",
+        "!= average",
+        "vs average",
+        "not average",
+        "true",
+        "1",
+        "on",
+    ):
+        return _CNV_GENE_COVERAGE_FILTER_OUTLIERS
+    return _CNV_GENE_COVERAGE_FILTER_OUTLIERS
+
 
 def _cnv_contig_ok(contig: str) -> bool:
     """True if contig should be included in CNV plots (matches report behaviour)."""
     return contig in CNV_PLOT_CONTIGS
 
 
-def _is_dark_mode() -> bool:
-    """Quasar ``body--dark`` via app storage (see theme.frame)."""
-    try:
-        from nicegui import app
+def _unwrap_cnv_track_map(raw: Any) -> Optional[Dict[str, np.ndarray]]:
+    if not isinstance(raw, dict):
+        return None
+    if "cnv" in raw:
+        inner = raw["cnv"]
+        return inner if isinstance(inner, dict) else None
+    return raw
 
-        return bool(app.storage.user.get("dark_mode"))
+
+def _cnv_sex_estimate_label(xy_val: Any) -> str:
+    try:
+        s = str(xy_val).strip().upper()
+        if s in ("MALE", "XY"):
+            return "Male"
+        if s in ("FEMALE", "XX"):
+            return "Female"
     except Exception:
-        return False
+        pass
+    return "Unknown"
+
+
+def _recompute_cnv_log2_state(state: Dict[str, Any]) -> None:
+    """log2(ploidy / expected copy number) from the same track as the ploidy plot.
+
+    When CNV2 is available, unmappable reference bins are masked to NaN so
+    regional / arm calling cannot treat flat-zero difference loci as losses.
+    """
+    sample = _unwrap_cnv_track_map(state.get("cnv"))
+    if not sample:
+        state.pop("cnv_log2", None)
+        return
+    state["cnv_log2"] = resolve_cnv_calling_track(
+        sample,
+        _cnv_sex_estimate_label(state.get("xy")),
+        ref_cnv_map=_unwrap_cnv_track_map(state.get("cnv2")),
+    )
+
+
+def _cnv_genome_x_extent_bp(
+    cnv_map: Dict[str, Any],
+    binw_analysis: int,
+    selected: str = "All",
+) -> int:
+    """Full genomic span in bp for the CNV scatter x-axis (independent of plot bin)."""
+    if selected == "All":
+        return sum(
+            len(cnv_map[c]) * int(binw_analysis)
+            for c in natsort.natsorted(cnv_map.keys())
+            if _cnv_contig_ok(c)
+        )
+    chr_cnv = cnv_map.get(selected)
+    return len(chr_cnv) * int(binw_analysis) if chr_cnv is not None else 0
+
+
+def _cnv_set_genome_x_axis(chart: Any, x_axis_max: int) -> None:
+    """Pin the x-axis to the full chromosome span (not downsampled data extent)."""
+    xa = chart.options.setdefault("xAxis", {})
+    if not isinstance(xa, dict):
+        return
+    xa.pop("max", None)  # drop dataMax so merges cannot keep a stale auto scale
+    xa["type"] = "value"
+    xa["min"] = 0
+    xa["max"] = int(x_axis_max)
+    xa["scale"] = True
+
+
+def _cnv_reset_genome_x_data_zoom(chart: Any) -> None:
+    """Reset the horizontal dataZoom to the full pinned x-axis span."""
+    try:
+        dz_list = chart.options.get("dataZoom")
+        if not isinstance(dz_list, list) or not dz_list:
+            return
+        dz = dz_list[0]
+        if not isinstance(dz, dict):
+            return
+        dz.pop("startValue", None)
+        dz.pop("endValue", None)
+        dz["start"] = 0
+        dz["end"] = 100
+    except Exception:
+        pass
+
+
+def _cnv_echarts_option_to_json(obj: Any) -> Any:
+    """Convert ECharts option fragments to JSON-serializable form."""
+    if isinstance(obj, dict):
+        return {k: _cnv_echarts_option_to_json(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_cnv_echarts_option_to_json(x) for x in obj]
+    if isinstance(obj, (np.floating, np.integer)):
+        v = float(obj) if isinstance(obj, np.floating) else int(obj)
+        return None if (isinstance(obj, np.floating) and np.isnan(obj)) else v
+    if isinstance(obj, float) and np.isnan(obj):
+        return None
+    return obj
+
+
+def _cnv_extract_js_options(obj: Any, js_values: Dict[str, str]) -> Any:
+    """Swap NiceGUI ``:key`` JS options for tokens, recording the JS source.
+
+    The raw ``setOption`` push below never runs NiceGUI's dynamic-property
+    conversion, so these have to be re-inserted as unquoted JS afterwards.
+    """
+    if isinstance(obj, dict):
+        converted: Dict[Any, Any] = {}
+        for key, value in obj.items():
+            if isinstance(key, str) and key.startswith(":") and isinstance(value, str):
+                token = f"__ROBIN_JS_{len(js_values)}__"
+                js_values[token] = value
+                converted[key[1:]] = token
+            else:
+                converted[key] = _cnv_extract_js_options(value, js_values)
+        return converted
+    if isinstance(obj, list):
+        return [_cnv_extract_js_options(item, js_values) for item in obj]
+    return obj
+
+
+def _cnv_echart_push_update(chart: Any) -> None:
+    """Replace the full ECharts option (NiceGUI merges by default and leaves stale scatter data)."""
+    js_values: Dict[str, str] = {}
+    options_clean = _cnv_echarts_option_to_json(
+        _cnv_extract_js_options(chart.options, js_values)
+    )
+    opts_json = json.dumps(options_clean)
+    # ``:setOption`` evaluates each argument as JS, so tokens become real functions.
+    for token, js_source in js_values.items():
+        opts_json = opts_json.replace(json.dumps(token), js_source)
+    try:
+        # Do not call chart.update() here: NiceGUI's update_chart uses setOption merge
+        # unless the series count changes, which leaves stale per-chromosome scatter data
+        # when only the plot bin width changes.
+        chart.run_chart_method(":setOption", opts_json, '{"notMerge": true}')
+    except Exception:
+        logging.debug("CNV chart notMerge setOption failed", exc_info=True)
+
+
+def _cnv_sample_relative_stats(
+    cnv_map: Dict[str, np.ndarray],
+    abs_plot_map: Optional[Dict[str, np.ndarray]],
+    *,
+    use_log: bool,
+) -> Tuple[float, float]:
+    """Sample-relative baseline from autosomes only, shared by all Up/Down coloring."""
+    source_map = abs_plot_map if use_log and abs_plot_map else cnv_map
+    default_mean = 0.0 if use_log else 2.0
+    autosome_vals: List[float] = []
+    for chrom, arr in source_map.items():
+        if not chrom.startswith("chr") or not chrom[3:].isdigit():
+            continue
+        vals = np.asarray(arr, dtype=float)
+        autosome_vals.extend(float(v) for v in vals if np.isfinite(v))
+    if not autosome_vals:
+        return default_mean, 1.0
+    return float(np.mean(autosome_vals)), float(np.std(autosome_vals))
+
+
+def _cnv_split_points_by_zscore(
+    pts: List[List[float]],
+    mean_val: float,
+    std_val: float,
+) -> Tuple[List[List[float]], List[List[float]], List[List[float]]]:
+    """Partition points into high / low / normal by z-score."""
+    high: List[List[float]] = []
+    low: List[List[float]] = []
+    norm: List[List[float]] = []
+    for xi, vi in pts:
+        z = (vi - mean_val) / std_val if std_val > 0 else 0.0
+        (high if z > 0.5 else low if z < -0.5 else norm).append([xi, vi])
+    return high, low, norm
+
+
+def _build_cnv_track_scatter_series(
+    track_map: Dict[str, np.ndarray],
+    *,
+    selected: str,
+    binw_analysis: int,
+    plot_bin_width: int,
+    chrom_palette: List[str],
+    filter_finite: bool = False,
+) -> List[Dict[str, Any]]:
+    """Build ECharts scatter series for a per-chromosome CNV track."""
+    series: List[Dict[str, Any]] = []
+    if selected == "All":
+        offset_bp = 0
+        dj = 0
+        for contig, cnv in natsort.natsorted(track_map.items()):
+            if not _cnv_contig_ok(contig):
+                continue
+            x_local, vals = downsample_cnv_for_plot(
+                np.asarray(cnv), binw_analysis, int(plot_bin_width)
+            )
+            x_global = offset_bp + x_local
+            if filter_finite:
+                pts = [
+                    [float(x), float(v)]
+                    for x, v in zip(x_global.tolist(), vals.tolist())
+                    if np.isfinite(v)
+                ]
+            else:
+                pts = list(zip(x_global.tolist(), [float(v) for v in vals]))
+            offset_bp += len(cnv) * binw_analysis
+            series.append(
+                {
+                    "type": "scatter",
+                    "name": contig,
+                    "symbolSize": 3,
+                    "itemStyle": {"color": chrom_palette[dj % len(chrom_palette)]},
+                    "data": pts,
+                }
+            )
+            dj += 1
+    else:
+        cnv = track_map.get(selected)
+        if cnv is not None:
+            x_local, vals = downsample_cnv_for_plot(
+                np.asarray(cnv), binw_analysis, int(plot_bin_width)
+            )
+            if filter_finite:
+                pts = [
+                    [float(x), float(v)]
+                    for x, v in zip(x_local.tolist(), vals.tolist())
+                    if np.isfinite(v)
+                ]
+            else:
+                pts = list(zip(x_local.tolist(), [float(v) for v in vals]))
+            series.append(
+                {
+                    "type": "scatter",
+                    "name": selected,
+                    "symbolSize": 3,
+                    "itemStyle": {"color": chrom_palette[0]},
+                    "data": pts,
+                }
+            )
+    return series
+
+
+def _cnv_load_binary_payload(
+    sample_dir: Path,
+    *,
+    cnv_dict_npy_changed: bool,
+    cnv_npy_changed: bool,
+    cnv2_npy_changed: bool,
+    cnv3_npy_changed: bool,
+    data_array_reload: bool,
+    xy_pkl_changed: bool,
+) -> Dict[str, Any]:
+    """Load CNV numpy/pickle data from disk (no UI). Safe for ``asyncio.to_thread``."""
+    out: Dict[str, Any] = {}
+    cnv_dict_npy = sample_dir / "CNV_dict.npy"
+    cnv_npy = sample_dir / "CNV.npy"
+    cnv2_npy = sample_dir / "CNV2.npy"
+    cnv3_npy = sample_dir / "CNV3.npy"
+    data_array_npy = sample_dir / "cnv_data_array.npy"
+    xy_pkl = sample_dir / "XYestimate.pkl"
+
+    if cnv_dict_npy_changed and cnv_dict_npy.exists():
+        out["cnv_dict"] = np.load(cnv_dict_npy, allow_pickle=True).item()
+
+    if xy_pkl_changed and xy_pkl.exists():
+        try:
+            with xy_pkl.open("rb") as f:
+                out["xy"] = pickle.load(f)
+        except Exception:
+            pass
+
+    if cnv_npy_changed and cnv_npy.exists():
+        try:
+            out["cnv"] = np.load(cnv_npy, allow_pickle=True).item()
+        except Exception:
+            out["cnv"] = None
+
+    if cnv2_npy_changed and cnv2_npy.exists():
+        try:
+            out["cnv2"] = np.load(cnv2_npy, allow_pickle=True).item()
+        except Exception:
+            out["cnv2"] = None
+
+    if cnv3_npy_changed and cnv3_npy.exists():
+        try:
+            out["cnv3"] = np.load(cnv3_npy, allow_pickle=True).item()
+        except Exception:
+            out["cnv3"] = None
+
+    if data_array_reload and data_array_npy.exists():
+        try:
+            out["bp_array"] = np.load(data_array_npy, allow_pickle=True)
+        except Exception:
+            pass
+
+    return out
+
+
+def _is_dark_mode() -> bool:
+    """Return normalized per-user dark mode."""
+    return get_user_dark_mode(default=False)
 
 
 def _cnv_chromosome_scatter_palette(dark: bool) -> List[str]:
@@ -162,7 +1421,11 @@ def _apply_cnv_echart_chrome(echart: Any, dark: bool) -> None:
                 if not isinstance(ya, dict):
                     continue
                 ya["axisLine"] = {"lineStyle": {"color": p["axis_line"]}}
-                ya["axisLabel"] = {**(ya.get("axisLabel") or {}), "color": p["muted"]}
+                ya["axisLabel"] = {
+                    **(ya.get("axisLabel") or {}),
+                    "color": p["muted"],
+                    ":formatter": _CNV_Y_VALUE_FORMATTER_JS,
+                }
                 ya["nameTextStyle"] = {"color": p["muted"]}
                 ya["splitLine"] = {"lineStyle": {"color": p["split"]}}
         leg = o.get("legend")
@@ -174,6 +1437,9 @@ def _apply_cnv_echart_chrome(echart: Any, dark: bool) -> None:
                 for dz in dz_list:
                     if not isinstance(dz, dict):
                         continue
+                    if dz.get("yAxisIndex") is not None:
+                        # Handle labels otherwise show the raw data min/max.
+                        dz[":labelFormatter"] = _CNV_Y_VALUE_FORMATTER_JS
                     dz["borderColor"] = p["axis_line"]
                     dz["fillerColor"] = (
                         "rgba(51, 65, 85, 0.35)"
@@ -214,16 +1480,38 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
 
     Uses `launcher._cnv_state` for per-sample cache/state.
     Expects CNV.npy, CNV3.npy, CNV_dict.npy, XYestimate.pkl, cnv_data_array.npy in sample folder.
+    The top chart can toggle between absolute ploidy and log2(ploidy / expected copy number).
 
     Controls now trigger immediate refresh instead of waiting for timer updates.
     """
+    configured_gene_names: tuple[str, ...] = ()
+    try:
+        from robin.workflow_config import get_cnv_genes, load_workflow_toml
+
+        workflow_config = None
+        workflow_toml_path = getattr(launcher, "workflow_toml_path", None)
+        if workflow_toml_path:
+            workflow_config = load_workflow_toml(Path(workflow_toml_path))
+        configured_gene_names = get_cnv_genes(workflow_config)
+    except Exception:
+        logging.warning("Could not resolve [cnv].genes for GUI plots", exc_info=True)
+    configured_gene_locations = _load_cnv_gene_locations(configured_gene_names)
+    if configured_gene_names:
+        found = {str(row["gene"]).casefold() for row in configured_gene_locations}
+        missing = [name for name in configured_gene_names if name.casefold() not in found]
+        if missing:
+            logging.warning(
+                "No packaged GRCh38 location found for configured CNV genes: %s",
+                ", ".join(missing),
+            )
+
     with ui.element("div").classes("w-full min-w-0").props("id=analysis-detail-cnv"):
         with ui.element("div").classes("classification-insight-shell w-full min-w-0"):
             ui.label("Copy number (CNV)").classes(
                 "classification-insight-heading text-headline-small"
             )
             with ui.element("div").classes(
-                "classification-insight-card w-full min-w-0"
+                "robin-card robin-card--informational classification-insight-card w-full min-w-0"
             ):
                 with ui.column().classes("w-full min-w-0 gap-2 p-2 md:p-3"):
                     with ui.row().classes("items-center gap-2 min-w-0"):
@@ -235,6 +1523,12 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
                         "classification-insight-result w-full"
                     )
                     cnv_xy = ui.label("Genetic sex: --").classes(
+                        "classification-insight-meta w-full"
+                    )
+                    cnv_whole_chr_summary = ui.label("Whole chromosome: --").classes(
+                        "classification-insight-meta w-full"
+                    )
+                    cnv_arm_summary = ui.label("Arm-level: --").classes(
                         "classification-insight-meta w-full"
                     )
                     with ui.row().classes(
@@ -257,44 +1551,121 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
                 cnv_gene_select = ui.select(options={"All": "All"}, value="All").style(
                     "width: 200px"
                 )
+                _cnv_ui_state = launcher._cnv_state.setdefault(str(sample_dir), {})
+                from robin.gui.plotting_preferences import (
+                    resolve_cnv_gui_color_mode,
+                    resolve_cnv_gui_gene_coverage_filter,
+                    resolve_cnv_gui_show_breakpoints,
+                    resolve_cnv_gui_y_scale,
+                )
+
+                _plot_prefs = getattr(launcher, "plotting_preferences", None)
+                if "gene_coverage_filter" not in _cnv_ui_state:
+                    _cnv_ui_state["gene_coverage_filter"] = (
+                        resolve_cnv_gui_gene_coverage_filter(_plot_prefs)
+                    )
+                if "color_mode" not in _cnv_ui_state:
+                    _cnv_ui_state["color_mode"] = resolve_cnv_gui_color_mode(
+                        _plot_prefs
+                    )
+                if "y_scale" not in _cnv_ui_state:
+                    _cnv_ui_state["y_scale"] = resolve_cnv_gui_y_scale(_plot_prefs)
+                if "show_bp" not in _cnv_ui_state:
+                    _cnv_ui_state["show_bp"] = resolve_cnv_gui_show_breakpoints(
+                        _plot_prefs
+                    )
+                if "double_height" not in _cnv_ui_state:
+                    _cnv_ui_state["double_height"] = False
+
+                ui.label("Coverage genes").classes("classification-insight-meta ml-2")
+                _gene_cov_filter = _cnv_ui_state.get("gene_coverage_filter")
+                if _gene_cov_filter not in _CNV_GENE_COVERAGE_FILTERS:
+                    _gene_cov_filter = resolve_cnv_gui_gene_coverage_filter(_plot_prefs)
+                _cnv_ui_state["gene_coverage_filter"] = _gene_cov_filter
+                with ui.row().classes("items-center gap-1"):
+                    ui.label("All").classes("classification-insight-meta")
+                    cnv_gene_cov_filter = (
+                        ui.switch(
+                            value=_gene_cov_filter
+                            == _CNV_GENE_COVERAGE_FILTER_OUTLIERS,
+                        )
+                        .props("dense")
+                        .tooltip(
+                            "Left: all configured genes · Right: outliers only"
+                        )
+                    )
+                    cnv_gene_cov_filter.value = (
+                        _gene_cov_filter == _CNV_GENE_COVERAGE_FILTER_OUTLIERS
+                    )
+                    ui.label("Outliers").classes("classification-insight-meta")
                 ui.label("Color by").classes("classification-insight-meta ml-2")
-                cnv_color = ui.toggle(
-                    options={"chromosome": "Chromosome", "value": "Up/Down"},
-                    value="chromosome",
-                ).classes("mt-1")
+                _color_mode = _cnv_ui_state.get("color_mode", "chromosome")
+                if _color_mode not in ("chromosome", "value"):
+                    _color_mode = resolve_cnv_gui_color_mode(_plot_prefs)
+                _cnv_ui_state["color_mode"] = _color_mode
+                with ui.row().classes("items-center gap-1"):
+                    ui.label("Chromosome").classes("classification-insight-meta")
+                    cnv_color = (
+                        ui.switch(value=_color_mode == "value")
+                        .props("dense")
+                        .tooltip(
+                            "Left: colour by chromosome · Right: gain/loss (up/down)"
+                        )
+                    )
+                    cnv_color.value = _color_mode == "value"
+                    ui.label("Up/Down").classes("classification-insight-meta")
                 ui.label("Y-axis").classes("classification-insight-meta ml-2")
-                cnv_scale = ui.toggle(
-                    options={"linear": "Linear", "log": "Log"}, value="linear"
-                ).classes("mt-1")
+                default_y_scale = resolve_cnv_gui_y_scale(_plot_prefs)
+                _y_scale = _cnv_ui_state.get("y_scale", default_y_scale)
+                if _y_scale not in ("linear", "log"):
+                    _y_scale = default_y_scale
+                _cnv_ui_state["y_scale"] = _y_scale
+                with ui.row().classes("items-center gap-1"):
+                    ui.label("Linear").classes("classification-insight-meta")
+                    cnv_scale = (
+                        ui.switch(value=_y_scale == "log")
+                        .props("dense")
+                        .tooltip(
+                            "Left: linear ploidy · Right: log2(ploidy / expected)"
+                        )
+                    )
+                    cnv_scale.value = _y_scale == "log"
+                    ui.label("Log2").classes("classification-insight-meta")
                 ui.label("Plot bin").classes("classification-insight-meta ml-2")
-                # NiceGUI select with dict uses keys as option values; map key -> bp (None = use data)
-                _PLOT_BIN_KEY_DEFAULT = "Data default"
-                _PLOT_BIN_OPTIONS = {
-                    _PLOT_BIN_KEY_DEFAULT: "Data default",
-                    "500 kb": "500 kb",
-                    "1 Mb": "1 Mb",
-                    "2 Mb": "2 Mb",
-                    "5 Mb": "5 Mb",
-                    "10 Mb": "10 Mb",
-                }
-                _PLOT_BIN_KEY_TO_BP = {
-                    _PLOT_BIN_KEY_DEFAULT: None,
-                    "500 kb": 500_000,
-                    "1 Mb": 1_000_000,
-                    "2 Mb": 2_000_000,
-                    "5 Mb": 5_000_000,
-                    "10 Mb": 10_000_000,
-                }
                 cnv_plot_bin = ui.select(
-                    options=_PLOT_BIN_OPTIONS,
-                    value=_PLOT_BIN_KEY_DEFAULT,
+                    options=_CNV_PLOT_BIN_OPTIONS,
+                    value=_CNV_PLOT_BIN_KEY_DEFAULT,
                 ).style("width: 120px")
                 cnv_bp_label = ui.label("Breakpoints").classes(
                     "classification-insight-meta ml-2"
                 ).style("display: none")
-                cnv_bp = ui.toggle(
-                    options={"hide": "Hide", "show": "Show"}, value="show"
-                ).classes("mt-1").style("display: none")
+                with ui.row().classes("items-center gap-1").style(
+                    "display: none"
+                ) as cnv_bp_row:
+                    ui.label("Hide").classes("classification-insight-meta")
+                    cnv_bp = (
+                        ui.switch(value=bool(_cnv_ui_state.get("show_bp", True)))
+                        .props("dense")
+                        .tooltip(
+                            "Show candidate breakpoint markers on single-chromosome view"
+                        )
+                    )
+                    cnv_bp.value = bool(_cnv_ui_state.get("show_bp", True))
+                    ui.label("Show").classes("classification-insight-meta")
+                ui.label("Height").classes("classification-insight-meta ml-2")
+                _double_height = bool(_cnv_ui_state.get("double_height", False))
+                _cnv_ui_state["double_height"] = _double_height
+                with ui.row().classes("items-center gap-1"):
+                    ui.label("Normal").classes("classification-insight-meta")
+                    cnv_height = (
+                        ui.switch(value=_double_height)
+                        .props("dense")
+                        .tooltip(
+                            "Left: standard scatter height · Right: double height"
+                        )
+                    )
+                    cnv_height.value = _double_height
+                    ui.label("Tall").classes("classification-insight-meta")
             with ui.element("div").classes("w-full target-coverage-panel__plot-wrap"):
                 cnv_abs = ui.echart(
                     {
@@ -308,20 +1679,22 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
                             "containLabel": True,
                         },
                         "tooltip": {"trigger": "axis"},
-                        "xAxis": {"type": "value", "max": "dataMax"},
+                        "xAxis": {"type": "value", "min": 0},
                         "yAxis": [
                             {"type": "value", "name": "Ploidy"},
                             {
                                 "type": "value",
-                                "name": "Breakpoint density",
+                                "name": "Coverage (x)",
                                 "position": "right",
+                                "show": False,
+                                "min": 0,
                             },
                         ],
                         "dataZoom": [
                             {"type": "slider", "xAxisIndex": [0]},
                             {
                                 "type": "slider",
-                                "yAxisIndex": [0, 1],
+                                "yAxisIndex": [0],
                                 "right": 20,
                                 "startValue": 0,
                                 "endValue": 6,
@@ -352,7 +1725,9 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
                             },
                         ],
                     }
-                ).classes("w-full h-72")
+                ).classes(
+                    f"w-full {_CNV_ABS_HEIGHT_CLASS_TALL if _double_height else _CNV_ABS_HEIGHT_CLASS} cnv-genome-abs-chart"
+                )
             with ui.element("div").classes("w-full target-coverage-panel__plot-wrap mt-2"):
                 cnv_diff = ui.echart(
                     {
@@ -366,20 +1741,22 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
                             "containLabel": True,
                         },
                         "tooltip": {"trigger": "axis"},
-                        "xAxis": {"type": "value", "max": "dataMax"},
+                        "xAxis": {"type": "value", "min": 0},
                         "yAxis": [
                             {"type": "value", "name": "Relative"},
                             {
                                 "type": "value",
-                                "name": "Breakpoint density",
+                                "name": "Coverage (x)",
                                 "position": "right",
+                                "show": False,
+                                "min": 0,
                             },
                         ],
                         "dataZoom": [
                             {"type": "slider", "xAxisIndex": [0]},
                             {
                                 "type": "slider",
-                                "yAxisIndex": [0, 1],
+                                "yAxisIndex": [0],
                                 "right": 20,
                                 "startValue": -4,
                                 "endValue": 4,
@@ -415,85 +1792,93 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
                             },
                         ],
                     }
-                ).classes("w-full h-72")
+                ).classes("w-full h-[22.5rem] cnv-genome-diff-chart")
+            genome_charts = (cnv_abs, cnv_diff)
 
             ui.separator().classes("mgmt-detail-separator")
-            ui.label("CNV events").classes("target-coverage-panel__meta-label mt-2 mb-1")
+            regional_cnv_label = ui.label("Regional CNV events").classes(
+                "target-coverage-panel__meta-label mt-2 mb-1"
+            )
+            regional_cnv_summary = ui.label("No regional CNV events detected").classes(
+                "classification-insight-meta mb-2"
+            )
+            regional_cnv_columns = [
+                {"name": "chrom", "label": "Chr", "field": "chrom", "sortable": True},
+                {"name": "region", "label": "Region", "field": "region", "sortable": True},
+                {
+                    "name": "start_mb",
+                    "label": "Start (Mb)",
+                    "field": "start_mb",
+                    "sortable": True,
+                    "align": "right",
+                },
+                {
+                    "name": "end_mb",
+                    "label": "End (Mb)",
+                    "field": "end_mb",
+                    "sortable": True,
+                    "align": "right",
+                },
+                {
+                    "name": "length_mb",
+                    "label": "Length (Mb)",
+                    "field": "length_mb",
+                    "sortable": True,
+                    "align": "right",
+                },
+                {
+                    "name": "mean_cnv",
+                    "label": "Mean CNV",
+                    "field": "mean_cnv",
+                    "sortable": True,
+                    "align": "right",
+                },
+                {
+                    "name": "state",
+                    "label": "State",
+                    "field": "state",
+                    "sortable": True,
+                    "align": "center",
+                },
+                {"name": "panel_genes", "label": "Panel genes", "field": "panel_genes"},
+            ]
+            _, regional_cnv_table = styled_table(
+                columns=regional_cnv_columns, rows=[], pagination=20, class_size="table-xs"
+            )
+            try:
+                regional_cnv_table.props('multi-sort rows-per-page-options="[10,20,50,0]"')
+            except Exception:
+                pass
+
+            ui.separator().classes("mgmt-detail-separator")
+            ui.label("Arm / whole-chromosome CNV events").classes(
+                "target-coverage-panel__meta-label mt-2 mb-1"
+            )
             cnv_events_summary = ui.label("No CNV events detected").classes(
                 "classification-insight-meta mb-2"
             )
         
-        # CNV Events Table
-        cnv_events_columns = [
-            {"name": "chromosome", "label": "Chr", "field": "chromosome", "sortable": True},
-            {"name": "event_type", "label": "Event Type", "field": "event_type", "sortable": True},
-            {"name": "arm", "label": "Arm", "field": "arm", "sortable": True},
-            {"name": "start_mb", "label": "Start (Mb)", "field": "start_mb", "sortable": True, "align": "right"},
-            {"name": "end_mb", "label": "End (Mb)", "field": "end_mb", "sortable": True, "align": "right"},
-            {"name": "length_mb", "label": "Length (Mb)", "field": "length_mb", "sortable": True, "align": "right"},
-            {"name": "mean_cnv_str", "label": "Mean CNV", "field": "mean_cnv_str", "sortable": True, "align": "right"},
-            {"name": "confidence", "label": "Confidence", "field": "confidence", "sortable": True, "align": "center"},
-            {"name": "proportion_affected", "label": "% Affected", "field": "proportion_affected", "sortable": True, "align": "right"},
-            {"name": "genes_str", "label": "Genes", "field": "genes_str"},
-        ]
-        _, cnv_events_table = styled_table(
-            columns=cnv_events_columns, rows=[], pagination=20, class_size="table-xs"
-        )
-        try:
-            cnv_events_table.props('multi-sort rows-per-page-options="[10,20,50,0]"')
-        except Exception:
-            pass
-        ui.separator().classes("mgmt-detail-separator")
-        ui.label("Cytoband summary").classes(
-            "target-coverage-panel__meta-label mt-2 mb-1"
-        )
-        cyto_columns = [
-            {"name": "chrom", "label": "Chr", "field": "chrom", "sortable": True},
-            {"name": "region", "label": "Region", "field": "region", "sortable": True},
-            {
-                "name": "start_mb",
-                "label": "Start (Mb)",
-                "field": "start_mb",
-                "sortable": True,
-                "align": "right",
-            },
-            {
-                "name": "end_mb",
-                "label": "End (Mb)",
-                "field": "end_mb",
-                "sortable": True,
-                "align": "right",
-            },
-            {
-                "name": "length_mb",
-                "label": "Length (Mb)",
-                "field": "length_mb",
-                "sortable": True,
-                "align": "right",
-            },
-            {
-                "name": "mean_cnv",
-                "label": "Mean CNV",
-                "field": "mean_cnv",
-                "sortable": True,
-                "align": "right",
-            },
-            {
-                "name": "state",
-                "label": "State",
-                "field": "state",
-                "sortable": True,
-                "align": "center",
-            },
-            {"name": "genes", "label": "Genes", "field": "genes"},
-        ]
-        _, cyto_table = styled_table(
-            columns=cyto_columns, rows=[], pagination=20, class_size="table-xs"
-        )
-        try:
-            cyto_table.props('multi-sort rows-per-page-options="[10,20,50,0]"')
-        except Exception:
-            pass
+            # CNV Events Table stays inside the same insight card as its heading
+            # and summary, so the table cannot visually detach from its context.
+            cnv_events_columns = [
+                {"name": "chromosome", "label": "Chr", "field": "chromosome", "sortable": True},
+                {"name": "event_type", "label": "Event Type", "field": "event_type", "sortable": True},
+                {"name": "arm", "label": "Arm", "field": "arm", "sortable": True},
+                {"name": "start_mb", "label": "Start (Mb)", "field": "start_mb", "sortable": True, "align": "right"},
+                {"name": "end_mb", "label": "End (Mb)", "field": "end_mb", "sortable": True, "align": "right"},
+                {"name": "length_mb", "label": "Length (Mb)", "field": "length_mb", "sortable": True, "align": "right"},
+                {"name": "mean_cnv_str", "label": "Mean CNV", "field": "mean_cnv_str", "sortable": True, "align": "right"},
+                {"name": "confidence", "label": "Confidence", "field": "confidence", "sortable": True, "align": "center"},
+                {"name": "proportion_affected", "label": "% Affected", "field": "proportion_affected", "sortable": True, "align": "right"},
+                {"name": "genes_str", "label": "Genes", "field": "genes_str"},
+            ]
+            _, cnv_events_table = styled_table(
+                columns=cnv_events_columns, rows=[], pagination=20, class_size="table-xs"
+            )
+            try:
+                cnv_events_table.props('multi-sort rows-per-page-options="[10,20,50,0]"')
+            except Exception:
+                pass
 
     # Adaptive thinning helpers
     MAX_POINTS_PER_CHART = 10000
@@ -581,6 +1966,8 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
                 if s.get("type") == "scatter" and name not in (
                     "centromeres_highlight",
                     "cytobands_highlight",
+                    _CONFIGURED_GENES_SERIES_NAME,
+                    _CONFIGURED_GENES_LABELS_SERIES_NAME,
                 ):
                     data = s.get("data") or []
                     if isinstance(data, list) and data:
@@ -686,6 +2073,42 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
         except Exception:
             return pd.DataFrame(columns=["chrom", "start_pos", "end_pos", "name", "stain"])
 
+    @lru_cache(maxsize=1)
+    def _load_centromere_bed_df() -> pd.DataFrame:
+        try:
+            res_path = importlib_resources.files("robin.resources") / "cenSatRegions.bed"
+            return pd.read_csv(
+                res_path,
+                sep="\t",
+                header=None,
+                names=["chrom", "start_pos", "end_pos", "name"],
+                usecols=[0, 1, 2, 3],
+            )
+        except Exception:
+            return pd.DataFrame(columns=["chrom", "start_pos", "end_pos", "name"])
+
+    _EMPTY_GENE_BED = pd.DataFrame(columns=["chrom", "start_pos", "end_pos", "gene"])
+
+    def _analyze_cytoband_cnv(
+        cnv_data: Dict[str, np.ndarray],
+        chromosome: str,
+        bin_width: int,
+        sex_estimate: str,
+    ) -> pd.DataFrame:
+        """Run shared regional cytoband analysis (same logic as PDF reports)."""
+        try:
+            return analyze_cytoband_cnv(
+                cnv_data,
+                chromosome,
+                {"bin_width": int(bin_width)},
+                _load_cytobands_df(),
+                _load_centromere_bed_df(),
+                _EMPTY_GENE_BED,
+                sex_estimate,
+            )
+        except Exception:
+            return pd.DataFrame()
+
     def _load_gene_bed(sample_dir: Path = None) -> pd.DataFrame:
         """Load gene BED file based on the analysis panel used for the sample"""
         try:
@@ -759,240 +2182,6 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
             pass
         return "Unknown"
 
-    def _downsample_cnv_for_plot(
-        values_1d: np.ndarray,
-        analysis_bin_width: int,
-        plot_bin_width: int,
-    ) -> Tuple[np.ndarray, np.ndarray]:
-        """Downsample CNV values for display when plot_bin_width > analysis_bin_width.
-
-        Returns (x_positions_bp, values) where x is in genomic bp. If plot_bin_width
-        <= analysis_bin_width, returns original positions and values unchanged.
-        """
-        if plot_bin_width <= analysis_bin_width or plot_bin_width <= 0:
-            x_bp = np.arange(len(values_1d), dtype=float) * analysis_bin_width
-            return x_bp, np.asarray(values_1d, dtype=float)
-        group_size = int(plot_bin_width / analysis_bin_width)
-        if group_size < 1:
-            x_bp = np.arange(len(values_1d), dtype=float) * analysis_bin_width
-            return x_bp, np.asarray(values_1d, dtype=float)
-        n = len(values_1d)
-        n_trim = (n // group_size) * group_size
-        if n_trim == 0:
-            x_bp = np.arange(n, dtype=float) * analysis_bin_width
-            return x_bp, np.asarray(values_1d, dtype=float)
-        trimmed = np.asarray(values_1d[:n_trim], dtype=float)
-        grouped = trimmed.reshape(-1, group_size)
-        values_out = np.mean(grouped, axis=1)
-        # Center of each group in bp (within chromosome)
-        x_bp = (np.arange(len(values_out)) + 0.5) * plot_bin_width
-        return x_bp, values_out
-
-    def _analyze_cytoband_cnv(
-        cnv_data: Dict[str, np.ndarray],
-        chromosome: str,
-        bin_width: int,
-        sex_estimate: str,
-    ) -> pd.DataFrame:
-        try:
-            import numpy as _np
-            import pandas as _pd
-
-            if not cnv_data or chromosome not in cnv_data:
-                return _pd.DataFrame()
-            if bin_width > 10_000_000:
-                return _pd.DataFrame()
-
-            cyto_df = _load_cytobands_df()
-            chromosome_cytobands = cyto_df[cyto_df["chrom"] == chromosome].copy()
-            if chromosome_cytobands.empty:
-                return _pd.DataFrame()
-
-            # Centromere mask
-            centro = _load_centromere_regions()
-            mask = _np.ones(len(cnv_data[chromosome]), dtype=bool)
-            cent_regions = centro.get(chromosome, [])
-            if cent_regions:
-                # Combine all annotated centromere/satellite spans
-                for s_bp, e_bp, _nm in cent_regions:
-                    s_bin = max(0, int(s_bp // bin_width))
-                    e_bin = min(len(mask), int(e_bp // bin_width))
-                    if e_bin > s_bin:
-                        mask[s_bin:e_bin] = False
-            chr_cnv = _np.asarray(cnv_data[chromosome])
-            chr_cnv = chr_cnv[mask] if mask.any() else _np.asarray(cnv_data[chromosome])
-
-            # Chromosome-wide stats
-            chr_mean = float(_np.mean(chr_cnv)) if chr_cnv.size else 0.0
-            chr_std = float(_np.std(chr_cnv)) if chr_cnv.size else 1.0
-
-            # Autosomal distribution for whole-chrom thresholds
-            chrom_means: List[float] = []
-            for ck, arr in cnv_data.items():
-                if ck.startswith("chr") and ck[3:].isdigit():
-                    a = _np.asarray(arr)
-                    if a.size:
-                        chrom_means.append(float(_np.mean(a)))
-            means_mean = float(_np.mean(chrom_means)) if chrom_means else 0.0
-            means_std = float(_np.std(chrom_means)) if chrom_means else 1.0
-
-            # Use the same thresholds as centralized CNV detection for consistency
-            from robin.classification_config import get_cnv_thresholds
-            gain_threshold, loss_threshold = get_cnv_thresholds(chromosome, sex_estimate)
-            
-            # Use the same thresholds for cytoband-level analysis
-            cyto_gain_th = gain_threshold
-            cyto_loss_th = loss_threshold
-
-            # Whole chromosome event detection
-            bins_above_gain = float(
-                (_np.asarray(cnv_data[chromosome]) > gain_threshold).sum()
-            ) / max(1, len(cnv_data[chromosome]))
-            bins_below_loss = float(
-                (_np.asarray(cnv_data[chromosome]) < loss_threshold).sum()
-            ) / max(1, len(cnv_data[chromosome]))
-            min_prop = 0.7
-            whole_chr_event = False
-            whole_chr_state = "NORMAL"
-            if bins_above_gain > min_prop:
-                whole_chr_event = True
-                whole_chr_state = "GAIN"
-            elif bins_below_loss > min_prop:
-                whole_chr_event = True
-                whole_chr_state = "LOSS"
-
-            merged_rows: List[dict] = []
-            if whole_chr_event:
-                gene_df = _load_gene_bed(sample_dir)
-                genes_in_chr = (
-                    gene_df[gene_df["chrom"] == chromosome]["gene"].astype(str).tolist()
-                )
-                merged_rows.append(
-                    {
-                        "chrom": chromosome,
-                        "start_pos": int(chromosome_cytobands["start_pos"].min()),
-                        "end_pos": int(chromosome_cytobands["end_pos"].max()),
-                        "name": f"{chromosome} WHOLE CHROMOSOME {whole_chr_state}",
-                        "mean_cnv": chr_mean,
-                        "cnv_state": whole_chr_state,
-                        "length": int(chromosome_cytobands["end_pos"].max())
-                        - int(chromosome_cytobands["start_pos"].min()),
-                        "genes": genes_in_chr,
-                    }
-                )
-
-            # Group contiguous cytobands by state
-            current_group = None
-            vals = _np.asarray(cnv_data[chromosome])
-            for _, band in chromosome_cytobands.iterrows():
-                s_bp = int(band["start_pos"])
-                e_bp = int(band["end_pos"])
-                s_bin = max(0, s_bp // bin_width)
-                e_bin = min(len(vals) - 1, max(0, e_bp // bin_width))
-                region = (
-                    vals[s_bin : e_bin + 1]
-                    if len(vals) and e_bin >= s_bin
-                    else _np.array([])
-                )
-                mean_val = float(_np.mean(region)) if region.size else 0.0
-                # Determine cytoband state - always use standard thresholds for regional analysis
-                # This ensures we capture all significant regional variations regardless of whole chromosome events
-                state = (
-                    "GAIN"
-                    if mean_val > cyto_gain_th
-                    else ("LOSS" if mean_val < cyto_loss_th else "NORMAL")
-                )
-
-                if current_group is None:
-                    current_group = {
-                        "chrom": chromosome,
-                        "start_pos": s_bp,
-                        "end_pos": e_bp,
-                        "bands": [str(band["name"])],
-                        "mean_vals": [mean_val],
-                        "cnv_state": state,
-                    }
-                elif state == current_group["cnv_state"]:
-                    current_group["end_pos"] = e_bp
-                    current_group["bands"].append(str(band["name"]))
-                    current_group["mean_vals"].append(mean_val)
-                else:
-                    # finalize
-                    mean_cnv = (
-                        float(_np.mean(current_group["mean_vals"]))
-                        if current_group["mean_vals"]
-                        else 0.0
-                    )
-                    row = {
-                        "chrom": current_group["chrom"],
-                        "start_pos": int(current_group["start_pos"]),
-                        "end_pos": int(current_group["end_pos"]),
-                        "name": f"{current_group['chrom']} {current_group['bands'][0]}-{current_group['bands'][-1]}",
-                        "mean_cnv": mean_cnv,
-                        "cnv_state": current_group["cnv_state"],
-                        "length": int(current_group["end_pos"])
-                        - int(current_group["start_pos"]),
-                    }
-                    if row["cnv_state"] in ("GAIN", "LOSS", "HIGH_GAIN", "DEEP_LOSS"):
-                        gene_df = _load_gene_bed(sample_dir)
-                        genes = (
-                            gene_df[
-                                (gene_df["chrom"] == row["chrom"])
-                                & (gene_df["start_pos"] <= row["end_pos"])
-                                & (gene_df["end_pos"] >= row["start_pos"])
-                            ]["gene"]
-                            .astype(str)
-                            .tolist()
-                        )
-                        row["genes"] = genes
-                    merged_rows.append(row)
-                    # start new group
-                    current_group = {
-                        "chrom": chromosome,
-                        "start_pos": s_bp,
-                        "end_pos": e_bp,
-                        "bands": [str(band["name"])],
-                        "mean_vals": [mean_val],
-                        "cnv_state": state,
-                    }
-            # finalize last
-            if current_group is not None:
-                mean_cnv = (
-                    float(_np.mean(current_group["mean_vals"]))
-                    if current_group["mean_vals"]
-                    else 0.0
-                )
-                row = {
-                    "chrom": current_group["chrom"],
-                    "start_pos": int(current_group["start_pos"]),
-                    "end_pos": int(current_group["end_pos"]),
-                    "name": f"{current_group['chrom']} {current_group['bands'][0]}-{current_group['bands'][-1]}",
-                    "mean_cnv": mean_cnv,
-                    "cnv_state": current_group["cnv_state"],
-                    "length": int(current_group["end_pos"])
-                    - int(current_group["start_pos"]),
-                }
-                if row["cnv_state"] in ("GAIN", "LOSS", "HIGH_GAIN", "DEEP_LOSS"):
-                    gene_df = _load_gene_bed(sample_dir)
-                    genes = (
-                        gene_df[
-                            (gene_df["chrom"] == row["chrom"])
-                            & (gene_df["start_pos"] <= row["end_pos"])
-                            & (gene_df["end_pos"] >= row["start_pos"])
-                        ]["gene"]
-                        .astype(str)
-                        .tolist()
-                    )
-                    row["genes"] = genes
-                merged_rows.append(row)
-
-            df = _pd.DataFrame(merged_rows)
-            if not df.empty:
-                df = df.sort_values("start_pos")
-            return df
-        except Exception:
-            return pd.DataFrame()
-
     def _get_cytoband_cnv_summary(
         cnv_data: Dict[str, np.ndarray],
         chromosome: str,
@@ -1002,9 +2191,10 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
         try:
             df = _analyze_cytoband_cnv(cnv_data, chromosome, bin_width, sex_estimate)
             if df.empty:
-                return "No significant CNV changes detected"
-            gains = df[df["cnv_state"] == "GAIN"]
-            losses = df[df["cnv_state"] == "LOSS"]
+                return "No regional CNV events detected"
+            significant = df[df["cnv_state"].isin(SIGNIFICANT_CNV_STATES)]
+            gains = significant[significant["cnv_state"].isin({"GAIN", "HIGH_GAIN"})]
+            losses = significant[significant["cnv_state"].isin({"LOSS", "DEEP_LOSS"})]
             parts: List[str] = []
             if not gains.empty:
                 parts.append(
@@ -1022,7 +2212,7 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
                         for _, r in losses.iterrows()
                     )
                 )
-            return "\n".join(parts) if parts else "No significant CNV changes detected"
+            return "\n".join(parts) if parts else "No regional CNV events detected"
         except Exception:
             return "No CNV data available"
 
@@ -1032,7 +2222,7 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
         try:
             frames: List[pd.DataFrame] = []
             for chrom in natsort.natsorted(cnv_data.keys()):
-                if not _cnv_contig_ok(chrom):
+                if not is_reportable_chromosome(chrom):
                     continue
                 df = _analyze_cytoband_cnv(cnv_data, chrom, bin_width, sex_estimate)
                 if not df.empty:
@@ -1040,7 +2230,6 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
             if frames:
                 out = pd.concat(frames, ignore_index=True)
                 if not out.empty:
-                    # Natural chromosome sort: chr1..chr22, chrX, chrY
                     def _rank(label: Any) -> int:
                         try:
                             s = str(label)
@@ -1060,55 +2249,39 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
         except Exception:
             return pd.DataFrame()
 
-    def _build_cyto_rows(df: pd.DataFrame) -> List[Dict[str, Any]]:
-        rows: List[Dict[str, Any]] = []
+    def _build_regional_rows(
+        cytoband_df: pd.DataFrame, panel_genes_df: pd.DataFrame
+    ) -> List[Dict[str, Any]]:
         try:
-            if df is None or df.empty:
-                return rows
-            for _, r in df.iterrows():
-                if r.get("cnv_state") in ("GAIN", "LOSS", "HIGH_GAIN", "DEEP_LOSS"):
-                    rows.append(
-                        {
-                            "chrom": str(r["chrom"]).replace("chr", ""),
-                            "region": str(r["name"]).replace(f"{r['chrom']} ", ""),
-                            "start_mb": f"{float(r['start_pos'])/1e6:.2f}",
-                            "end_mb": f"{float(r['end_pos'])/1e6:.2f}",
-                            "length_mb": f"{float(r['length'])/1e6:.2f}",
-                            "mean_cnv": f"{float(r['mean_cnv']):.3f}",
-                            "state": str(r["cnv_state"]),
-                            "genes": ", ".join(
-                                r.get("genes", [])
-                                if isinstance(r.get("genes"), list)
-                                else []
-                            ),
-                        }
-                    )
+            events = build_regional_cnv_events(cytoband_df, panel_genes_df)
+            return [format_regional_event_table_row(event) for event in events]
         except Exception:
-            return rows
-        return rows
+            return []
 
     def _update_cnv_events_analysis(state: Dict[str, Any]) -> None:
         """Update CNV events analysis using centralized classification rules."""
         try:
             cnv_map = state.get("cnv")
-            cnv3_map = state.get("cnv3")
             if isinstance(cnv_map, dict) and "cnv" in cnv_map:
                 cnv_map = cnv_map["cnv"]
-            if isinstance(cnv3_map, dict) and "cnv" in cnv3_map:
-                cnv3_map = cnv3_map["cnv"]
-            
+
             if not cnv_map:
                 cnv_events_table.rows = []
                 cnv_events_summary.set_text("No CNV data available")
+                cnv_whole_chr_summary.set_text("Whole chromosome: --")
+                cnv_arm_summary.set_text("Arm-level: --")
                 return
-            
+
             binw = state.get("cnv_dict", {}).get("bin_width", 1000000)
             sex_lbl = _sex_label(state.get("xy"))
-            
-            # Use difference map (CNV3) for calling if available, otherwise absolute
-            data = cnv3_map if isinstance(cnv3_map, dict) else cnv_map
-            
-            if data and binw:
+            data, calling_binw, analysis_log2 = prepare_cnv_calling_track(
+                cnv_map,
+                int(binw),
+                _cnv_sex_estimate_label(state.get("xy")),
+                ref_cnv_map=_unwrap_cnv_track_map(state.get("cnv2")),
+            )
+
+            if data and calling_binw:
                 # Load cytobands and genes
                 cyto_df = _load_cytobands_df()
                 gene_df = _load_gene_bed(sample_dir)
@@ -1116,10 +2289,12 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
                 # Detect CNV events using centralized rules
                 events = detect_cnv_events(
                     cnv_data=data,
-                    bin_width=int(binw),
+                    bin_width=int(calling_binw),
                     sex_estimate=sex_lbl,
                     cytobands_df=cyto_df,
-                    gene_df=gene_df
+                    gene_df=gene_df,
+                    support_cnv_data=analysis_log2,
+                    support_bin_width=int(binw),
                 )
                 
                 # Update events table
@@ -1136,33 +2311,29 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
                 except Exception:
                     pass
                 
-                # Update summary
-                summary = get_cnv_summary(events)
-                if summary["total_events"] > 0:
-                    summary_text = f"Detected {summary['total_events']} CNV events: "
-                    parts = []
-                    if summary["whole_chromosome_events"]:
-                        parts.append(f"{len(summary['whole_chromosome_events'])} whole chromosome")
-                    if summary["arm_events"]:
-                        parts.append(f"{len(summary['arm_events'])} arm-specific")
-                    if summary["gene_containing_events"]:
-                        parts.append(f"{summary['total_genes_affected']} genes affected")
-                    summary_text += ", ".join(parts)
-                    cnv_events_summary.set_text(summary_text)
-                else:
-                    cnv_events_summary.set_text("No threshold triggered CNV events detected")
+                # Update summaries (insight card + events section)
+                whole_text, arm_text = format_cnv_events_card_lines(events)
+                cnv_whole_chr_summary.set_text(whole_text)
+                cnv_arm_summary.set_text(arm_text)
+                cnv_events_summary.set_text(format_cnv_events_section_summary(events))
             else:
                 cnv_events_table.rows = []
+                cnv_whole_chr_summary.set_text("Whole chromosome: --")
+                cnv_arm_summary.set_text("Arm-level: --")
                 cnv_events_summary.set_text("CNV data not available")
         except Exception as e:
             logging.error(f"Error updating CNV events analysis: {e}")
             cnv_events_table.rows = []
+            cnv_whole_chr_summary.set_text("Whole chromosome: --")
+            cnv_arm_summary.set_text("Arm-level: --")
             cnv_events_summary.set_text("Error analyzing CNV events")
 
     def _render_cnv_from_state(state: Dict[str, Any]) -> None:
         try:
+            _recompute_cnv_log2_state(state)
             cnv_map = state.get("cnv")
             cnv3_map = state.get("cnv3")
+            cnv_log2_map = _unwrap_cnv_track_map(state.get("cnv_log2"))
             if isinstance(cnv_map, dict) and "cnv" in cnv_map:
                 cnv_map = cnv_map["cnv"]
             if isinstance(cnv3_map, dict) and "cnv" in cnv3_map:
@@ -1174,26 +2345,43 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
             col_high, col_low, col_norm = _cnv_value_mode_colors(dark_ui)
             chrom_divider = _cnv_echart_palette(dark_ui)["muted"]
             binw_analysis = state.get("cnv_dict", {}).get("bin_width", 1_000_000)
-            plot_bin_width = state.get("plot_bin_width") or binw_analysis
-            if plot_bin_width < binw_analysis:
-                plot_bin_width = binw_analysis
-            binw = plot_bin_width  # used for x positions and padding in the plot
+            plot_bin_width = resolve_cnv_plot_bin_width(
+                int(binw_analysis),
+                state.get("plot_bin_width"),
+            )
             # Keep plot bin width dropdown in sync with state
             try:
                 pb = state.get("plot_bin_width")
-                if pb is None:
-                    cnv_plot_bin.value = _PLOT_BIN_KEY_DEFAULT
-                else:
-                    key = next(
-                        (k for k, v in _PLOT_BIN_KEY_TO_BP.items() if v == pb),
-                        _PLOT_BIN_KEY_DEFAULT,
+                want_key = _cnv_plot_bin_key_from_bp(pb)
+                if getattr(cnv_plot_bin, "value", None) != want_key:
+                    cnv_plot_bin.value = want_key
+                    cnv_plot_bin.update()
+            except Exception:
+                pass
+            try:
+                want_filter = str(
+                    state.get(
+                        "gene_coverage_filter",
+                        _CNV_GENE_COVERAGE_FILTER_OUTLIERS,
                     )
-                    cnv_plot_bin.value = key
-                cnv_plot_bin.update()
+                )
+                if want_filter not in _CNV_GENE_COVERAGE_FILTERS:
+                    want_filter = _CNV_GENE_COVERAGE_FILTER_OUTLIERS
+                # Switch is boolean: True = outliers, False = all.
+                want_outliers = want_filter == _CNV_GENE_COVERAGE_FILTER_OUTLIERS
+                current = getattr(cnv_gene_cov_filter, "value", None)
+                if current is not want_outliers:
+                    cnv_gene_cov_filter.value = want_outliers
+                    cnv_gene_cov_filter.update()
             except Exception:
                 pass
             selected = state.get("selected_chrom", "All")
             use_log = state.get("y_scale", "linear") == "log"
+            abs_plot_map = (
+                cnv_log2_map
+                if use_log and cnv_log2_map
+                else cnv_map
+            )
             raw_color_mode = state.get("color_mode", "chromosome")
             # normalize color mode to expected keys
             lval = str(raw_color_mode).strip().lower()
@@ -1210,56 +2398,125 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
                 color_mode = "value"
             else:
                 color_mode = "chromosome"
-            
-            # Show/hide breakpoint density y-axis based on selection
-            should_show_breakpoint_density = selected != "All"
-            for chart in (cnv_abs, cnv_diff):
-                if len(chart.options["yAxis"]) > 1:
-                    # Index 1 is the "Breakpoint density" axis
-                    chart.options["yAxis"][1]["show"] = should_show_breakpoint_density
-            
-            cnv_abs.options["yAxis"][0]["type"] = "log" if use_log else "value"
-            cnv_abs.options["yAxis"][0]["logBase"] = 10 if use_log else None
+
+            # Diff chart never uses the right axis; abs coverage axis is set with lollipops.
+            if len(cnv_diff.options.get("yAxis") or []) > 1:
+                cnv_diff.options["yAxis"][1]["show"] = False
+
+            cnv_abs.options["yAxis"][0]["type"] = "value"
+            cnv_abs.options["yAxis"][0].pop("logBase", None)
+            # Clear any previous pinned Y window; marker overlay re-applies auto-scale.
+            cnv_abs.options["yAxis"][0].pop("min", None)
+            cnv_abs.options["yAxis"][0].pop("max", None)
+            if use_log:
+                cnv_abs.options["yAxis"][0]["name"] = "Log2 ratio (ploidy / expected)"
+                cnv_abs.options["title"]["text"] = "CNV scatter plot"
+                cnv_abs.options["title"]["top"] = 4
+                cnv_abs.options["title"]["subtext"] = (
+                    "log2(ploidy / expected copy number); 0 = normal"
+                )
+                cnv_abs.options["grid"]["top"] = "26%"
+            else:
+                cnv_abs.options["yAxis"][0]["name"] = "Ploidy"
+                cnv_abs.options["title"]["text"] = "CNV scatter plot"
+                cnv_abs.options["title"]["top"] = 10
+                cnv_abs.options["title"].pop("subtext", None)
+                cnv_abs.options["grid"]["top"] = "20%"
+            # Temporary baseline until gene-marker auto-scale runs at the end of render.
+            try:
+                _apply_cnv_abs_y_window(
+                    cnv_abs,
+                    -2.0 if use_log else 0.0,
+                    2.0 if use_log else 6.0,
+                )
+            except Exception:
+                pass
             # X-axis is always in genomic base pairs; use actual genome/chromosome length
             # so the scale does not change when plot bin width changes (dataMax would shrink
             # with fewer downsampled points).
-            if selected == "All":
-                x_axis_max = sum(
-                    len(cnv_map[c]) * binw_analysis
-                    for c in natsort.natsorted(cnv_map.keys())
-                    if _cnv_contig_ok(c)
-                )
-            else:
-                chr_cnv = cnv_map.get(selected)
-                x_axis_max = len(chr_cnv) * binw_analysis if chr_cnv is not None else 0
-            cnv_abs.options["xAxis"]["min"] = 0
-            cnv_abs.options["xAxis"]["max"] = x_axis_max
-            cnv_diff.options["xAxis"]["min"] = 0
-            cnv_diff.options["xAxis"]["max"] = x_axis_max
+            x_axis_max = _cnv_genome_x_extent_bp(cnv_map, int(binw_analysis), selected)
+            _cnv_set_genome_x_axis(cnv_abs, x_axis_max)
+            _cnv_set_genome_x_axis(cnv_diff, x_axis_max)
             # Clear any previous zoom constraints when viewing All
             if selected == "All":
-                try:
-                    if (
-                        isinstance(cnv_abs.options.get("dataZoom"), list)
-                        and cnv_abs.options["dataZoom"]
-                    ):
-                        dz = cnv_abs.options["dataZoom"][0]
-                        dz.pop("startValue", None)
-                        dz.pop("endValue", None)
-                        dz.update({"start": 0, "end": 100})
-                    if (
-                        isinstance(cnv_diff.options.get("dataZoom"), list)
-                        and cnv_diff.options["dataZoom"]
-                    ):
-                        dz2 = cnv_diff.options["dataZoom"][0]
-                        dz2.pop("startValue", None)
-                        dz2.pop("endValue", None)
-                        dz2.update({"start": 0, "end": 100})
-                except Exception:
-                    pass
+                _cnv_reset_genome_x_data_zoom(cnv_abs)
+                _cnv_reset_genome_x_data_zoom(cnv_diff)
             logging.debug(
                 f"CNV render: selected={selected}, y_scale={state.get('y_scale')}, color_mode={state.get('color_mode')}"
             )
+            sample_rel_mean, sample_rel_std = _cnv_sample_relative_stats(
+                cnv_map,
+                abs_plot_map if isinstance(abs_plot_map, dict) else None,
+                use_log=use_log,
+            )
+            try:
+                coverage_by_gene = load_gene_target_coverage(sample_dir)
+            except Exception:
+                logging.debug(
+                    "Could not load gene target coverage for CNV lollipops",
+                    exc_info=True,
+                )
+                coverage_by_gene = {}
+
+            def _apply_abs_gene_coverage_overlay() -> None:
+                """Coverage lollipops on the abs chart only (position markers if no coverage)."""
+                from robin.gui.plotting_preferences import (
+                    resolve_cnv_gene_label_font_size,
+                )
+
+                filter_mode = str(
+                    state.get(
+                        "gene_coverage_filter",
+                        _CNV_GENE_COVERAGE_FILTER_OUTLIERS,
+                    )
+                )
+                if filter_mode not in _CNV_GENE_COVERAGE_FILTERS:
+                    filter_mode = _CNV_GENE_COVERAGE_FILTER_OUTLIERS
+                plot_map = (
+                    abs_plot_map if isinstance(abs_plot_map, dict) else cnv_map
+                )
+                points, _mean_cov = _build_configured_gene_coverage_points(
+                    configured_gene_locations,
+                    selected=selected,
+                    chrom_offsets=chrom_offsets,
+                    abs_plot_map=plot_map,
+                    bin_width=int(binw_analysis),
+                    coverage_by_gene=coverage_by_gene,
+                    filter_mode=filter_mode,
+                    use_log=use_log,
+                    scale_mean_cnv=float(sample_rel_mean),
+                )
+                _set_cnv_abs_coverage_axis(cnv_abs, show=False)
+                label_font_size = resolve_cnv_gene_label_font_size(
+                    getattr(launcher, "plotting_preferences", None)
+                )
+                if points:
+                    _upsert_configured_gene_coverage_lollipops(
+                        cnv_abs,
+                        points,
+                        use_log=use_log,
+                        dark=dark_ui,
+                        scale_mean_cnv=float(sample_rel_mean),
+                        label_font_size=label_font_size,
+                    )
+                    return
+                _upsert_configured_gene_coverage_lollipops(
+                    cnv_abs,
+                    (),
+                    use_log=use_log,
+                    dark=dark_ui,
+                    scale_mean_cnv=float(sample_rel_mean),
+                )
+                # Fall back to position markers when target coverage is unavailable.
+                if configured_gene_locations and not coverage_by_gene:
+                    _upsert_configured_gene_series(
+                        cnv_abs,
+                        configured_gene_locations,
+                        selected=selected,
+                        chrom_offsets=chrom_offsets,
+                        dark=dark_ui,
+                    )
+
             # Absolute plot
             series_abs = []
             # Prepare chromosome partitions for labels/areas when viewing All
@@ -1271,11 +2528,19 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
                 for contig, cnv in natsort.natsorted(cnv_map.items()):
                     if not _cnv_contig_ok(contig):
                         continue
-                    x_local, vals = _downsample_cnv_for_plot(
-                        np.asarray(cnv), binw_analysis, int(plot_bin_width)
+                    plot_cnv = abs_plot_map.get(contig, cnv)
+                    x_local, vals = downsample_cnv_for_plot(
+                        np.asarray(plot_cnv), binw_analysis, int(plot_bin_width)
                     )
                     x_global = offset_bp + x_local
-                    pts = list(zip(x_global.tolist(), [float(v) for v in vals]))
+                    if use_log:
+                        pts = [
+                            [float(x), float(v)]
+                            for x, v in zip(x_global.tolist(), vals.tolist())
+                            if np.isfinite(v)
+                        ]
+                    else:
+                        pts = list(zip(x_global.tolist(), [float(v) for v in vals]))
                     start_bp = offset_bp
                     end_bp = offset_bp + len(cnv) * binw_analysis
                     chrom_offsets[contig] = start_bp
@@ -1299,27 +2564,11 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
                             }
                         )
                     else:
-                        try:
-                            autosome_vals = [
-                                v
-                                for k, arr in cnv_map.items()
-                                if k.startswith("chr") and k[3:].isdigit()
-                                for v in arr
-                            ]
-                            mean_val = (
-                                float(np.mean(autosome_vals)) if autosome_vals else 2.0
-                            )
-                            std_val = (
-                                float(np.std(autosome_vals)) if autosome_vals else 1.0
-                            )
-                        except Exception:
-                            mean_val, std_val = 2.0, 1.0
-                        high, low, norm = [], [], []
-                        for xi, vi in pts:
-                            z = (vi - mean_val) / std_val if std_val > 0 else 0.0
-                            (high if z > 0.5 else low if z < -0.5 else norm).append(
-                                [xi, vi]
-                            )
+                        high, low, norm = _cnv_split_points_by_zscore(
+                            pts,
+                            sample_rel_mean,
+                            sample_rel_std,
+                        )
                         if high:
                             series_abs.append(
                                 {
@@ -1351,12 +2600,21 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
                                 }
                             )
             else:
-                cnv = cnv_map.get(selected)
-                if cnv is not None:
-                    x_local, vals = _downsample_cnv_for_plot(
-                        np.asarray(cnv), binw_analysis, int(plot_bin_width)
+                plot_cnv = abs_plot_map.get(selected)
+                if plot_cnv is None:
+                    plot_cnv = cnv_map.get(selected)
+                if plot_cnv is not None:
+                    x_local, vals = downsample_cnv_for_plot(
+                        np.asarray(plot_cnv), binw_analysis, int(plot_bin_width)
                     )
-                    pts = list(zip(x_local.tolist(), [float(v) for v in vals]))
+                    if use_log:
+                        pts = [
+                            [float(x), float(v)]
+                            for x, v in zip(x_local.tolist(), vals.tolist())
+                            if np.isfinite(v)
+                        ]
+                    else:
+                        pts = list(zip(x_local.tolist(), [float(v) for v in vals]))
                     if color_mode == "chromosome":
                         series_abs.append(
                             {
@@ -1368,22 +2626,11 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
                             }
                         )
                     else:
-                        expected = 2.0
-                        try:
-                            if selected in ("chrX", "chrY") and str(
-                                state.get("xy", "")
-                            ).upper().startswith("MALE"):
-                                expected = 1.0
-                        except Exception:
-                            pass
-                        vals = [v for _, v in pts]
-                        std_val = float(np.std(vals)) if vals else 1.0
-                        high, low, norm = [], [], []
-                        for xi, vi in pts:
-                            z = (vi - expected) / std_val if std_val > 0 else 0
-                            (high if z > 0.5 else low if z < -0.5 else norm).append(
-                                [xi, vi]
-                            )
+                        high, low, norm = _cnv_split_points_by_zscore(
+                            pts,
+                            sample_rel_mean,
+                            sample_rel_std,
+                        )
                         if high:
                             series_abs.append(
                                 {
@@ -1421,6 +2668,21 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
                 if s.get("name") in ("centromeres_highlight", "cytobands_highlight")
             ]
             cnv_abs.options["series"] = series_abs + keep
+            _apply_abs_gene_coverage_overlay()
+            if use_log and series_abs:
+                series_abs[0]["markLine"] = {
+                    "symbol": "none",
+                    "data": [
+                        {
+                            "yAxis": 0,
+                            "lineStyle": {
+                                "type": "dashed",
+                                "color": "#888888",
+                                "width": 1,
+                            },
+                        }
+                    ],
+                }
             # Build background chromosome areas and vertical labels when showing All
             try:
                 if selected == "All" and chrom_bounds:
@@ -1576,13 +2838,27 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
                                 try:
                                     sex_lbl = _sex_label(state.get("xy"))
                                     gene_df = _load_gene_bed(sample_dir)
-                                    events = detect_cnv_events(
-                                        cnv_data={selected: vals},
-                                        bin_width=int(binw_analysis),
-                                        sex_estimate=sex_lbl,
-                                        cytobands_df=cyto_df,
-                                        gene_df=gene_df
+                                    calling_map, calling_binw, analysis_log2 = (
+                                        prepare_cnv_calling_track(
+                                            cnv_map,
+                                            int(binw_analysis),
+                                            _cnv_sex_estimate_label(state.get("xy")),
+                                            ref_cnv_map=_unwrap_cnv_track_map(
+                                                state.get("cnv2")
+                                            ),
+                                        )
                                     )
+                                    call_vals = calling_map.get(selected)
+                                    if call_vals is not None:
+                                        events = detect_cnv_events(
+                                            cnv_data={selected: np.asarray(call_vals)},
+                                            bin_width=int(calling_binw),
+                                            sex_estimate=sex_lbl,
+                                            cytobands_df=cyto_df,
+                                            gene_df=gene_df,
+                                            support_cnv_data=analysis_log2,
+                                            support_bin_width=int(binw_analysis),
+                                        )
                                 except Exception:
                                     pass
                                 
@@ -1654,52 +2930,73 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
                                 ] = band_areas
                         except Exception:
                             pass
-                        # Genes of interest and gene selector options
+                        # Configured genes of interest (TOML [cnv].genes) + gene selector
                         try:
-                            gene_df = _load_gene_bed(sample_dir)
-                            gchr = gene_df[gene_df["chrom"] == selected]
-                            # limit to reduce clutter; still add many labels
                             gene_opts = {"All": "All"}
-                            for _, gr in gchr.iterrows():
-                                gene_opts[str(gr["gene"])] = str(gr["gene"])
+                            chrom_genes = _configured_genes_on_chrom(
+                                configured_gene_locations, selected
+                            )
+                            for row in chrom_genes:
+                                gene_opts[str(row["gene"])] = str(row["gene"])
+
+                            # Fall back to panel gene BED when no TOML genes are configured.
+                            if len(gene_opts) == 1:
+                                gene_df = _load_gene_bed(sample_dir)
+                                gchr = gene_df[gene_df["chrom"] == selected]
+                                for _, gr in gchr.iterrows():
+                                    gene_opts[str(gr["gene"])] = str(gr["gene"])
+                                if series_abs:
+                                    main = series_abs[0]
+                                    mark = []
+                                    for _, gr in gchr.iterrows():
+                                        mark.append(
+                                            [
+                                                {
+                                                    "name": str(gr["gene"]),
+                                                    "xAxis": float(gr["start_pos"]),
+                                                    "label": {
+                                                        "position": "insideTop",
+                                                        "color": (
+                                                            "#e2e8f0"
+                                                            if dark_ui
+                                                            else "#000"
+                                                        ),
+                                                        "fontSize": 11,
+                                                    },
+                                                },
+                                                {"xAxis": float(gr["end_pos"])},
+                                            ]
+                                        )
+                                    main.setdefault("markArea", {"data": []})
+                                    main["markArea"]["data"] = (
+                                        main["markArea"]["data"] or []
+                                    ) + mark
+                                    series_abs[0] = main
+
                             try:
                                 cnv_gene_select.set_options(gene_opts)
-                            except Exception as e:
+                                current_gene = launcher._cnv_state.setdefault(
+                                    str(sample_dir), {}
+                                ).get("selected_gene", "All")
+                                if current_gene not in gene_opts:
+                                    launcher._cnv_state[str(sample_dir)][
+                                        "selected_gene"
+                                    ] = "All"
+                                    cnv_gene_select.value = "All"
+                            except Exception:
                                 pass
-                            
-                            # annotate genes on main series
-                            if series_abs:
-                                main = series_abs[0]
-                                # attach gene regions via markArea on main series after replacement
-                                mark = []
-                                for _, gr in gchr.iterrows():
-                                    mark.append(
-                                        [
-                                            {
-                                                "name": str(gr["gene"]),
-                                                "xAxis": float(gr["start_pos"]),
-                                                "label": {
-                                                    "position": "insideTop",
-                                                    "color": (
-                                                        "#e2e8f0"
-                                                        if dark_ui
-                                                        else "#000"
-                                                    ),
-                                                    "fontSize": 11,
-                                                }
-                                            },
-                                            {"xAxis": float(gr["end_pos"])},
-                                        ]
-                                    )
-                                main.setdefault("markArea", {"data": []})
-                                main["markArea"]["data"] = (
-                                    main["markArea"]["data"] or []
-                                ) + mark
-                                # ensure series_abs[0] updated
-                                series_abs[0] = main
-                            
-                        except Exception as e:
+                        except Exception:
                             pass
+
+                        # Keep gene overlays on top after cytoband / breakpoint overlays.
+                        _apply_abs_gene_coverage_overlay()
+                        _upsert_configured_gene_series(
+                            cnv_diff,
+                            configured_gene_locations,
+                            selected=selected,
+                            chrom_offsets=chrom_offsets,
+                            dark=dark_ui,
+                        )
                         
                         # Breakpoint candidates as dashed vertical lines
                         try:
@@ -1737,42 +3034,54 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
                                 ] = lines
                         except Exception:
                             pass
+                        # Re-assert abs coverage lollipops after breakpoint markLines mutate series.
+                        _apply_abs_gene_coverage_overlay()
                 # debug label removed
             except Exception:
                 pass
             # Adaptive thinning based on current zoom and cap total points
             _thin_chart_series(cnv_abs, MAX_POINTS_PER_CHART)
-            
+
             # Apply gene zoom before updating chart
             try:
                 sel_gene = launcher._cnv_state.setdefault(
                     str(sample_dir), {}
                 ).get("selected_gene", "All")
-                
-                if sel_gene and sel_gene != "All":
-                    # Load gene data for zoom if not already loaded
-                    gene_df = _load_gene_bed(sample_dir)
-                    gchr = gene_df[gene_df["chrom"] == selected]
-                    
-                    row = gchr[gchr["gene"] == sel_gene]
-                    if not row.empty:
-                        s_bp = int(row.iloc[0]["start_pos"])
-                        e_bp = int(row.iloc[0]["end_pos"])
-                        # Use 10x analysis bin width for padding (in bp)
-                        pad = 10 * binw_analysis
-                        zoom_start = max(0, s_bp - pad)
-                        zoom_end = e_bp + pad
-                        try:
-                            cnv_abs.options["dataZoom"][0].update(
-                                {
-                                    "startValue": zoom_start,
-                                    "endValue": zoom_end,
-                                    "start": None,  # Remove percentage-based zoom
-                                    "end": None,    # Remove percentage-based zoom
-                                }
-                            )
-                        except Exception as e:
-                            pass
+
+                gene_interval = None
+                if sel_gene and sel_gene != "All" and selected != "All":
+                    gene_interval = _find_configured_gene_interval(
+                        configured_gene_locations,
+                        selected=selected,
+                        gene_name=sel_gene,
+                    )
+                    if gene_interval is None:
+                        gene_df = _load_gene_bed(sample_dir)
+                        gchr = gene_df[gene_df["chrom"] == selected]
+                        row = gchr[gchr["gene"] == sel_gene]
+                        if not row.empty:
+                            gene_interval = {
+                                "start_pos": int(row.iloc[0]["start_pos"]),
+                                "end_pos": int(row.iloc[0]["end_pos"]),
+                            }
+
+                if gene_interval is not None:
+                    s_bp = int(gene_interval["start_pos"])
+                    e_bp = int(gene_interval["end_pos"])
+                    pad = 10 * binw_analysis
+                    zoom_start = max(0, s_bp - pad)
+                    zoom_end = e_bp + pad
+                    try:
+                        cnv_abs.options["dataZoom"][0].update(
+                            {
+                                "startValue": zoom_start,
+                                "endValue": zoom_end,
+                                "start": None,
+                                "end": None,
+                            }
+                        )
+                    except Exception:
+                        pass
                 else:
                     # Reset zoom when "All" is selected
                     try:
@@ -1781,59 +3090,25 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
                             dz.pop("startValue", None)
                             dz.pop("endValue", None)
                             dz.update({"start": 0, "end": 100})
-                    except Exception as e:
+                    except Exception:
                         pass
-            except Exception as e:
+            except Exception:
                 pass
-            
+
+            # Ensure abs coverage lollipops remain on top after thinning / overlay mutations.
+            _apply_abs_gene_coverage_overlay()
+
             _apply_cnv_echart_chrome(cnv_abs, _is_dark_mode())
-            cnv_abs.update()
-            # Difference plot
+            _cnv_echart_push_update(cnv_abs)
+            # Difference plot (linear CNV3)
             if cnv3_map:
-                series_diff = []
-                if selected == "All":
-                    offset_bp = 0
-                    dj = 0
-                    for contig, cnv in natsort.natsorted(cnv3_map.items()):
-                        if not _cnv_contig_ok(contig):
-                            continue
-                        x_local, vals = _downsample_cnv_for_plot(
-                            np.asarray(cnv), binw_analysis, int(plot_bin_width)
-                        )
-                        x_global = offset_bp + x_local
-                        pts = list(zip(x_global.tolist(), [float(v) for v in vals]))
-                        offset_bp += len(cnv) * binw_analysis
-                        series_diff.append(
-                            {
-                                "type": "scatter",
-                                "name": contig,
-                                "symbolSize": 3,
-                                "itemStyle": {
-                                    "color": chrom_palette[
-                                        dj % len(chrom_palette)
-                                    ]
-                                },
-                                "data": pts,
-                            }
-                        )
-                        dj += 1
-                else:
-                    cnv = cnv3_map.get(selected)
-                    if cnv is not None:
-                        x_local, vals = _downsample_cnv_for_plot(
-                            np.asarray(cnv), binw_analysis, int(plot_bin_width)
-                        )
-                        pts = list(zip(x_local.tolist(), [float(v) for v in vals]))
-                        series_diff.append(
-                            {
-                                "type": "scatter",
-                                "name": selected,
-                                "symbolSize": 3,
-                                "itemStyle": {"color": chrom_palette[0]},
-                                "data": pts,
-                            }
-                        )
-                # Preserve highlight series by name
+                series_diff = _build_cnv_track_scatter_series(
+                    cnv3_map,
+                    selected=selected,
+                    binw_analysis=int(binw_analysis),
+                    plot_bin_width=int(plot_bin_width),
+                    chrom_palette=chrom_palette,
+                )
                 try:
                     base_series = cnv_diff.options["series"]
                     keep = [
@@ -1845,121 +3120,723 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
                 except Exception:
                     keep = []
                 cnv_diff.options["series"] = series_diff + keep
+                _upsert_configured_gene_series(
+                    cnv_diff,
+                    configured_gene_locations,
+                    selected=selected,
+                    chrom_offsets=chrom_offsets,
+                    dark=dark_ui,
+                )
                 _thin_chart_series(cnv_diff, MAX_POINTS_PER_CHART)
-                
-                # Apply gene zoom to difference chart before updating
-                try:
-                    sel_gene = launcher._cnv_state.setdefault(
-                        str(sample_dir), {}
-                    ).get("selected_gene", "All")
-                    
-                    if sel_gene and sel_gene != "All":
-                        gene_df = _load_gene_bed(sample_dir)
-                        gchr = gene_df[gene_df["chrom"] == selected]
-                        
-                        row = gchr[gchr["gene"] == sel_gene]
-                        if not row.empty:
-                            s_bp = int(row.iloc[0]["start_pos"])
-                            e_bp = int(row.iloc[0]["end_pos"])
-                            # Use 10x analysis bin width for padding (in bp)
-                            pad = 10 * binw_analysis
-                            zoom_start = max(0, s_bp - pad)
-                            zoom_end = e_bp + pad
-                            try:
-                                cnv_diff.options["dataZoom"][0].update(
-                                    {
-                                        "startValue": zoom_start,
-                                        "endValue": zoom_end,
-                                        "start": None,  # Remove percentage-based zoom
-                                        "end": None,    # Remove percentage-based zoom
-                                    }
-                                )
-                            except Exception as e:
-                                pass
-                    else:
-                        # Reset zoom when "All" is selected
+                _upsert_configured_gene_series(
+                    cnv_diff,
+                    configured_gene_locations,
+                    selected=selected,
+                    chrom_offsets=chrom_offsets,
+                    dark=dark_ui,
+                )
+                _apply_cnv_echart_chrome(cnv_diff, _is_dark_mode())
+                _cnv_echart_push_update(cnv_diff)
+            else:
+                _apply_cnv_echart_chrome(cnv_diff, _is_dark_mode())
+                _cnv_echart_push_update(cnv_diff)
+
+            # Gene zoom on difference chart (single-chromosome view)
+            try:
+                sel_gene = launcher._cnv_state.setdefault(
+                    str(sample_dir), {}
+                ).get("selected_gene", "All")
+                for rel_chart in (cnv_diff,):
+                    gene_interval = None
+                    if sel_gene and sel_gene != "All" and selected != "All":
+                        gene_interval = _find_configured_gene_interval(
+                            configured_gene_locations,
+                            selected=selected,
+                            gene_name=sel_gene,
+                        )
+                        if gene_interval is None:
+                            gene_df = _load_gene_bed(sample_dir)
+                            gchr = gene_df[gene_df["chrom"] == selected]
+                            row = gchr[gchr["gene"] == sel_gene]
+                            if not row.empty:
+                                gene_interval = {
+                                    "start_pos": int(row.iloc[0]["start_pos"]),
+                                    "end_pos": int(row.iloc[0]["end_pos"]),
+                                }
+                    if gene_interval is not None:
+                        s_bp = int(gene_interval["start_pos"])
+                        e_bp = int(gene_interval["end_pos"])
+                        pad = 10 * binw_analysis
+                        zoom_start = max(0, s_bp - pad)
+                        zoom_end = e_bp + pad
                         try:
-                            if isinstance(cnv_diff.options.get("dataZoom"), list) and cnv_diff.options["dataZoom"]:
-                                dz = cnv_diff.options["dataZoom"][0]
+                            rel_chart.options["dataZoom"][0].update(
+                                {
+                                    "startValue": zoom_start,
+                                    "endValue": zoom_end,
+                                    "start": None,
+                                    "end": None,
+                                }
+                            )
+                            _cnv_echart_push_update(rel_chart)
+                        except Exception:
+                            pass
+                    else:
+                        try:
+                            if (
+                                isinstance(rel_chart.options.get("dataZoom"), list)
+                                and rel_chart.options["dataZoom"]
+                            ):
+                                dz = rel_chart.options["dataZoom"][0]
                                 dz.pop("startValue", None)
                                 dz.pop("endValue", None)
                                 dz.update({"start": 0, "end": 100})
-                        except Exception as e:
+                        except Exception:
                             pass
-                except Exception as e:
-                    pass
-                
-                _apply_cnv_echart_chrome(cnv_diff, _is_dark_mode())
-                cnv_diff.update()
-            else:
-                _apply_cnv_echart_chrome(cnv_diff, _is_dark_mode())
-                cnv_diff.update()
+            except Exception:
+                pass
 
-            # Cytoband CNV table update (whole-genome table with per-chromosome subsetting)
+            # Regional CNV events table (same logic as PDF reports): log2 track
             try:
                 selected = state.get("selected_chrom", "All")
                 binw = state.get("cnv_dict", {}).get("bin_width", 1_000_000)
                 sex_lbl = _sex_label(state.get("xy"))
-                # Prefer difference map (CNV3) for calling; fall back to absolute
-                if isinstance(cnv3_map, dict):
-                    data = cnv3_map
-                    source = "cnv3"
-                else:
-                    data = cnv_map if isinstance(cnv_map, dict) else None
+                if isinstance(cnv_log2_map, dict) and cnv_log2_map:
+                    data = cnv_log2_map
+                    source = "cnv_log2"
+                elif isinstance(cnv_map, dict):
+                    data = cnv_map
                     source = "cnv"
+                else:
+                    data = None
+                    source = "none"
                 if data and binw:
                     cache_key = (
-                        f"{source}:{state.get(source+'_m')}:{int(binw)}:{sex_lbl}"
+                        f"{source}:{state.get('cnv_m')}:{state.get('cnv2_m')}:"
+                        f"{state.get('cnv_log2_m')}:"
+                        f"{int(binw)}:{sex_lbl}"
                     )
                     if state.get("cyto_cache_key") != cache_key:
+                        panel_name, panel_genes_df = load_panel_gene_bed(str(sample_dir))
                         df_all = _compute_all_cytoband_df(data, int(binw), sex_lbl)
                         state["cyto_df_all"] = df_all
+                        state["panel_name"] = panel_name
+                        state["panel_genes_df"] = panel_genes_df
                         state["cyto_cache_key"] = cache_key
                     df_all = state.get("cyto_df_all")
+                    panel_genes_df = state.get("panel_genes_df")
+                    if not isinstance(panel_genes_df, pd.DataFrame):
+                        _, panel_genes_df = load_panel_gene_bed(str(sample_dir))
+                    panel_name = state.get("panel_name")
+                    regional_title = "Regional CNV events"
+                    if panel_name:
+                        regional_title += f" ({panel_name} panel genes)"
+                    regional_cnv_label.set_text(regional_title)
+
                     if isinstance(df_all, pd.DataFrame) and not df_all.empty:
                         if selected and selected != "All":
                             df_show = df_all[df_all["chrom"] == selected]
                         else:
                             df_show = df_all
-                        cyto_table.rows = _build_cyto_rows(df_show)
+                        regional_rows = _build_regional_rows(df_show, panel_genes_df)
+                        regional_cnv_table.rows = regional_rows
                         try:
-                            cyto_table.update()
+                            regional_cnv_table.update()
                         except Exception:
                             pass
+                        panel_gene_count = sum(
+                            1 for row in regional_rows if row.get("panel_genes") != "—"
+                        )
                         if selected and selected != "All":
-                            cyto_summary.set_text(
+                            regional_cnv_summary.set_text(
                                 _get_cytoband_cnv_summary(
                                     data, selected, int(binw), sex_lbl
                                 )
                             )
+                        elif regional_rows:
+                            summary = (
+                                f"Detected {len(regional_rows)} regional CNV events"
+                            )
+                            if panel_gene_count:
+                                summary += f"; {panel_gene_count} with panel genes"
+                            regional_cnv_summary.set_text(summary)
                         else:
-                            cyto_summary.set_text(
-                                f"Whole genome cytoband events: {len(cyto_table.rows)}"
+                            regional_cnv_summary.set_text(
+                                "No regional CNV events detected"
                             )
                     else:
-                        cyto_table.rows = []
+                        regional_cnv_table.rows = []
                         try:
-                            cyto_table.update()
+                            regional_cnv_table.update()
                         except Exception:
                             pass
-                        cyto_summary.set_text("No significant CNV changes detected")
+                        regional_cnv_summary.set_text(
+                            "No regional CNV events detected"
+                        )
                 else:
-                    cyto_summary.set_text("CNV data not available")
+                    regional_cnv_summary.set_text("CNV data not available")
             except Exception:
                 pass
         except Exception:
             pass
 
-    def _refresh_cnv() -> None:
-        """Refresh CNV data."""
+    def _prepare_cnv_refresh() -> Optional[Dict[str, Any]]:
+        """Main-thread debounce, UI sync, mtime checks. Returns None if no work needed."""
+        key = str(sample_dir)
+        state = launcher._cnv_state.get(key, {})
+
+        current_time = time.time()
+        last_refresh = state.get("_last_refresh", 0)
+        force_color_refresh = state.get("_force_color_refresh", False)
+        force_gene_refresh = state.get("_force_gene_refresh", False)
+        force_chrom_refresh = state.get("_force_chrom_refresh", False)
+        force_gene_cov_filter_refresh = state.get(
+            "_force_gene_cov_filter_refresh", False
+        )
+        force_ui_refresh = state.get("_force_ui_refresh", False)
+        force_refresh = (
+            force_color_refresh
+            or force_gene_refresh
+            or force_chrom_refresh
+            or force_gene_cov_filter_refresh
+            or force_ui_refresh
+        )
+        # Never debounce away an explicit UI control click.
+        if current_time - last_refresh < 0.1 and not force_refresh:
+            return None
+        state["_last_refresh"] = current_time
+
+        ui_changed = False
         try:
-            # Check directory existence
+            ui_sel = getattr(cnv_chrom_select, "value", None)
+            if ui_sel and ui_sel != state.get("selected_chrom"):
+                state["selected_chrom"] = ui_sel
+                ui_changed = True
+            ui_scale = getattr(cnv_scale, "value", None)
+            if ui_scale is not None:
+                # Switch: True = log2 ratio, False = linear ploidy.
+                if isinstance(ui_scale, bool):
+                    want_scale = "log" if ui_scale else "linear"
+                else:
+                    scale_key = str(ui_scale).strip().lower()
+                    if scale_key in (
+                        "log",
+                        "log2",
+                        "log2 ratio",
+                        "log2 ratio (ploidy / expected)",
+                        "true",
+                        "1",
+                    ):
+                        want_scale = "log"
+                    elif scale_key in ("linear", "ploidy", "false", "0"):
+                        want_scale = "linear"
+                    else:
+                        want_scale = (
+                            "log" if "log" in scale_key else state.get("y_scale", "linear")
+                        )
+                if want_scale != state.get("y_scale"):
+                    state["y_scale"] = want_scale
+                    ui_changed = True
+            ui_bp = getattr(cnv_bp, "value", None)
+            if ui_bp is not None:
+                # Switch: True = show breakpoints, False = hide.
+                if isinstance(ui_bp, bool):
+                    desired = ui_bp
+                else:
+                    desired = str(ui_bp).strip().lower() in (
+                        "show",
+                        "true",
+                        "1",
+                        "on",
+                    )
+                if desired != state.get("show_bp", True):
+                    state["show_bp"] = desired
+                    ui_changed = True
+            ui_color = getattr(cnv_color, "value", None)
+            current_color_mode = state.get("color_mode", "chromosome")
+            if ui_color is not None:
+                # Switch: True = up/down, False = chromosome.
+                if isinstance(ui_color, bool):
+                    want_color = "value" if ui_color else "chromosome"
+                else:
+                    vlow = str(ui_color).strip().lower()
+                    if vlow in ("value", "up/down", "updown", "true", "1"):
+                        want_color = "value"
+                    else:
+                        want_color = "chromosome"
+                if want_color != current_color_mode:
+                    state["color_mode"] = want_color
+                    ui_changed = True
+            ui_plot_bin = getattr(cnv_plot_bin, "value", None)
+            if ui_plot_bin is not None:
+                want_bin = _cnv_plot_bin_bp_from_ui(ui_plot_bin)
+                if want_bin != state.get("plot_bin_width"):
+                    state["plot_bin_width"] = want_bin
+                    ui_changed = True
+            ui_gene_cov = getattr(cnv_gene_cov_filter, "value", None)
+            if ui_gene_cov is not None:
+                # Coerce legacy string values that may still be on the widget.
+                if isinstance(ui_gene_cov, bool):
+                    want_filter = (
+                        _CNV_GENE_COVERAGE_FILTER_OUTLIERS
+                        if ui_gene_cov
+                        else _CNV_GENE_COVERAGE_FILTER_ALL
+                    )
+                else:
+                    want_filter = _cnv_gene_coverage_filter_from_ui(ui_gene_cov)
+                if want_filter != state.get(
+                    "gene_coverage_filter", _CNV_GENE_COVERAGE_FILTER_OUTLIERS
+                ):
+                    state["gene_coverage_filter"] = want_filter
+                    ui_changed = True
+                # Keep the widget strictly boolean after any legacy string value.
+                want_outliers = want_filter == _CNV_GENE_COVERAGE_FILTER_OUTLIERS
+                if ui_gene_cov is not want_outliers:
+                    try:
+                        cnv_gene_cov_filter.value = want_outliers
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
+        is_fresh_visit = "last_visit_time" not in state
+        if is_fresh_visit:
+            state["last_visit_time"] = time.time()
+
+        cnv_npy = sample_dir / "CNV.npy"
+        cnv2_npy = sample_dir / "CNV2.npy"
+        cnv3_npy = sample_dir / "CNV3.npy"
+        cnv_dict_npy = sample_dir / "CNV_dict.npy"
+        data_array_npy = sample_dir / "cnv_data_array.npy"
+        xy_pkl = sample_dir / "XYestimate.pkl"
+
+        cnv_npy_mtime = cnv_npy.stat().st_mtime if cnv_npy.exists() else 0
+        cnv2_npy_mtime = cnv2_npy.stat().st_mtime if cnv2_npy.exists() else 0
+        cnv3_npy_mtime = cnv3_npy.stat().st_mtime if cnv3_npy.exists() else 0
+        cnv_dict_npy_mtime = cnv_dict_npy.stat().st_mtime if cnv_dict_npy.exists() else 0
+        data_array_npy_mtime = data_array_npy.stat().st_mtime if data_array_npy.exists() else 0
+        xy_pkl_mtime = xy_pkl.stat().st_mtime if xy_pkl.exists() else 0
+
+        prev_cnv_npy_mtime = state.get("cnv_m", 0)
+        prev_cnv2_npy_mtime = state.get("cnv2_m", 0)
+        prev_cnv3_npy_mtime = state.get("cnv3_m", 0)
+        prev_cnv_dict_npy_mtime = state.get("dict_m", 0)
+        prev_data_array_npy_mtime = state.get("bp_array_mtime", 0)
+        prev_xy_pkl_mtime = state.get("xy_m", 0)
+
+        cnv_npy_changed = prev_cnv_npy_mtime != cnv_npy_mtime
+        cnv2_npy_changed = prev_cnv2_npy_mtime != cnv2_npy_mtime
+        cnv3_npy_changed = prev_cnv3_npy_mtime != cnv3_npy_mtime
+        cnv_dict_npy_changed = prev_cnv_dict_npy_mtime != cnv_dict_npy_mtime
+        data_array_npy_changed = prev_data_array_npy_mtime != data_array_npy_mtime
+        xy_pkl_changed = prev_xy_pkl_mtime != xy_pkl_mtime
+
+        files_changed = (
+            cnv_npy_changed
+            or cnv2_npy_changed
+            or cnv3_npy_changed
+            or cnv_dict_npy_changed
+            or data_array_npy_changed
+            or xy_pkl_changed
+        )
+
+        needs_update = (
+            is_fresh_visit
+            or files_changed
+            or ui_changed
+            or force_refresh
+            or not state.get("_rendered_once")
+        )
+
+        if not needs_update:
+            logging.debug("[CNV] ⏭ Skipping CNV update - no changes detected")
+            launcher._cnv_state[key] = state
+            return None
+
+        reasons = []
+        if is_fresh_visit:
+            reasons.append("fresh_visit")
+        if cnv_npy_changed:
+            reasons.append("CNV.npy")
+        if cnv2_npy_changed:
+            reasons.append("CNV2.npy")
+        if cnv3_npy_changed:
+            reasons.append("CNV3.npy")
+        if cnv_dict_npy_changed:
+            reasons.append("CNV_dict.npy")
+        if data_array_npy_changed:
+            reasons.append("cnv_data_array.npy")
+        if xy_pkl_changed:
+            reasons.append("XYestimate.pkl")
+        if ui_changed:
+            reasons.append("ui_changed")
+        if force_color_refresh:
+            reasons.append("force_color_refresh")
+        if force_gene_refresh:
+            reasons.append("force_gene_refresh")
+        if force_chrom_refresh:
+            reasons.append("force_chrom_refresh")
+        if force_gene_cov_filter_refresh:
+            reasons.append("force_gene_cov_filter_refresh")
+        if force_ui_refresh:
+            reasons.append("force_ui_refresh")
+        if not state.get("_rendered_once"):
+            reasons.append("first_render")
+        logging.debug(f"[CNV] Update needed. Reasons: {', '.join(reasons)}")
+
+        data_array_reload = data_array_npy_changed or is_fresh_visit
+        need_load = (
+            cnv_dict_npy_changed
+            or cnv_npy_changed
+            or cnv2_npy_changed
+            or cnv3_npy_changed
+            or data_array_reload
+            or xy_pkl_changed
+        )
+
+        return {
+            "state": state,
+            "key": key,
+            "ui_changed": ui_changed,
+            "is_fresh_visit": is_fresh_visit,
+            "cnv_npy": cnv_npy,
+            "cnv2_npy": cnv2_npy,
+            "cnv3_npy": cnv3_npy,
+            "cnv_dict_npy": cnv_dict_npy,
+            "data_array_npy": data_array_npy,
+            "xy_pkl": xy_pkl,
+            "cnv_npy_mtime": cnv_npy_mtime,
+            "cnv2_npy_mtime": cnv2_npy_mtime,
+            "cnv3_npy_mtime": cnv3_npy_mtime,
+            "cnv_dict_npy_mtime": cnv_dict_npy_mtime,
+            "data_array_npy_mtime": data_array_npy_mtime,
+            "xy_pkl_mtime": xy_pkl_mtime,
+            "cnv_dict_npy_changed": cnv_dict_npy_changed,
+            "cnv_npy_changed": cnv_npy_changed,
+            "cnv2_npy_changed": cnv2_npy_changed,
+            "cnv3_npy_changed": cnv3_npy_changed,
+            "data_array_npy_changed": data_array_npy_changed,
+            "xy_pkl_changed": xy_pkl_changed,
+            "data_array_reload": data_array_reload,
+            "need_load": need_load,
+        }
+
+    def _apply_breakpoint_marklines(
+        chart,
+        selected: str,
+        state: Dict[str, Any],
+        breakpoint_lines: List[int],
+        *,
+        reference_at_zero: bool = False,
+    ) -> None:
+        """Attach breakpoint x-lines (and optional y=0 reference) to the main data series."""
+        try:
+            current_series = [
+                s
+                for s in chart.options["series"]
+                if not s.get("name", "").startswith("Breakpoint")
+            ]
+            if selected != "All" and state.get("show_bp", True) and breakpoint_lines:
+                if current_series:
+                    mark_line_data: List[Dict[str, Any]] = []
+                    if reference_at_zero:
+                        mark_line_data.append(
+                            {
+                                "yAxis": 0,
+                                "lineStyle": {
+                                    "type": "dashed",
+                                    "color": "#888888",
+                                    "width": 1,
+                                },
+                            }
+                        )
+                    for bp_pos in breakpoint_lines:
+                        mark_line_data.append(
+                            {
+                                "xAxis": bp_pos,
+                                "lineStyle": {
+                                    "type": "dashed",
+                                    "color": "#ff6b6b",
+                                    "width": 3,
+                                },
+                            }
+                        )
+                    current_series[0]["markLine"] = {
+                        "data": mark_line_data,
+                        "symbol": "none",
+                        "lineStyle": {"type": "dashed", "color": "#ff6b6b", "width": 3},
+                    }
+            elif reference_at_zero and current_series:
+                current_series[0]["markLine"] = {
+                    "symbol": "none",
+                    "data": [
+                        {
+                            "yAxis": 0,
+                            "lineStyle": {
+                                "type": "dashed",
+                                "color": "#888888",
+                                "width": 1,
+                            },
+                        }
+                    ],
+                }
+            else:
+                if current_series:
+                    current_series[0].pop("markLine", None)
+            chart.options["series"] = current_series
+            _upsert_configured_gene_series(
+                chart,
+                configured_gene_locations,
+                selected=selected,
+                chrom_offsets={},
+                dark=_is_dark_mode(),
+            )
+            _apply_cnv_echart_chrome(chart, _is_dark_mode())
+            _cnv_echart_push_update(chart)
+        except Exception:
+            pass
+
+    def _apply_cnv_refresh_after_load(
+        plan: Dict[str, Any], payload: Dict[str, Any]
+    ) -> None:
+        """Merge disk payload into state and update charts (main thread only)."""
+        p = plan
+        state = p["state"]
+        key = p["key"]
+        ui_changed = p["ui_changed"]
+        is_fresh_visit = p["is_fresh_visit"]
+        cnv_dict_npy = p["cnv_dict_npy"]
+        cnv_npy = p["cnv_npy"]
+        cnv2_npy = p["cnv2_npy"]
+        cnv3_npy = p["cnv3_npy"]
+        data_array_npy = p["data_array_npy"]
+        xy_pkl = p["xy_pkl"]
+        cnv_npy_mtime = p["cnv_npy_mtime"]
+        cnv2_npy_mtime = p["cnv2_npy_mtime"]
+        cnv3_npy_mtime = p["cnv3_npy_mtime"]
+        cnv_dict_npy_mtime = p["cnv_dict_npy_mtime"]
+        data_array_npy_mtime = p["data_array_npy_mtime"]
+        xy_pkl_mtime = p["xy_pkl_mtime"]
+        cnv_dict_npy_changed = p["cnv_dict_npy_changed"]
+        cnv_npy_changed = p["cnv_npy_changed"]
+        cnv2_npy_changed = p["cnv2_npy_changed"]
+        cnv3_npy_changed = p["cnv3_npy_changed"]
+        data_array_npy_changed = p["data_array_npy_changed"]
+        data_array_reload = p["data_array_reload"]
+        xy_pkl_changed = p["xy_pkl_changed"]
+
+        changed = (
+            "cnv" in payload
+            or "cnv2" in payload
+            or "cnv3" in payload
+            or "xy" in payload
+        )
+
+        if cnv_dict_npy.exists():
+            m = cnv_dict_npy_mtime
+            if cnv_dict_npy_changed and "cnv_dict" in payload:
+                state["cnv_dict"] = payload["cnv_dict"]
+                cnv_bin.set_text(
+                    f"Bin width: {state['cnv_dict'].get('bin_width', '--'):,}"
+                )
+                cnv_var.set_text(
+                    f"Variance: {state['cnv_dict'].get('variance','--'):.3f}"
+                    if isinstance(state["cnv_dict"].get("variance"), (int, float))
+                    else "Variance: --"
+                )
+                state["dict_m"] = m
+        if xy_pkl.exists():
+            m = xy_pkl_mtime
+            if xy_pkl_changed:
+                try:
+                    if "xy" in payload:
+                        xy = payload["xy"]
+                        cnv_xy.set_text(f"Genetic sex: {xy}")
+                        state["xy"] = xy
+                except Exception:
+                    pass
+                state["xy_m"] = m
+
+        if "cnv" in payload:
+            state["cnv"] = payload["cnv"]
+            state["cnv_m"] = cnv_npy_mtime
+        if "cnv2" in payload:
+            state["cnv2"] = payload["cnv2"]
+            state["cnv2_m"] = cnv2_npy_mtime
+        if "cnv3" in payload:
+            state["cnv3"] = payload["cnv3"]
+            state["cnv3_m"] = cnv3_npy_mtime
+        _recompute_cnv_log2_state(state)
+
+        if state.get("cnv"):
+            if changed:
+                cnv_status.set_text("Status: CNV data loaded")
+            if changed or not state.get("_chrom_opts_set"):
+                try:
+                    cnv_map = state["cnv"].get("cnv", state["cnv"])
+                    chrom_opts = {"All": "All"}
+                    for contig in natsort.natsorted(cnv_map.keys()):
+                        if _cnv_contig_ok(contig):
+                            chrom_opts[contig] = contig
+                    cnv_chrom_select.set_options(chrom_opts)
+                    chrom_opts = {"All": "All"}
+                    for contig in natsort.natsorted(cnv_map.keys()):
+                        if _cnv_contig_ok(contig):
+                            chrom_opts[contig] = contig
+                    cnv_chrom_select.set_options(chrom_opts)
+                    sel = launcher._cnv_state.setdefault(str(sample_dir), {}).get(
+                        "selected_chrom", "All"
+                    )
+                    if sel not in chrom_opts:
+                        sel = "All"
+                    cnv_chrom_select.value = sel
+                    try:
+                        cnv_chrom_select.update()
+                    except Exception:
+                        pass
+                    state["_chrom_opts_set"] = True
+                except Exception:
+                    pass
+            force_color_refresh = state.get("_force_color_refresh", False)
+            force_gene_refresh = state.get("_force_gene_refresh", False)
+            force_chrom_refresh = state.get("_force_chrom_refresh", False)
+            force_gene_cov_filter_refresh = state.get(
+                "_force_gene_cov_filter_refresh", False
+            )
+            force_ui_refresh = state.get("_force_ui_refresh", False)
+            if (
+                changed
+                or ui_changed
+                or not state.get("_rendered_once")
+                or force_color_refresh
+                or force_gene_refresh
+                or force_chrom_refresh
+                or force_gene_cov_filter_refresh
+                or force_ui_refresh
+            ):
+                _render_cnv_from_state(state)
+                state["_rendered_once"] = True
+                if force_color_refresh:
+                    state["_force_color_refresh"] = False
+                if force_gene_refresh:
+                    state["_force_gene_refresh"] = False
+                if force_chrom_refresh:
+                    state["_force_chrom_refresh"] = False
+                if force_gene_cov_filter_refresh:
+                    state["_force_gene_cov_filter_refresh"] = False
+                if force_ui_refresh:
+                    state["_force_ui_refresh"] = False
+
+            _update_cnv_events_analysis(state)
+
+        if data_array_npy.exists() and (data_array_npy_changed or is_fresh_visit):
+            try:
+                arr = payload.get("bp_array")
+                if arr is None:
+                    arr = np.load(data_array_npy, allow_pickle=True)
+                if hasattr(arr, "dtype") and "name" in arr.dtype.names:
+                    state["bp_array"] = arr
+                    selected = launcher._cnv_state.setdefault(
+                        str(sample_dir), {}
+                    ).get("selected_chrom", "All")
+                    breakpoint_lines = []
+                    for r in arr:
+                        if selected == "All" or r["name"] == selected:
+                            start_pos = int(r["start"])
+                            end_pos = int(r["end"])
+                            breakpoint_lines.append((start_pos + end_pos) // 2)
+                    _apply_breakpoint_marklines(
+                        cnv_diff, selected, state, breakpoint_lines
+                    )
+                state["bp_array_mtime"] = data_array_npy_mtime
+            except Exception:
+                pass
+        elif data_array_npy.exists() and not data_array_npy_changed:
+            if state.get("bp_array") is not None:
+                try:
+                    selected = launcher._cnv_state.setdefault(
+                        str(sample_dir), {}
+                    ).get("selected_chrom", "All")
+                    arr = state["bp_array"]
+                    breakpoint_lines = []
+                    for r in arr:
+                        if selected == "All" or r["name"] == selected:
+                            start_pos = int(r["start"])
+                            end_pos = int(r["end"])
+                            breakpoint_lines.append((start_pos + end_pos) // 2)
+                    _apply_breakpoint_marklines(
+                        cnv_diff, selected, state, breakpoint_lines
+                    )
+                except Exception:
+                    pass
+
+        state["cnv_m"] = cnv_npy_mtime
+        state["cnv2_m"] = cnv2_npy_mtime
+        state["cnv3_m"] = cnv3_npy_mtime
+        state["dict_m"] = cnv_dict_npy_mtime
+        state["xy_m"] = xy_pkl_mtime
+        state["last_visit_time"] = state.get("last_visit_time", time.time())
+        state["cnv_plot_theme_dark"] = _is_dark_mode()
+
+        launcher._cnv_state[key] = state
+        _update_breakpoints_visibility()
+
+    async def _refresh_cnv_async() -> None:
+        try:
+            plan = _prepare_cnv_refresh()
+            if plan is None:
+                return
+            if plan["need_load"]:
+                payload = await asyncio.to_thread(
+                    _cnv_load_binary_payload,
+                    sample_dir,
+                    cnv_dict_npy_changed=plan["cnv_dict_npy_changed"],
+                    cnv_npy_changed=plan["cnv_npy_changed"],
+                    cnv2_npy_changed=plan["cnv2_npy_changed"],
+                    cnv3_npy_changed=plan["cnv3_npy_changed"],
+                    data_array_reload=plan["data_array_reload"],
+                    xy_pkl_changed=plan["xy_pkl_changed"],
+                )
+            else:
+                payload = {}
+            _apply_cnv_refresh_after_load(plan, payload)
+        except Exception:
+            pass
+
+    def _refresh_cnv_sync(sample_dir: Path, launcher: Any) -> None:
+        """Synchronous CNV refresh (no event loop)."""
+        try:
+            plan = _prepare_cnv_refresh()
+            if plan is None:
+                return
+            if plan["need_load"]:
+                payload = _cnv_load_binary_payload(
+                    sample_dir,
+                    cnv_dict_npy_changed=plan["cnv_dict_npy_changed"],
+                    cnv_npy_changed=plan["cnv_npy_changed"],
+                    cnv2_npy_changed=plan["cnv2_npy_changed"],
+                    cnv3_npy_changed=plan["cnv3_npy_changed"],
+                    data_array_reload=plan["data_array_reload"],
+                    xy_pkl_changed=plan["xy_pkl_changed"],
+                )
+            else:
+                payload = {}
+            _apply_cnv_refresh_after_load(plan, payload)
+        except Exception:
+            pass
+
+    def _refresh_cnv() -> None:
+        """Refresh CNV data; offload binary loads when a loop is running."""
+        try:
             if not sample_dir or not sample_dir.exists():
                 logging.warning(f"[CNV] Sample directory not found: {sample_dir}")
                 return
-            
-            # Run CNV refresh directly (already in background)
-            _refresh_cnv_sync(sample_dir, launcher)
+            try:
+                asyncio.get_running_loop()
+            except RuntimeError:
+                _refresh_cnv_sync(sample_dir, launcher)
+                return
+            asyncio.create_task(_refresh_cnv_async())
         except Exception as e:
             logging.exception(f"[CNV] Refresh failed: {e}")
 
@@ -1976,345 +3853,9 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
             try:
                 display_value = "block" if should_show else "none"
                 cnv_bp_label.style(f"display: {display_value}")
-                cnv_bp.style(f"display: {display_value}")
+                cnv_bp_row.style(f"display: {display_value}")
             except Exception:
                 pass
-        except Exception:
-            pass
-
-    def _refresh_cnv_sync(sample_dir: Path, launcher: Any) -> None:
-        """Synchronous CNV refresh."""
-        try:
-            key = str(sample_dir)
-            state = launcher._cnv_state.get(key, {})
-
-            # Simple debouncing to prevent rapid successive calls
-            import time
-
-            current_time = time.time()
-            last_refresh = state.get("_last_refresh", 0)
-            if current_time - last_refresh < 0.1:  # 100ms debounce
-                return
-            state["_last_refresh"] = current_time
-            # Sync state from UI controls in case events are not firing in this environment
-            try:
-                ui_changed = False
-                ui_sel = getattr(cnv_chrom_select, "value", None)
-                if ui_sel and ui_sel != state.get("selected_chrom"):
-                    state["selected_chrom"] = ui_sel
-                    ui_changed = True
-                ui_scale = getattr(cnv_scale, "value", None)
-                if ui_scale and ui_scale != state.get("y_scale"):
-                    state["y_scale"] = ui_scale
-                    ui_changed = True
-                ui_bp = getattr(cnv_bp, "value", None)
-                if ui_bp is not None:
-                    desired = ui_bp == "show"
-                    if desired != state.get("show_bp", True):
-                        state["show_bp"] = desired
-                        ui_changed = True
-                ui_color = getattr(cnv_color, "value", None)
-                current_color_mode = state.get("color_mode", "chromosome")
-                if ui_color and ui_color != current_color_mode:
-                    state["color_mode"] = ui_color
-                    ui_changed = True
-                ui_plot_bin = getattr(cnv_plot_bin, "value", None)
-                if ui_plot_bin is not None:
-                    want_bin = _PLOT_BIN_KEY_TO_BP.get(
-                        ui_plot_bin, _PLOT_BIN_KEY_TO_BP[_PLOT_BIN_KEY_DEFAULT]
-                    )
-                    if want_bin != state.get("plot_bin_width"):
-                        state["plot_bin_width"] = want_bin
-                        ui_changed = True
-            except Exception:
-                pass
-            # Check if this is a fresh page visit
-            is_fresh_visit = "last_visit_time" not in state
-            if is_fresh_visit:
-                state["last_visit_time"] = time.time()
-            
-            cnv_npy = sample_dir / "CNV.npy"
-            cnv3_npy = sample_dir / "CNV3.npy"
-            cnv_dict_npy = sample_dir / "CNV_dict.npy"
-            data_array_npy = sample_dir / "cnv_data_array.npy"
-            xy_pkl = sample_dir / "XYestimate.pkl"
-            
-            # Check modification times for all files
-            cnv_npy_mtime = cnv_npy.stat().st_mtime if cnv_npy.exists() else 0
-            cnv3_npy_mtime = cnv3_npy.stat().st_mtime if cnv3_npy.exists() else 0
-            cnv_dict_npy_mtime = cnv_dict_npy.stat().st_mtime if cnv_dict_npy.exists() else 0
-            data_array_npy_mtime = data_array_npy.stat().st_mtime if data_array_npy.exists() else 0
-            xy_pkl_mtime = xy_pkl.stat().st_mtime if xy_pkl.exists() else 0
-            
-            # Get previous state values (use sentinel values if not present)
-            prev_cnv_npy_mtime = state.get("cnv_m", 0)
-            prev_cnv3_npy_mtime = state.get("cnv3_m", 0)
-            prev_cnv_dict_npy_mtime = state.get("dict_m", 0)
-            prev_data_array_npy_mtime = state.get("bp_array_mtime", 0)
-            prev_xy_pkl_mtime = state.get("xy_m", 0)
-            
-            # Check if any file has changed
-            cnv_npy_changed = prev_cnv_npy_mtime != cnv_npy_mtime
-            cnv3_npy_changed = prev_cnv3_npy_mtime != cnv3_npy_mtime
-            cnv_dict_npy_changed = prev_cnv_dict_npy_mtime != cnv_dict_npy_mtime
-            data_array_npy_changed = prev_data_array_npy_mtime != data_array_npy_mtime
-            xy_pkl_changed = prev_xy_pkl_mtime != xy_pkl_mtime
-            
-            # Check for forced refreshes
-            force_color_refresh = state.get("_force_color_refresh", False)
-            force_gene_refresh = state.get("_force_gene_refresh", False)
-            force_chrom_refresh = state.get("_force_chrom_refresh", False)
-            
-            # Determine if any update is needed
-            files_changed = (
-                cnv_npy_changed
-                or cnv3_npy_changed
-                or cnv_dict_npy_changed
-                or data_array_npy_changed
-                or xy_pkl_changed
-            )
-            
-            needs_update = (
-                is_fresh_visit
-                or files_changed
-                or ui_changed
-                or force_color_refresh
-                or force_gene_refresh
-                or force_chrom_refresh
-                or not state.get("_rendered_once")
-            )
-            
-            # Early exit if nothing has changed (except for forced refreshes or UI changes)
-            if not needs_update:
-                logging.debug(f"[CNV] ⏭ Skipping CNV update - no changes detected")
-                # Still update state timestamp
-                launcher._cnv_state[key] = state
-                return
-            else:
-                # Log what changed
-                reasons = []
-                if is_fresh_visit:
-                    reasons.append("fresh_visit")
-                if cnv_npy_changed:
-                    reasons.append("CNV.npy")
-                if cnv3_npy_changed:
-                    reasons.append("CNV3.npy")
-                if cnv_dict_npy_changed:
-                    reasons.append("CNV_dict.npy")
-                if data_array_npy_changed:
-                    reasons.append("cnv_data_array.npy")
-                if xy_pkl_changed:
-                    reasons.append("XYestimate.pkl")
-                if ui_changed:
-                    reasons.append("ui_changed")
-                if force_color_refresh:
-                    reasons.append("force_color_refresh")
-                if force_gene_refresh:
-                    reasons.append("force_gene_refresh")
-                if force_chrom_refresh:
-                    reasons.append("force_chrom_refresh")
-                if not state.get("_rendered_once"):
-                    reasons.append("first_render")
-                logging.debug(f"[CNV] Update needed. Reasons: {', '.join(reasons)}")
-            
-            changed = False
-            if cnv_dict_npy.exists():
-                m = cnv_dict_npy_mtime
-                if cnv_dict_npy_changed:
-                    state["cnv_dict"] = np.load(cnv_dict_npy, allow_pickle=True).item()
-                    cnv_bin.set_text(
-                        f"Bin width: {state['cnv_dict'].get('bin_width', '--'):,}"
-                    )
-                    cnv_var.set_text(
-                        f"Variance: {state['cnv_dict'].get('variance','--'):.3f}"
-                        if isinstance(state["cnv_dict"].get("variance"), (int, float))
-                        else "Variance: --"
-                    )
-                    state["dict_m"] = m
-            if xy_pkl.exists():
-                m = xy_pkl_mtime
-                if xy_pkl_changed:
-                    try:
-                        import pickle
-
-                        with xy_pkl.open("rb") as f:
-                            xy = pickle.load(f)
-                        cnv_xy.set_text(f"Genetic sex: {xy}")
-                        state["xy"] = xy
-                    except Exception:
-                        pass
-                    state["xy_m"] = m
-
-            def _load_npy(path_key, file_path, file_mtime, file_changed):
-                if file_changed:
-                    try:
-                        state[path_key] = np.load(file_path, allow_pickle=True).item()
-                    except Exception:
-                        state[path_key] = None
-                    state[path_key + "_m"] = file_mtime
-                    return True
-                return False
-
-            if cnv_npy.exists() and _load_npy("cnv", cnv_npy, cnv_npy_mtime, cnv_npy_changed):
-                changed = True
-            if cnv3_npy.exists() and _load_npy("cnv3", cnv3_npy, cnv3_npy_mtime, cnv3_npy_changed):
-                changed = True
-            if state.get("cnv"):
-                if changed:
-                    cnv_status.set_text("Status: CNV data loaded")
-                # Populate selector at least once, or when data changed
-                if changed or not state.get("_chrom_opts_set"):
-                    try:
-                        cnv_map = state["cnv"].get("cnv", state["cnv"])
-                        chrom_opts = {"All": "All"}
-                        for contig in natsort.natsorted(cnv_map.keys()):
-                            if _cnv_contig_ok(contig):
-                                chrom_opts[contig] = contig
-                        cnv_chrom_select.set_options(chrom_opts)
-                        # Keep selected option if still valid
-                        chrom_opts = {"All": "All"}
-                        for contig in natsort.natsorted(cnv_map.keys()):
-                            if _cnv_contig_ok(contig):
-                                chrom_opts[contig] = contig
-                        cnv_chrom_select.set_options(chrom_opts)
-                        # Keep selected option if still valid
-                        sel = launcher._cnv_state.setdefault(str(sample_dir), {}).get(
-                            "selected_chrom", "All"
-                        )
-                        if sel not in chrom_opts:
-                            sel = "All"
-                        cnv_chrom_select.value = sel
-                        try:
-                            cnv_chrom_select.update()
-                        except Exception:
-                            pass
-                        state["_chrom_opts_set"] = True
-                    except Exception:
-                        pass
-                # Only re-render when data or UI state changed, or on first render, or forced color refresh
-                force_color_refresh = state.get("_force_color_refresh", False)
-                force_gene_refresh = state.get("_force_gene_refresh", False)
-                force_chrom_refresh = state.get("_force_chrom_refresh", False)
-                if changed or ui_changed or not state.get("_rendered_once") or force_color_refresh or force_gene_refresh or force_chrom_refresh:
-                    _render_cnv_from_state(state)
-                    state["_rendered_once"] = True
-                    if force_color_refresh:
-                        state["_force_color_refresh"] = False
-                    if force_gene_refresh:
-                        state["_force_gene_refresh"] = False
-                    if force_chrom_refresh:
-                        state["_force_chrom_refresh"] = False
-                
-                # Update CNV events analysis
-                _update_cnv_events_analysis(state)
-            # Breakpoint density overlay - only reload if file changed
-            if data_array_npy.exists() and (data_array_npy_changed or is_fresh_visit):
-                try:
-                    arr = np.load(data_array_npy, allow_pickle=True)
-                    if hasattr(arr, "dtype") and "name" in arr.dtype.names:
-                        binw = state.get("cnv_dict", {}).get("bin_width", 1000000)
-                        state["bp_array"] = arr
-                        # Filter breakpoints by selected chromosome
-                        selected = launcher._cnv_state.setdefault(
-                            str(sample_dir), {}
-                        ).get("selected_chrom", "All")
-                        filtered_breakpoints = 0
-                        breakpoint_lines = []
-                        for r in arr:
-                            if selected == "All" or r["name"] == selected:
-                                # Use the midpoint of the breakpoint as the line position
-                                start_pos = int(r["start"])
-                                end_pos = int(r["end"])
-                                midpoint = (start_pos + end_pos) // 2
-                                breakpoint_lines.append(midpoint)
-                                filtered_breakpoints += 1
-                        # Only add density overlay in single-chromosome view; preserve existing diff series
-                        current_series = [
-                            s
-                            for s in cnv_diff.options["series"]
-                            if not s.get("name", "").startswith("Breakpoint")
-                        ]
-                        if selected != "All" and state.get("show_bp", True):
-                            # Add breakpoint lines as markLine to the main series
-                            if current_series:
-                                main_series = current_series[0]  # Use the first series as the main one
-                                markLine_data = []
-                                for bp_pos in breakpoint_lines:
-                                    markLine_data.append({
-                                        "xAxis": bp_pos,
-                                        "lineStyle": {"type": "dashed", "color": "#ff6b6b", "width": 3}
-                                    })
-                                main_series["markLine"] = {
-                                    "data": markLine_data,
-                                    "symbol": "none",
-                                    "lineStyle": {"type": "dashed", "color": "#ff6b6b", "width": 3}
-                                }
-                        else:
-                            # Clear markLine when breakpoints are hidden
-                            if current_series:
-                                current_series[0].pop("markLine", None)
-                        cnv_diff.options["series"] = current_series
-                        _apply_cnv_echart_chrome(cnv_diff, _is_dark_mode())
-                        cnv_diff.update()
-                    # Update modification time after successful load
-                    state["bp_array_mtime"] = data_array_npy_mtime
-                except Exception as e:
-                    pass
-            elif data_array_npy.exists() and not data_array_npy_changed:
-                # File exists but hasn't changed - just update breakpoint visibility
-                # Use existing array from state if available
-                if state.get("bp_array") is not None:
-                    try:
-                        selected = launcher._cnv_state.setdefault(
-                            str(sample_dir), {}
-                        ).get("selected_chrom", "All")
-                        current_series = [
-                            s
-                            for s in cnv_diff.options["series"]
-                            if not s.get("name", "").startswith("Breakpoint")
-                        ]
-                        if selected != "All" and state.get("show_bp", True):
-                            arr = state["bp_array"]
-                            breakpoint_lines = []
-                            for r in arr:
-                                if selected == "All" or r["name"] == selected:
-                                    start_pos = int(r["start"])
-                                    end_pos = int(r["end"])
-                                    midpoint = (start_pos + end_pos) // 2
-                                    breakpoint_lines.append(midpoint)
-                            if current_series:
-                                main_series = current_series[0]
-                                markLine_data = []
-                                for bp_pos in breakpoint_lines:
-                                    markLine_data.append({
-                                        "xAxis": bp_pos,
-                                        "lineStyle": {"type": "dashed", "color": "#ff6b6b", "width": 3}
-                                    })
-                                main_series["markLine"] = {
-                                    "data": markLine_data,
-                                    "symbol": "none",
-                                    "lineStyle": {"type": "dashed", "color": "#ff6b6b", "width": 3}
-                                }
-                        else:
-                            if current_series:
-                                current_series[0].pop("markLine", None)
-                        cnv_diff.options["series"] = current_series
-                        _apply_cnv_echart_chrome(cnv_diff, _is_dark_mode())
-                        cnv_diff.update()
-                    except Exception:
-                        pass
-            
-            # Update state with current modification times
-            state["cnv_m"] = cnv_npy_mtime
-            state["cnv3_m"] = cnv3_npy_mtime
-            state["dict_m"] = cnv_dict_npy_mtime
-            state["xy_m"] = xy_pkl_mtime
-            state["last_visit_time"] = state.get("last_visit_time", time.time())
-            state["cnv_plot_theme_dark"] = _is_dark_mode()
-
-            launcher._cnv_state[key] = state
-            # Update breakpoints visibility after state is updated
-            _update_breakpoints_visibility()
         except Exception:
             pass
 
@@ -2322,23 +3863,42 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
     try:
 
         def _val(ev, default=None):
-            # Handle toggle events which have args like [index, {'value': X, 'label': 'Y'}]
-            if hasattr(ev, "args") and ev.args and isinstance(ev.args, list) and len(ev.args) >= 2:
-                if isinstance(ev.args[1], dict):
-                    # Extract the label from the toggle event structure
-                    return ev.args[1].get("label", default)
+            # Prefer boolean switch values before legacy toggle label parsing.
+            if hasattr(ev, "value") and isinstance(ev.value, bool):
+                return ev.value
+            args = getattr(ev, "args", None)
+            if isinstance(args, bool):
+                return args
+            if isinstance(args, (list, tuple)) and args and isinstance(args[0], bool):
+                return args[0]
+            # Handle select/toggle events like [index, {'value': X, 'label': 'Y'}]
+            if isinstance(args, list) and len(args) >= 2 and isinstance(args[1], dict):
+                return args[1].get("label", default)
             # Handle direct value objects like {'value': 2, 'label': 'GNB1'}
             if hasattr(ev, "value") and isinstance(ev.value, dict):
                 return ev.value.get("label", default)
             # Handle args that are directly a dictionary with label
-            if hasattr(ev, "args") and isinstance(ev.args, dict) and "label" in ev.args:
-                return ev.args.get("label", default)
+            if isinstance(args, dict) and "label" in args:
+                return args.get("label", default)
             # Fallback to standard value extraction
-            return (
-                getattr(ev, "value", None)
-                if hasattr(ev, "value")
-                else (getattr(ev, "args", None) or default)
-            )
+            if hasattr(ev, "value"):
+                return ev.value
+            return args if args is not None else default
+
+        def _switch_bool(ev, *, default: bool = False) -> bool:
+            """Read a ui.switch boolean, falling back to the widget value if needed."""
+            raw = _val(ev, None)
+            if isinstance(raw, bool):
+                return raw
+            if raw is None:
+                return default
+            return str(raw).strip().lower() in ("true", "1", "on", "show")
+
+        def _force_redraw_with_marker_autoscale() -> None:
+            """Every CNV control click should re-render and re-fit Y to markers."""
+            st = launcher._cnv_state.setdefault(str(sample_dir), {})
+            st["_force_ui_refresh"] = True
+            ui.timer(0.05, _refresh_cnv, once=True)
 
         def _on_chrom(ev):
             st = launcher._cnv_state.setdefault(str(sample_dir), {})
@@ -2349,7 +3909,7 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
             _update_breakpoints_visibility()
             # reset x zoom when switching scope
             try:
-                for chart in (cnv_abs, cnv_diff):
+                for chart in genome_charts:
                     if (
                         isinstance(chart.options.get("dataZoom"), list)
                         and chart.options["dataZoom"]
@@ -2358,56 +3918,78 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
                         chart.options["dataZoom"][0].pop("endValue", None)
             except Exception:
                 pass
-            # Trigger immediate refresh to update all UI elements
-            ui.timer(0.1, _refresh_cnv, once=True)
+            _force_redraw_with_marker_autoscale()
 
         def _on_scale(ev):
             st = launcher._cnv_state.setdefault(str(sample_dir), {})
-            st["y_scale"] = _val(ev, "linear") or "linear"
-            # Trigger immediate refresh to update all UI elements
-            ui.timer(0.1, _refresh_cnv, once=True)
+            st["y_scale"] = "log" if _switch_bool(ev, default=False) else "linear"
+            # Prefer live widget value if event parsing failed.
+            try:
+                if isinstance(getattr(cnv_scale, "value", None), bool):
+                    st["y_scale"] = "log" if cnv_scale.value else "linear"
+            except Exception:
+                pass
+            _force_redraw_with_marker_autoscale()
 
         def _on_bp(ev):
             st = launcher._cnv_state.setdefault(str(sample_dir), {})
-            show_bp = _val(ev, "show") == "show"
-            st["show_bp"] = show_bp
-            # Trigger immediate refresh to update all UI elements
-            ui.timer(0.1, _refresh_cnv, once=True)
+            st["show_bp"] = _switch_bool(ev, default=True)
+            try:
+                if isinstance(getattr(cnv_bp, "value", None), bool):
+                    st["show_bp"] = bool(cnv_bp.value)
+            except Exception:
+                pass
+            _force_redraw_with_marker_autoscale()
+
+        def _apply_cnv_abs_height(tall: bool) -> None:
+            """Toggle scatter plot container height and ask ECharts to resize."""
+            try:
+                if tall:
+                    cnv_abs.classes(
+                        remove=_CNV_ABS_HEIGHT_CLASS, add=_CNV_ABS_HEIGHT_CLASS_TALL
+                    )
+                else:
+                    cnv_abs.classes(
+                        remove=_CNV_ABS_HEIGHT_CLASS_TALL, add=_CNV_ABS_HEIGHT_CLASS
+                    )
+            except Exception:
+                logging.debug("CNV scatter height class update failed", exc_info=True)
+            try:
+                cnv_abs.run_chart_method("resize")
+            except Exception:
+                logging.debug("CNV scatter resize after height change failed", exc_info=True)
+
+        def _on_height(ev):
+            st = launcher._cnv_state.setdefault(str(sample_dir), {})
+            tall = _switch_bool(ev, default=False)
+            try:
+                if isinstance(getattr(cnv_height, "value", None), bool):
+                    tall = bool(cnv_height.value)
+            except Exception:
+                pass
+            st["double_height"] = tall
+            _apply_cnv_abs_height(tall)
 
         def _on_color(ev):
             st = launcher._cnv_state.setdefault(str(sample_dir), {})
-            val = _val(ev, "chromosome") or "chromosome"
-            # Accept either keys or labels from the toggle
-            vlow = str(val).strip().lower()
-            if vlow in ("chromosome", "chromosomes"):
-                st["color_mode"] = "chromosome"
-            elif vlow in ("value", "up/down", "updown", "up_down", "up down"):
-                st["color_mode"] = "value"
-            else:
-                st["color_mode"] = "chromosome"
+            st["color_mode"] = "value" if _switch_bool(ev, default=False) else "chromosome"
+            try:
+                if isinstance(getattr(cnv_color, "value", None), bool):
+                    st["color_mode"] = "value" if cnv_color.value else "chromosome"
+            except Exception:
+                pass
             # Force a refresh by setting a flag that bypasses the state sync logic
             st["_force_color_refresh"] = True
-            
-            # Trigger immediate refresh to update all UI elements
-            ui.timer(0.1, _refresh_cnv, once=True)
+            _force_redraw_with_marker_autoscale()
 
         def _on_plot_bin(ev):
             st = launcher._cnv_state.setdefault(str(sample_dir), {})
             v = getattr(ev, "args", None) if hasattr(ev, "args") else getattr(ev, "value", None)
             if v is None and hasattr(ev, "value"):
                 v = ev.value
-            # NiceGUI may pass a dict {'value': index, 'label': '...'} instead of the key
-            if isinstance(v, dict):
-                keys_ordered = list(_PLOT_BIN_KEY_TO_BP.keys())
-                idx = v.get("value", 0)
-                key = keys_ordered[idx] if 0 <= idx < len(keys_ordered) else _PLOT_BIN_KEY_DEFAULT
-            else:
-                key = v
-            st["plot_bin_width"] = _PLOT_BIN_KEY_TO_BP.get(
-                key, _PLOT_BIN_KEY_TO_BP[_PLOT_BIN_KEY_DEFAULT]
-            )
+            st["plot_bin_width"] = _cnv_plot_bin_bp_from_ui(v)
             st["_force_chrom_refresh"] = True  # force re-render with new bin width
-            ui.timer(0.1, _refresh_cnv, once=True)
+            _force_redraw_with_marker_autoscale()
 
         # Bind both native change and model-value updates for robustness
         cnv_chrom_select.on("change", _on_chrom)
@@ -2419,17 +4001,46 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
             selected_gene = _val(ev, "All") or "All"
             st["selected_gene"] = selected_gene
             st["_force_gene_refresh"] = True  # Force refresh for gene selection
-            # Trigger immediate refresh to update all UI elements
-            ui.timer(0.1, _refresh_cnv, once=True)
+            _force_redraw_with_marker_autoscale()
 
         cnv_gene_select.on("change", _on_gene)
         cnv_gene_select.on("update:model-value", _on_gene)
+
+        def _on_gene_cov_filter(ev):
+            st = launcher._cnv_state.setdefault(str(sample_dir), {})
+            # Prefer the live widget boolean; event args can be ambiguous.
+            enabled = True
+            try:
+                raw = getattr(cnv_gene_cov_filter, "value", None)
+                if isinstance(raw, bool):
+                    enabled = raw
+                else:
+                    enabled = _switch_bool(ev, default=True)
+            except Exception:
+                enabled = _switch_bool(ev, default=True)
+            st["gene_coverage_filter"] = (
+                _CNV_GENE_COVERAGE_FILTER_OUTLIERS
+                if enabled
+                else _CNV_GENE_COVERAGE_FILTER_ALL
+            )
+            try:
+                if cnv_gene_cov_filter.value is not enabled:
+                    cnv_gene_cov_filter.value = enabled
+            except Exception:
+                pass
+            st["_force_gene_cov_filter_refresh"] = True
+            _force_redraw_with_marker_autoscale()
+
+        cnv_gene_cov_filter.on("change", _on_gene_cov_filter)
+        cnv_gene_cov_filter.on("update:model-value", _on_gene_cov_filter)
         cnv_scale.on("change", _on_scale)
         cnv_scale.on("update:model-value", _on_scale)
         cnv_plot_bin.on("change", _on_plot_bin)
         cnv_plot_bin.on("update:model-value", _on_plot_bin)
         cnv_bp.on("change", _on_bp)
         cnv_bp.on("update:model-value", _on_bp)
+        cnv_height.on("change", _on_height)
+        cnv_height.on("update:model-value", _on_height)
         cnv_color.on("change", _on_color)
         cnv_color.on("update:model-value", _on_color)
     except Exception:
@@ -2448,15 +4059,15 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
         _apply_cnv_echart_chrome(cnv_abs, dark)
         _apply_cnv_echart_chrome(cnv_diff, dark)
         try:
-            cnv_abs.update()
-            cnv_diff.update()
+            _cnv_echart_push_update(cnv_abs)
+            _cnv_echart_push_update(cnv_diff)
         except Exception:
             pass
         launcher._cnv_state.setdefault(key, {})["cnv_plot_theme_dark"] = dark
 
     # Start the refresh timer (every 30 seconds)
-    refresh_timer = ui.timer(30.0, _refresh_cnv, active=True, immediate=False)
-    ui.timer(0.5, _refresh_cnv, once=True)
+    refresh_timer = client_timer(30.0, _refresh_cnv, active=True, immediate=False)
+    client_timer(0.5, _refresh_cnv, once=True)
     unregister_cnv_theme_sync = register_theme_sync_callback(
         _sync_cnv_echarts_theme_if_needed,
         element=cnv_abs,
@@ -2465,7 +4076,7 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
     )
     try:
         ui.context.client.on_disconnect(
-            lambda: (refresh_timer.deactivate(), unregister_cnv_theme_sync())
+            lambda: (stop_timer(refresh_timer), unregister_cnv_theme_sync())
         )
     except Exception:
         pass

@@ -2,12 +2,12 @@
 Classification Section for ROBIN Reports.
 
 This module handles the methylation-based classification section of the report,
-including results from Sturgeon, Random Forest, NanoDX, and PannanoDX classifiers.
+including results from Sturgeon, Random Forest, CrossNN, and PanCrossNN classifiers.
 """
 
 import os
 import pandas as pd
-from reportlab.platypus import PageBreak, Paragraph, Spacer, Table, Image
+from reportlab.platypus import Paragraph, Spacer, Table, Image
 from reportlab.lib.colors import HexColor
 from reportlab.lib.styles import ParagraphStyle
 from reportlab.lib.units import inch
@@ -23,8 +23,40 @@ import seaborn as sns
 import io
 
 from robin.classification_config import get_confidence_status
+from robin.analysis.mnpflex_hierarchy import mnpflex_hierarchy_has_content
+from robin.reporting.mnpflex_hierarchy import (
+    append_mnpflex_classifier_prediction,
+    append_mnpflex_top_path_paragraph,
+)
 
 logger = logging.getLogger(__name__)
+
+# Score CSV columns that are run statistics / metadata, not predicted classes.
+# Kept as a set of lowercase names so case variants are also excluded.
+CLASSIFIER_SCORE_META_COLUMNS = frozenset(
+    {
+        "timestamp",
+        "number_probes",
+        "covered_cpgs",
+        "temperature",
+        "diagnostic",
+        "probes",
+    }
+)
+
+
+def drop_classifier_score_meta_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """Remove non-class columns from a classifier scores DataFrame."""
+    if df is None or getattr(df, "empty", True):
+        return df
+    drop_cols = [
+        col
+        for col in df.columns
+        if str(col).strip().lower() in CLASSIFIER_SCORE_META_COLUMNS
+    ]
+    if not drop_cols:
+        return df
+    return df.drop(columns=drop_cols)
 
 
 class ClassificationSection(ReportSection):
@@ -73,8 +105,8 @@ class ClassificationSection(ReportSection):
             BytesIO object containing the plot image
         """
         try:
-            # Drop non-classification columns
-            df = df.drop(columns=["number_probes"]) if "number_probes" in df.columns else df
+            # Drop non-classification columns (covered_cpgs, diagnostic, etc.)
+            df = drop_classifier_score_meta_columns(df)
 
             # Check if dataframe is empty or has no data
             if df.empty or len(df) == 0:
@@ -241,7 +273,7 @@ class ClassificationSection(ReportSection):
                 mgmt = summary.get("mgmt", {}) or {}
                 classifier_summary = summary.get("classifier_summary", {}) or {}
                 hierarchy = classifier_summary.get("summary_hierarchical", []) or []
-                has_hierarchical_summary = len(hierarchy) > 0
+                has_hierarchical_summary = mnpflex_hierarchy_has_content(hierarchy)
 
                 # Build legend text (QC, MGMT) for table caption
                 legend_text = (
@@ -279,33 +311,24 @@ class ClassificationSection(ReportSection):
                     )
                     self.summary_elements.append(Spacer(1, 8))
                 else:
-                    # Has hierarchical summary - table with legend
+                    # Has hierarchical summary - nested tree with legend
                     self.summary_elements.append(
                         Paragraph("MNP-Flex Hierarchical Summary", self.styles.styles["Heading3"])
                     )
                     self.summary_elements.append(Spacer(1, 6))
-                    flat = mnpflex._flatten_hierarchy(hierarchy)
-                    if flat:
-                        best_score, best_path = max(flat, key=lambda x: x[0] or 0)
-                        self.summary_elements.append(
-                            Paragraph(
-                                f"<b>Top path</b>: {' > '.join(best_path)} "
-                                f"({mnpflex._format_score(best_score)})",
-                                self.styles.styles["Normal"],
-                            )
-                        )
-                        self.summary_elements.append(Spacer(1, 6))
-                    table_rows = [["Group", "Score", "Description"]]
-                    for node in hierarchy:
-                        table_rows.append(
-                            [
-                                node.get("group", "Unknown"),
-                                mnpflex._format_score(node.get("score")),
-                                mnpflex._collect_descriptions(node),
-                            ]
-                        )
-                    self.summary_elements.append(self.create_table(table_rows))
-                    self.summary_elements.append(Spacer(1, 4))
+                    append_mnpflex_classifier_prediction(
+                        self.summary_elements,
+                        hierarchy,
+                        styles=self.styles,
+                        page_width=self.report.doc.width,
+                        include_heading=False,
+                    )
+                    append_mnpflex_top_path_paragraph(
+                        self.summary_elements,
+                        hierarchy,
+                        styles=self.styles,
+                        format_score=mnpflex._format_score,
+                    )
                     # Table legend
                     self.summary_elements.append(
                         Paragraph(
@@ -338,9 +361,12 @@ class ClassificationSection(ReportSection):
         # Dictionary of classifiers and their corresponding files
         classifiers = {
             "Sturgeon": "sturgeon_scores.csv",
-            "NanoDX": "nanodx_scores.csv",
-            "PanNanoDX": "pannanodx_scores.csv",
+            "CrossNN": "nanodx_scores.csv",
+            "PanCrossNN": "pannanodx_scores.csv",
             "Random Forest": "random_forest_scores.csv",
+            "MARLIN": "marlin_scores.csv",
+            "Lamprey (research)": "lamprey_scores.csv",
+            "Tucan": "tucan_scores.csv",
         }
 
         # Add summary table of all classifications
@@ -371,16 +397,7 @@ class ClassificationSection(ReportSection):
                         )
 
                     # Continue with existing classification processing
-                    df = (
-                        df.drop(columns=["timestamp"])
-                        if "timestamp" in df.columns
-                        else df
-                    )
-                    df = (
-                        df.drop(columns=["number_probes"])
-                        if "number_probes" in df.columns
-                        else df
-                    )
+                    df = drop_classifier_score_meta_columns(df)
 
                     # Get the last row and find top prediction
                     last_row = df.iloc[-1]
@@ -396,7 +413,18 @@ class ClassificationSection(ReportSection):
                     )
 
                     # Determine confidence level based on classifier using centralized config
-                    confidence_status, status_color = get_confidence_status(name.lower(), confidence_value)
+                    classifier_key = {
+                        "Sturgeon": "sturgeon",
+                        "CrossNN": "nanodx",
+                        "PanCrossNN": "pannanodx",
+                        "Random Forest": "random_forest",
+                        "MARLIN": "marlin",
+                        "Lamprey (research)": "lamprey",
+                        "Tucan": "tucan",
+                    }.get(name, name.lower().replace(" ", "_"))
+                    confidence_status, status_color = get_confidence_status(
+                        classifier_key, confidence_value
+                    )
 
                     # Add to summary table with HTML-like color formatting
                     summary_data.append(
@@ -414,8 +442,10 @@ class ClassificationSection(ReportSection):
 
         # Add classification time series plots in 2x2 grid (4 per page)
         if plot_buffers:
-            plot_width = 3.25 * inch
-            plot_height = 2.25 * inch
+            # Keep the overview plots readable while leaving room for the
+            # detailed classifier tables to flow onto the same page.
+            plot_width = 3.0 * inch
+            plot_height = 1.9 * inch
             plots_per_row = 2
             # Pad to complete last row
             while len(plot_buffers) % plots_per_row != 0:
@@ -445,9 +475,17 @@ class ClassificationSection(ReportSection):
         from robin.classification_config import CLASSIFIER_CONFIDENCE_THRESHOLDS
         
         explanation_lines = ["Note: Classification confidence levels are defined as follows:"]
+        classifier_display_names = {
+            "nanodx": "CrossNN",
+            "pannanodx": "PanCrossNN",
+            "random_forest": "Random Forest",
+        }
         for classifier, thresholds in CLASSIFIER_CONFIDENCE_THRESHOLDS.items():
+            display_name = classifier_display_names.get(
+                classifier, classifier.replace("_", " ").title()
+            )
             explanation_lines.append(
-                f"- {classifier.title()}: High (>={thresholds['high']:.0f}%), "
+                f"- {display_name}: High (>={thresholds['high']:.0f}%), "
                 f"Medium (>={thresholds['medium']:.0f}%), Low (<{thresholds['medium']:.0f}%)"
             )
         explanation_lines.append(
@@ -502,8 +540,9 @@ class ClassificationSection(ReportSection):
         except Exception:
             pass
 
-        # Add detailed results for each classifier
-        self.elements.append(PageBreak())
+        # Add detailed results for each classifier. Do not force a new page:
+        # the compact overview plots and the first result rows can share the
+        # available frame, while long tables remain naturally splittable.
         self.elements.append(
             Paragraph(
                 "Detailed Classification Results", self.styles.styles["Heading2"]
@@ -526,16 +565,7 @@ class ClassificationSection(ReportSection):
 
                 if file_path and os.path.exists(file_path):
                     df = pd.read_csv(file_path)
-                    df = (
-                        df.drop(columns=["timestamp"])
-                        if "timestamp" in df.columns
-                        else df
-                    )
-                    df = (
-                        df.drop(columns=["number_probes"])
-                        if "number_probes" in df.columns
-                        else df
-                    )
+                    df = drop_classifier_score_meta_columns(df)
 
                     last_row = df.iloc[-1]
                     top_predictions = last_row.sort_values(ascending=False).head(10)

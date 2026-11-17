@@ -48,10 +48,10 @@ class ReportSection(ABC):
                     self.styles.COLORS["primary"],
                 ),  # Thicker header bottom line
                 # Spacing
-                ("TOPPADDING", (0, 0), (-1, -1), 4),  # Reduced padding
-                ("BOTTOMPADDING", (0, 0), (-1, -1), 4),  # Reduced padding
-                ("LEFTPADDING", (0, 0), (-1, -1), 4),  # Reduced padding
-                ("RIGHTPADDING", (0, 0), (-1, -1), 4),  # Reduced padding
+                ("TOPPADDING", (0, 0), (-1, -1), 2),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
+                ("LEFTPADDING", (0, 0), (-1, -1), 3),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 3),
                 # Alignment
                 (
                     "VALIGN",
@@ -199,6 +199,14 @@ class ReportSection(ABC):
         table = Table(formatted_data, colWidths=col_widths, repeatRows=repeat_rows)
         table.setStyle(self.MODERN_TABLE_STYLE)
         return table
+
+    def col_widths_for_page(self, relative_weights) -> list[float]:
+        """Scale column weight ratios to the printable page width."""
+        total = float(sum(relative_weights))
+        if total <= 0:
+            raise ValueError("relative_weights must sum to a positive value")
+        page_width = self.report.doc.width
+        return [page_width * float(weight) / total for weight in relative_weights]
 
     def add_figure(self, img, caption=None, width=None, height=None):
         """Add a figure with optional caption."""

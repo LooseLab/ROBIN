@@ -1,0 +1,72 @@
+{
+  "FLT3": {
+    "chrom": "chr13",
+    "start": 28033887,
+    "end": 28034214,
+    "min_length": 3,
+    "min_frequency": 0.05,
+    "min_supporting_reads": 2,
+    "label": "ITD",
+    "transcript": "NM_004119.3"
+  },
+  "NPM1": {
+    "chrom": "chr5",
+    "start": 171410527,
+    "end": 171410565,
+    "min_length": 4,
+    "min_frequency": 0.05,
+    "min_supporting_reads": 2,
+    "label": "insertion",
+    "transcript": "NM_002520.7"
+  },
+  "UBTF": {
+    "chrom": "chr17",
+    "start": 44210792,
+    "end": 44210947,
+    "min_length": 3,
+    "min_frequency": 0.05,
+    "min_supporting_reads": 2,
+    "label": "ITD",
+    "transcript": "NM_014233.4"
+  },
+  "CEBPA": {
+    "chrom": "chr19",
+    "start": 33301338,
+    "end": 33301601,
+    "min_length": 3,
+    "min_frequency": 0.2,
+    "min_supporting_reads": 3,
+    "label": "insertion",
+    "transcript": "NM_004364.5"
+  },
+  "BCOR": {
+    "chrom": "chrX",
+    "start": 40051251,
+    "end": 40052400,
+    "min_length": 3,
+    "min_frequency": 0.05,
+    "min_supporting_reads": 2,
+    "label": "ITD",
+    "transcript": "NM_001123385.2"
+  },
+  "FGFR1": {
+    "chrom": "chr8",
+    "start": 38411143,
+    "end": 38418900,
+    "min_length": 50,
+    "min_frequency": 0.05,
+    "min_supporting_reads": 2,
+    "label": "ITD",
+    "transcript": "NM_023110.3"
+  },
+  "SMARCB1": {
+    "chrom": "chr22",
+    "start": 23800944,
+    "end": 23803422,
+    "min_length": 3,
+    "min_frequency": 0.05,
+    "min_supporting_reads": 2,
+    "label": "ITD",
+    "transcript": "NM_003073.5"
+  }
+}

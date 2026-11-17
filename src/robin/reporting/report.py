@@ -13,7 +13,13 @@ from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, PageBreak
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import inch
 from .styling.styles import ReportStyles
+from .components import metadata_table, section_heading
 from robin.gui import fonts
+from robin.build_info import get_git_commit
+from robin.utils.clinvar_manager import (
+    format_clinvar_version_label,
+    load_sample_clinvar_provenance,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -21,7 +27,21 @@ logger = logging.getLogger(__name__)
 class RobinReport:
     """Main class for generating ROBIN PDF reports."""
 
-    def __init__(self, filename, output, center: str, progress_callback=None, workflow_steps=None, sample_identifiers=None):
+    def __init__(
+        self,
+        filename,
+        output,
+        center: str,
+        progress_callback=None,
+        workflow_steps=None,
+        display_config=None,
+        viewer_role=None,
+        sample_identifiers=None,
+        generated_by=None,
+        generated_at=None,
+        cnv_summary_normalized=None,
+        plotting_preferences=None,
+    ):
         """Initialize the report generator.
 
         Args:
@@ -30,7 +50,16 @@ class RobinReport:
             center: Center ID running the analysis
             progress_callback: Optional callback function for progress updates
             workflow_steps: Optional list of workflow steps to determine which sections to include
+            display_config: Optional admin display configuration for section visibility
+            viewer_role: Role key used to resolve display settings ('user' or 'admin')
             sample_identifiers: Optional dict with first_name, last_name, dob, nhs_number for inclusion in report
+            generated_by: Optional username of the person who triggered report generation
+            generated_at: Optional report generation timestamp (YYYY-MM-DD HH:MM:SS)
+            cnv_summary_normalized: When True, genome-wide CNV summary uses
+                log2(ploidy / expected copy number). When None (default), uses the admin
+                Plotting preference.
+            plotting_preferences: Optional pre-loaded plotting preferences (GUI).
+                When None, loads persisted admin preferences from the security store.
         """
         self.filename = filename
         self.output = output
@@ -38,7 +67,35 @@ class RobinReport:
         self.sample_id = os.path.basename(os.path.normpath(output))
         self.progress_callback = progress_callback
         self.workflow_steps = workflow_steps
+        self.display_config = display_config
+        from robin.gui.display_config import DEFAULT_VIEWER_ROLE
+
+        self.viewer_role = viewer_role or DEFAULT_VIEWER_ROLE
         self.sample_identifiers = sample_identifiers
+        self.generated_by = (str(generated_by).strip() if generated_by else None) or None
+        self.generated_at = (str(generated_at).strip() if generated_at else None) or None
+        from robin.gui.plotting_preferences import (
+            load_plotting_preferences,
+            resolve_cnv_summary_normalized,
+            resolve_plotting_reference_contig_scope,
+        )
+
+        # When omitted, load persisted admin defaults (not an empty in-memory config).
+        self.plotting_preferences = (
+            plotting_preferences
+            if plotting_preferences is not None
+            else load_plotting_preferences()
+        )
+        self.cnv_summary_normalized = resolve_cnv_summary_normalized(
+            cnv_summary_normalized,
+            plotting_preferences=self.plotting_preferences,
+        )
+        self.reference_contig_scope = resolve_plotting_reference_contig_scope(
+            self.plotting_preferences
+        )
+        self.robin_commit = get_git_commit()
+        self.clinvar_metadata = load_sample_clinvar_provenance(self.output)
+        self.clinvar_version = format_clinvar_version_label(self.clinvar_metadata)
 
         # Handle filename with None prefix
         if filename.startswith("None"):
@@ -70,10 +127,12 @@ class RobinReport:
         """Emit a progress update if callback is available."""
         if self.progress_callback:
             try:
+                from robin.gui.report_progress import normalize_report_progress
+
                 self.progress_callback({
                     'stage': stage,
                     'message': message,
-                    'progress': progress
+                    'progress': normalize_report_progress(progress),
                 })
             except Exception as e:
                 logger.error(f"Error emitting progress: {e}")
@@ -90,15 +149,48 @@ class RobinReport:
         return self.center
 
     def _create_document(self):
-        """Create the PDF document with enhanced M3 margins and settings."""
-        return SimpleDocTemplate(
+        """Create the PDF document with portrait and landscape page templates."""
+        from reportlab.platypus import Frame, PageTemplate
+        from reportlab.lib.pagesizes import landscape as rl_landscape
+
+        left = right = 1.0 * inch
+        top = 1.35 * inch
+        bottom = 1.0 * inch
+
+        doc = SimpleDocTemplate(
             self.filename,
             pagesize=A4,
-            rightMargin=1.0 * inch,  # Enhanced from 0.75 inch
-            leftMargin=1.0 * inch,  # Enhanced from 0.75 inch
-            topMargin=1.35 * inch,  # Keep existing for header compatibility
-            bottomMargin=1.0 * inch,  # Enhanced from 0.75 inch
+            rightMargin=right,
+            leftMargin=left,
+            topMargin=top,
+            bottomMargin=bottom,
         )
+
+        portrait_frame = Frame(
+            left,
+            bottom,
+            A4[0] - left - right,
+            A4[1] - top - bottom,
+            id="portrait",
+        )
+        land_w, land_h = rl_landscape(A4)
+        landscape_frame = Frame(
+            left,
+            bottom,
+            land_w - left - right,
+            land_h - top - bottom,
+            id="landscape",
+        )
+        # Replace SimpleDocTemplate's default template so NextPageTemplate can switch.
+        doc.pageTemplates = [
+            PageTemplate(id="portrait", frames=[portrait_frame], pagesize=A4),
+            PageTemplate(
+                id="landscape",
+                frames=[landscape_frame],
+                pagesize=rl_landscape(A4),
+            ),
+        ]
+        return doc
 
     def _initialize_sections(self):
         """Initialize all report sections."""
@@ -106,6 +198,7 @@ class RobinReport:
         from .sections.classification import ClassificationSection
         from .sections.cnv import CNVSection
         from .sections.fusion import FusionSection
+        from .sections.itd import ItdSection
         from .sections.coverage import CoverageSection
         from .sections.mgmt import MGMTSection
         from .sections.mnpflex import MNPFlexSection
@@ -115,40 +208,79 @@ class RobinReport:
         
         # Import section visibility helpers
         try:
-            from robin.gui.config import is_section_enabled, get_enabled_classification_steps
+            from robin.gui.config import any_classification_visible, is_section_visible
         except ImportError:
-            # Fallback if gui.config is not available
-            is_section_enabled = lambda name, steps: True
-            get_enabled_classification_steps = lambda steps: {"sturgeon", "nanodx", "random_forest", "pannanodx"}
+            def is_section_visible(section_id, **kwargs):  # type: ignore[misc]
+                return True
 
-        # Build sections list conditionally based on workflow_steps
+            def any_classification_visible(**kwargs):  # type: ignore[misc]
+                return True
+
         sections = []
         
-        # Classification section (only if at least one classification step is enabled)
-        if not self.workflow_steps or get_enabled_classification_steps(self.workflow_steps):
+        if any_classification_visible(
+            self.workflow_steps,
+            self.display_config,
+            surface="report",
+            viewer_role=self.viewer_role,
+        ):
             sections.append(ClassificationSection(self))
         
-        # CNV section
-        if not self.workflow_steps or is_section_enabled("cnv", self.workflow_steps):
+        if is_section_visible(
+            "cnv",
+            workflow_steps=self.workflow_steps,
+            display_config=self.display_config,
+            surface="report",
+            viewer_role=self.viewer_role,
+        ):
             sections.append(CNVSection(self))
         
-        # Variants section (always included if available)
         sections.append(VariantsSection(self))
         
-        # Fusion section
-        if not self.workflow_steps or is_section_enabled("fusion", self.workflow_steps):
+        if is_section_visible(
+            "fusion",
+            workflow_steps=self.workflow_steps,
+            display_config=self.display_config,
+            surface="report",
+            viewer_role=self.viewer_role,
+        ):
             sections.append(FusionSection(self))
+
+        if is_section_visible(
+            "itd",
+            workflow_steps=self.workflow_steps,
+            display_config=self.display_config,
+            surface="report",
+            viewer_role=self.viewer_role,
+        ):
+            sections.append(ItdSection(self))
         
-        # Coverage section (target)
-        if not self.workflow_steps or is_section_enabled("target", self.workflow_steps):
+        if is_section_visible(
+            "target",
+            workflow_steps=self.workflow_steps,
+            display_config=self.display_config,
+            surface="report",
+            viewer_role=self.viewer_role,
+        ):
             sections.append(CoverageSection(self))
         
-        # MGMT section
-        if not self.workflow_steps or is_section_enabled("mgmt", self.workflow_steps):
+        if is_section_visible(
+            "mgmt",
+            workflow_steps=self.workflow_steps,
+            display_config=self.display_config,
+            surface="report",
+            viewer_role=self.viewer_role,
+        ):
             sections.append(MGMTSection(self))
 
-        # MNP-Flex section (include if results are present)
-        sections.append(MNPFlexSection(self))
+        if is_section_visible(
+            "mnpflex",
+            workflow_steps=self.workflow_steps,
+            display_config=self.display_config,
+            surface="report",
+            viewer_role=self.viewer_role,
+        ):
+            sections.append(MNPFlexSection(self))
         
         # Run data section (always included)
         sections.append(RunDataSection(self))
@@ -177,41 +309,46 @@ class RobinReport:
             logger.info("Starting report generation")
             self._emit_progress("initializing", "Initializing report generation...", 0.0)
 
-            # Add summary section header (Heading 1 level)
-            self.elements_summary.insert(
-                0,
-                Paragraph(
-                    f"Summary - {self.sample_id}", self.styles.styles["Heading1"]
-                ),
+            if not self.generated_at:
+                self.generated_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+            # Build the opening summary through shared components so its
+            # typography and metadata tables match the run-data section.
+            self.elements_summary[0:0] = section_heading(
+                f"Summary - {self.sample_id}", self.styles
             )
 
             # Build summary card; add sample identifiers when available
-            summary_lines = [
-                "ROBIN Analysis Report<br/>",
-                f"Sample ID: {self.sample_id}<br/>",
-            ]
+            summary_metadata = [("Sample ID", self.sample_id)]
             si = getattr(self, "sample_identifiers", None)
             if si:
                 if si.get("test_id"):
-                    summary_lines.append(f"Test ID: {si['test_id']}<br/>")
+                    summary_metadata.append(("Test ID", si["test_id"]))
                 if si.get("first_name"):
-                    summary_lines.append(f"First name: {si['first_name']}<br/>")
+                    summary_metadata.append(("First name", si["first_name"]))
                 if si.get("last_name"):
-                    summary_lines.append(f"Last name: {si['last_name']}<br/>")
+                    summary_metadata.append(("Last name", si["last_name"]))
                 if si.get("dob"):
-                    summary_lines.append(f"Date of birth: {si['dob']}<br/>")
+                    summary_metadata.append(("Date of birth", si["dob"]))
                 if si.get("nhs_number"):
-                    summary_lines.append(f"Hospital Number: {si['nhs_number']}<br/>")
-            summary_lines.extend([
-                f"Centre ID: {self.centreID if self.centreID else 'Not specified'}<br/>",
-                f"Report Type: {report_type.title()}<br/>",
-                f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+                    summary_metadata.append(("Hospital Number", si["nhs_number"]))
+                if si.get("notes"):
+                    summary_metadata.append(("Notes", si["notes"]))
+            summary_metadata.extend([
+                ("Centre ID", self.centreID if self.centreID else "Not specified"),
+                ("Report Type", report_type.title()),
+                ("Generated", self.generated_at),
             ])
-            summary_card_content = "\n            ".join(summary_lines)
-            self.elements_summary.insert(
-                1, Paragraph(summary_card_content, self.styles.styles["InfoCard"])
-            )
-            self.elements_summary.insert(2, Spacer(1, 8))
+            if self.generated_by:
+                summary_metadata.append(("Generated by", self.generated_by))
+            if self.robin_commit:
+                summary_metadata.append(("ROBIN commit", self.robin_commit))
+            if self.clinvar_metadata.get("file_date"):
+                summary_metadata.append(("ClinVar release", self.clinvar_metadata["file_date"]))
+            self.elements_summary[2:2] = [
+                metadata_table(summary_metadata, self.styles, title="ROBIN Analysis Report", width=self.doc.width),
+                Spacer(1, 8),
+            ]
 
             # Process each section
             total_sections = len(self.sections)
@@ -289,12 +426,41 @@ class RobinReport:
             self.doc.multiBuild(
                 final_elements,
                 canvasmaker=header_footer_canvas_factory(
-                    self.sample_id, self.centreID, self.styles, self.fonts_dir
+                    self.sample_id,
+                    self.centreID,
+                    self.styles,
+                    self.fonts_dir,
+                    generated_by=self.generated_by,
+                    generated_at=self.generated_at,
+                    robin_commit=self.robin_commit,
                 ),
             )
 
             logger.info(f"PDF created: {self.filename}")
             self._emit_progress("completed", "Report generation completed!", 1.0)
+
+            try:
+                metadata_path = os.path.join(
+                    self.output, f"{self.sample_id}_report_metadata.json"
+                )
+                with open(metadata_path, "w", encoding="utf-8") as fh:
+                    json.dump(
+                        {
+                            "sample_id": self.sample_id,
+                            "centre_id": self.centreID,
+                            "report_type": report_type,
+                            "generated_at": self.generated_at,
+                            "generated_by": self.generated_by,
+                            "robin_commit": self.robin_commit or None,
+                            "clinvar_release": self.clinvar_metadata.get("file_date") or None,
+                            "clinvar_sha256": self.clinvar_metadata.get("sha256") or None,
+                            "pdf_filename": os.path.basename(self.filename),
+                        },
+                        fh,
+                        indent=2,
+                    )
+            except Exception as ex:
+                logger.warning("Could not write report metadata JSON: %s", ex)
 
             # Add success message to report
             success_content = f"""
@@ -317,6 +483,11 @@ class RobinReport:
                         "sample_id": self.sample_id,
                         "centre_id": self.centreID,
                         "report_type": report_type,
+                        "generated_at": self.generated_at,
+                        "generated_by": self.generated_by,
+                        "robin_commit": self.robin_commit or None,
+                        "clinvar_release": self.clinvar_metadata.get("file_date") or None,
+                        "clinvar_sha256": self.clinvar_metadata.get("sha256") or None,
                         "files": [],
                     }
 
@@ -445,7 +616,13 @@ def create_pdf(
     export_zip=False,
     progress_callback=None,
     workflow_steps=None,
+    display_config=None,
+    viewer_role=None,
     sample_identifiers=None,
+    generated_by=None,
+    generated_at=None,
+    cnv_summary_normalized=None,
+    plotting_preferences=None,
 ):
     """Create a PDF report from ROBIN analysis results.
 
@@ -459,15 +636,33 @@ def create_pdf(
         export_zip: Whether to create ZIP archive
         progress_callback: Optional callback function for progress updates
         workflow_steps: Optional list of workflow steps to determine which sections to include
+        display_config: Optional admin display configuration for section visibility
+        viewer_role: Role key used to resolve display settings ('user' or 'admin')
         sample_identifiers: Optional dict with first_name, last_name, dob, nhs_number for report
+        generated_by: Optional username of the person who triggered report generation
+        generated_at: Optional report generation timestamp (YYYY-MM-DD HH:MM:SS)
+        cnv_summary_normalized: When True, genome-wide CNV summary uses
+            log2(ploidy / expected copy number). When None (default), uses the admin
+            Plotting preference.
+        plotting_preferences: Optional pre-loaded plotting preferences (GUI).
+            When None, loads persisted admin preferences from the security store.
 
     Returns:
         Path to the generated PDF file
     """
     report = RobinReport(
-        filename, output, center, progress_callback,
+        filename,
+        output,
+        center,
+        progress_callback,
         workflow_steps=workflow_steps,
+        display_config=display_config,
+        viewer_role=viewer_role,
         sample_identifiers=sample_identifiers,
+        generated_by=generated_by,
+        generated_at=generated_at,
+        cnv_summary_normalized=cnv_summary_normalized,
+        plotting_preferences=plotting_preferences,
     )
     return report.generate_report(
         report_type=report_type,

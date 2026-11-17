@@ -17,7 +17,7 @@ warnings.filterwarnings(
 )
 
 import asyncio
-import hashlib
+from contextlib import contextmanager
 import logging
 import queue
 import threading
@@ -26,6 +26,12 @@ from collections import deque
 import csv
 from datetime import datetime
 from robin.analysis.master_csv_manager import MasterCSVManager
+from robin.analysis.mnpflex_bed import find_parquet_file
+from robin.analysis.mnpflex_eligibility import (
+    DEFAULT_MNPFLEX_IDLE_SECONDS,
+    sample_ready_for_mnpflex_auto_run,
+    sample_ready_for_mnpflex_auto_run_from_dir,
+)
 
 from typing import Optional, Dict, Any, List, Set
 from pathlib import Path
@@ -39,13 +45,25 @@ import zipfile
 import json
 import pickle
 import getpass
+import uuid
 from urllib.parse import quote
 
 from robin.gui import theme, images
+from robin.gui.session import clear_auth_session_fields, is_authenticated_session
+
+from robin.build_info import get_git_commit
 
 from robin.gui.components.news_feed import NewsFeed
+from robin.security import (
+    AuditService,
+    AuthService,
+    get_consent_version,
+    SecurityStore,
+)
 
 from robin.reporting.report import create_pdf
+from robin.gui.client_notify import notify_connected_clients
+from robin.gui.config import resolve_viewer_role
 from robin.reporting.sections.disclaimer_text import EXTENDED_DISCLAIMER_TEXT
 
 
@@ -76,101 +94,66 @@ COMPLETION_JOB_PATTERNS: Dict[str, List[str]] = {
         "random_forest_results.csv",
         "random_forest_summary.csv",
     ],
+    "marlin": [
+        "marlin_scores.csv",
+        "MarlinBed.bed",
+    ],
+    "lamprey": [
+        "lamprey_scores.csv",
+    ],
+    "tucan": [
+        "tucan_scores.csv",
+    ],
+    "itd": [
+        "itd_events.csv",
+        "itd_summary.csv",
+    ],
 }
 
-# Manifest written when a sample ID is generated from Test ID / name / DOB (for matching sequencer data).
-SAMPLE_IDENTIFIER_MANIFEST_FILENAME = "sample_identifier_manifest.json"
+from robin.minknow.sample_id import (
+    SAMPLE_IDENTIFIER_MANIFEST_FILENAME,
+    build_sample_registration,
+    decrypt_identifier_manifest_field as _decrypt_identifier_manifest_field,
+    get_test_id_from_manifest as _get_test_id_from_manifest,
+    load_manifest_encrypted_fields as _load_manifest_encrypted_fields,
+    normalize_dob,
+    save_sample_identifier_manifest,
+    save_sample_registration,
+)
 
 
-def _get_test_id_from_manifest(sample_dir: Path) -> str:
-    """Read test_id from sample_identifier_manifest.json in the sample directory if present."""
-    manifest_path = sample_dir / SAMPLE_IDENTIFIER_MANIFEST_FILENAME
-    if not manifest_path.exists():
-        return ""
+@contextmanager
+def _sample_page_section_timer(page: str, sample_id: str, section: str):
+    """Log elapsed wall time while building one UI section at debug level."""
+    t0 = time.perf_counter()
     try:
-        with open(manifest_path, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        return str(data.get("test_id", "") or "").strip()
-    except Exception:
-        return ""
-
-# Salt for deriving encryption key from DOB (fixed so the same DOB always produces the same key).
-_IDENTIFIER_MANIFEST_KEY_SALT = b"robin_sample_manifest_v1"
-
-
-def _derive_key_from_dob(dob: str) -> bytes:
-    """Derive a Fernet key from the date of birth for encrypting manifest fields."""
-    import base64
-    from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
-    from cryptography.hazmat.primitives import hashes
-
-    kdf = PBKDF2HMAC(
-        algorithm=hashes.SHA256(),
-        length=32,
-        salt=_IDENTIFIER_MANIFEST_KEY_SALT,
-        iterations=100_000,
-    )
-    key_bytes = kdf.derive(dob.encode("utf-8"))
-    return base64.urlsafe_b64encode(key_bytes)
-
-
-def _encrypt_identifier_manifest_field(plaintext: str, dob: str) -> str:
-    """Encrypt a string using a key derived from DOB; returns base64-encoded ciphertext."""
-    from cryptography.fernet import Fernet
-
-    key = _derive_key_from_dob(dob)
-    f = Fernet(key)
-    ciphertext = f.encrypt(plaintext.encode("utf-8"))
-    return ciphertext.decode("ascii")
-
-
-def _decrypt_identifier_manifest_field(ciphertext_b64: str, dob: str) -> str:
-    """Decrypt a base64-encoded ciphertext using a key derived from DOB."""
-    from cryptography.fernet import Fernet
-
-    key = _derive_key_from_dob(dob)
-    f = Fernet(key)
-    plaintext = f.decrypt(ciphertext_b64.encode("ascii"))
-    return plaintext.decode("utf-8")
-
-
-def _load_manifest_encrypted_fields(sample_dir: Optional[Path]) -> Optional[Dict[str, str]]:
-    """Load encrypted first_name, last_name, dob, nhs_number (hospital number) from sample_identifier_manifest.json if present."""
-    if not sample_dir or not sample_dir.exists():
-        return None
-    manifest_path = sample_dir / SAMPLE_IDENTIFIER_MANIFEST_FILENAME
-    if not manifest_path.exists():
-        return None
-    try:
-        with open(manifest_path, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        fn = data.get("first_name")
-        ln = data.get("last_name")
-        dob_enc = data.get("dob")
-        if fn and ln and dob_enc:
-            out: Dict[str, str] = {"first_name": fn, "last_name": ln, "dob": dob_enc}
-            nhs_enc = data.get("nhs_number")
-            if nhs_enc:
-                out["nhs_number"] = nhs_enc
-            return out
-    except Exception:
-        pass
-    return None
+        yield
+    finally:
+        elapsed = time.perf_counter() - t0
+        logging.debug(
+            "[SamplePage] page=%s sample=%s section=%s elapsed_s=%.3f",
+            page,
+            sample_id,
+            section,
+            elapsed,
+        )
 
 
 try:
-    from nicegui import ui, app
+    from nicegui import ui, app, background_tasks
 except ImportError:
     ui = None
     app = None
+    background_tasks = None
 
 try:
     from fastapi import Request
-    from fastapi.responses import RedirectResponse
+    from fastapi.responses import RedirectResponse, FileResponse
     from starlette.middleware.base import BaseHTTPMiddleware
 except ImportError:  # pragma: no cover
     Request = None
     RedirectResponse = None
+    FileResponse = None
     BaseHTTPMiddleware = object
 
 try:
@@ -189,6 +172,9 @@ def _get_gui_password_hash_path() -> Path:
     else:
         base = Path(os.environ.get("XDG_CONFIG_HOME", os.path.expanduser("~/.config")))
     return base / "robin" / "gui_password_hash"
+
+
+DEFAULT_ADMIN_USERNAME = "admin"
 
 
 def ensure_gui_password_set() -> bool:
@@ -254,11 +240,70 @@ def ensure_gui_password_set() -> bool:
     return True
 
 
-def set_gui_password_interactive() -> bool:
-    """Interactive prompt to set or replace the GUI password (e.g. from `robin password set`).
+def ensure_default_admin_password_set(auth_service: "AuthService") -> bool:
+    """Prompt for the initial default-admin password and create the account."""
+    if PasswordHasher is None:
+        logging.error(
+            "argon2-cffi is required for GUI password hashing. Install it with: pip install argon2-cffi"
+        )
+        return False
 
-    Uses getpass for all password input; nothing is echoed. If a password already exists,
-    asks whether to replace it (no existing password required). Returns True on success.
+    if auth_service.store.has_users():
+        return True
+
+    env_password = os.environ.get("ROBIN_ADMIN_PASSWORD", "").strip()
+    if env_password:
+        if not auth_service.bootstrap_default_admin(
+            env_password, username=DEFAULT_ADMIN_USERNAME
+        ):
+            logging.error("Could not create the default admin user from ROBIN_ADMIN_PASSWORD.")
+            return False
+        logging.info("Bootstrapped default admin user 'admin' from ROBIN_ADMIN_PASSWORD")
+        return True
+
+    legacy_path = _get_gui_password_hash_path()
+    if auth_service.bootstrap_admin_from_legacy_hash(legacy_path):
+        logging.info("Bootstrapped default admin user from legacy GUI password hash")
+        return True
+
+    if not sys.stdin.isatty():
+        print(
+            "No default admin password has been set. Run ROBIN from a terminal to "
+            "set the initial password for the 'admin' account (you will be prompted twice).",
+            file=sys.stderr,
+        )
+        return False
+
+    try:
+        pwd1 = getpass.getpass("Set default admin password: ")
+        pwd2 = getpass.getpass("Confirm default admin password: ")
+    except (EOFError, KeyboardInterrupt):
+        return False
+
+    if pwd1 != pwd2:
+        print("Passwords do not match.", file=sys.stderr)
+        return False
+    if not pwd1:
+        print("Password cannot be empty.", file=sys.stderr)
+        return False
+
+    if not auth_service.bootstrap_default_admin("".join(pwd1), username=DEFAULT_ADMIN_USERNAME):
+        logging.error("Could not create the default admin user.")
+        return False
+    logging.info("Bootstrapped default admin user 'admin'")
+    return True
+
+
+def set_default_admin_password_interactive(
+    auth_service: "AuthService",
+    *,
+    username: str = DEFAULT_ADMIN_USERNAME,
+) -> bool:
+    """Interactive prompt to set or replace the default admin GUI password.
+
+    Uses getpass for all password input; nothing is echoed. Creates the initial
+    ``admin`` account when no users exist, or replaces that user's password when
+    requested. Returns True on success.
     """
     if PasswordHasher is None:
         print(
@@ -287,26 +332,46 @@ def set_gui_password_interactive() -> bool:
         else:
             print(message)
 
-    path = _get_gui_password_hash_path()
-    hasher = PasswordHasher()
+    username = str(username or "").strip()
+    if not username:
+        _echo("Username cannot be empty.", style="bold red")
+        return False
 
-    if path.exists():
+    store = auth_service.store
+    existing = store.get_user_by_username(username)
+    if existing is None and store.has_users():
+        _echo(
+            f"No user '{username}' found. Use 'robin users set-password <username>' instead.",
+            style="bold red",
+        )
+        return False
+
+    if existing is not None:
         try:
             if rich_confirm is not None:
                 replace = rich_confirm.ask(
-                    "A password is already set. Replace it?", default=False
+                    f"Replace password for user '{username}'?", default=False
                 )
             else:
-                reply = input("A password is already set. Replace it? [y/N]: ").strip().lower()
+                reply = (
+                    input(f"Replace password for user '{username}'? [y/N]: ")
+                    .strip()
+                    .lower()
+                )
                 replace = reply in ("y", "yes")
         except (EOFError, KeyboardInterrupt):
             return False
         if not replace:
             return False
 
+    first_time = existing is None
     try:
-        pwd1 = getpass.getpass("New GUI password: ")
-        pwd2 = getpass.getpass("Confirm new GUI password: ")
+        if first_time:
+            pwd1 = getpass.getpass("Set default admin password: ")
+            pwd2 = getpass.getpass("Confirm default admin password: ")
+        else:
+            pwd1 = getpass.getpass("New admin password: ")
+            pwd2 = getpass.getpass("Confirm new admin password: ")
     except (EOFError, KeyboardInterrupt):
         return False
 
@@ -317,14 +382,25 @@ def set_gui_password_interactive() -> bool:
         _echo("Password cannot be empty.", style="bold red")
         return False
 
-    try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(hasher.hash(pwd1), encoding="utf-8")
-    except OSError as e:
-        _echo(f"Could not write password file: {e}", style="bold red")
+    if first_time:
+        if not auth_service.bootstrap_default_admin(pwd1, username=username):
+            _echo("Could not create the default admin user.", style="bold red")
+            return False
+        _echo(
+            f"Default admin user '{username}' created successfully.",
+            style="bold green",
+        )
+        return True
+
+    if not store.set_user_password_hash(
+        username,
+        auth_service.hash_password(pwd1),
+        must_change_password=False,
+    ):
+        _echo(f"Could not update password for user '{username}'.", style="bold red")
         return False
 
-    _echo("GUI password updated successfully.", style="bold green")
+    _echo(f"Password updated for user '{username}'.", style="bold green")
     return True
 
 
@@ -357,7 +433,7 @@ class SampleRecord:
 
     sample_id: str
     test_id: str = ""  # From sample_identifier_manifest.json if present; else empty
-    origin: str = "Live"  # Live, Pre-existing, or Complete
+    origin: str = "Live"  # Live, Pre-existing, Complete, or Interrupted
     run_start: str = ""
     device: str = ""
     flowcell: str = ""
@@ -366,6 +442,7 @@ class SampleRecord:
     total_jobs: int = 0
     completed_jobs: int = 0
     failed_jobs: int = 0
+    unfinished_jobs: int = 0  # In-flight jobs abandoned when ROBIN restarted
     job_types: str = ""
     last_seen: str = ""  # Formatted timestamp string
     _last_seen_raw: float = 0.0  # Raw timestamp for sorting
@@ -373,7 +450,7 @@ class SampleRecord:
     _file_mtime: float = 0.0  # master.csv modification time
     files_seen: int = 0  # Total files seen/processed
     files_processed: int = 0  # Files completely processed through all analysis steps
-    
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for table rows."""
         return {
@@ -388,6 +465,7 @@ class SampleRecord:
             "total_jobs": self.total_jobs,
             "completed_jobs": self.completed_jobs,
             "failed_jobs": self.failed_jobs,
+            "unfinished_jobs": self.unfinished_jobs,
             "job_types": self.job_types,
             "last_seen": self.last_seen,
             "files_seen": self.files_seen,
@@ -408,23 +486,36 @@ class GUILauncher:
         self.is_running = False
         self.workflow_runner = None
         self.workflow_steps = []
+        self.display_config = None
+        self.plotting_preferences = None
         self.monitored_directory = ""
         self.reload = reload
         self.center = None  # Center ID for the analysis
+        self.workflow_toml_path: Optional[Path] = None
+        self._minknow_workflow_config = None
         self._auth_middleware_registered = False
-        self._unrestricted_page_routes = {"/login"}
+        # /robin_dark_mode: session cookie for theme (must work on /login before auth).
+        self._unrestricted_page_routes = {"/login", "/robin_dark_mode"}
         self._password_hash: Optional[str] = None  # cached after first read
+        self.security_store = SecurityStore()
+        self.auth_service = AuthService(self.security_store)
+        self.audit_service = AuditService(self.security_store)
+        self.consent_version = get_consent_version()
+        self.display_config = self._load_display_config()
+        self.plotting_preferences = self._load_plotting_preferences()
 
         # Sample status transition timeout (in seconds)
         # Change to 60 for testing (1 minute), 3600 for production (60 minutes)
-        self.completion_timeout_seconds = 60  # Set to 3600 for production
-        
+        self.completion_timeout_seconds = DEFAULT_MNPFLEX_IDLE_SECONDS
+        # In-flight job counts and Live origin from before this timestamp belong
+        # to a previous process. See _settle_runs_interrupted_by_restart.
+        self._session_started_at: float = time.time()
+
         # Message queue for non-blocking communication
         self.update_queue = queue.PriorityQueue()
         self.gui_ready = threading.Event()
         self.shutdown_event = threading.Event()
 
-        self.news_feed = None
         # GUI update thread
         self.update_thread = (
             None  # not used anymore; updates processed on UI thread via timer
@@ -435,7 +526,7 @@ class GUILauncher:
         self.total_updates_processed = 0
         # Monotonic tiebreaker for priority queue to avoid tuple comparison of GUIUpdate
         self._update_seq: int = 0
-        
+
         # Adaptive throttling and update coalescing
         self._last_update_times: Dict[UpdateType, float] = {}
         self._last_queue_size_logged: int = 0
@@ -444,7 +535,7 @@ class GUILauncher:
         # Runtime state
         self._start_time: Optional[float] = None
         self._is_running: bool = False
-        
+
         # Track which samples have had target.bam finalization triggered
         self._finalized_samples: set = set()
 
@@ -459,17 +550,19 @@ class GUILauncher:
         self._last_samples_rows: List[Dict[str, Any]] = []
         self._current_sample_id: Optional[str] = None
         self._selected_sample_id: Optional[str] = None
+        self._selected_sample_ids: set[str] = set()
         self._known_sample_ids: set[str] = set()
         self._preexisting_sample_ids: set[str] = set()
         self._preexisting_scanned: bool = False
         self._pending_samples_data: Optional[Dict[str, Any]] = None
-        
+
         # Caching for samples data
         self._last_cache_time: float = 0.0
         self._cache_duration: float = 30.0  # Cache for 30 seconds
-        
+
         # Master record system - centralized source of truth for samples
         self._samples_master_record: Dict[str, SampleRecord] = {}
+        self._samples_pending_removal: set[str] = set()
         # Per-GUI-process snapshot of on-disk totals from master.csv at first use per sample.
         # Coordinator stats are session-only; merged display = baseline + session counters.
         self._samples_job_baseline: Dict[str, Dict[str, int]] = {}
@@ -491,14 +584,68 @@ class GUILauncher:
         self._mgmt_state: Dict[str, Dict[str, Any]] = {}
         # Coverage per-sample cache (file mtimes, computed metrics)
         self._coverage_state: Dict[str, Dict[str, Any]] = {}
-        
+
         # Progress notification event
         from nicegui import Event
         self.progress_notification_event = Event[Dict[str, Any]]()
         # CNV per-sample cache
         self._cnv_state: Dict[str, Dict[str, Any]] = {}
+        self._component_state_max_samples = 24
         # Cache last seen queue status so we can populate immediately on page creation
         self._last_queue_status: Dict[str, Any] = {}
+
+    @property
+    def minknow_gui_enabled(self) -> bool:
+        """True when MinKNOW is configured and the optional API is installed."""
+        if self._minknow_workflow_config is None:
+            return False
+        from robin.minknow._deps import minknow_api_available
+
+        return minknow_api_available()
+
+    @property
+    def minknow_gui_configured(self) -> bool:
+        """True when MinKNOW was configured via workflow TOML or env at launch."""
+        return self._minknow_workflow_config is not None
+
+    @property
+    def minknow_workflow_config(self):
+        """Resolved ``[minknow]`` settings for the GUI, if configured."""
+        return self._minknow_workflow_config
+
+    @property
+    def batman_mode(self) -> bool:
+        """True when readfish adaptive sampling with live target updates is configured."""
+        from robin.readfish.batman import is_batman_workflow_config
+
+        return is_batman_workflow_config(self._minknow_workflow_config)
+
+    def _get_selected_sample_ids(self) -> set[str]:
+        """Return per-client export selections, with instance fallback for non-UI contexts."""
+        fallback = set(getattr(self, "_selected_sample_ids", set()) or set())
+        if app is None:
+            return fallback
+        try:
+            raw = app.storage.client.get("_selected_sample_ids", [])
+            if isinstance(raw, (list, tuple, set)):
+                selected = {str(item) for item in raw if str(item)}
+            else:
+                selected = set()
+            self._selected_sample_ids = set(selected)
+            return selected
+        except Exception:
+            return fallback
+
+    def _set_selected_sample_ids(self, selected_ids: set[str]) -> set[str]:
+        """Persist per-client export selections."""
+        normalized = {str(item) for item in selected_ids if str(item)}
+        self._selected_sample_ids = set(normalized)
+        if app is not None:
+            try:
+                app.storage.client["_selected_sample_ids"] = sorted(normalized)
+            except Exception:
+                pass
+        return normalized
 
     def _is_authenticated(self) -> bool:
         """Return True when the current browser session is authenticated for this server run.
@@ -506,13 +653,256 @@ class GUILauncher:
         Requires both authenticated flag and matching _auth_generation so that persisted
         user storage from a previous server run (or before a password reset) is invalid.
         """
+        return is_authenticated_session()
+
+    def _get_request_context(self) -> Dict[str, str]:
         if not app:
+            return {"ip": "", "user_agent": "", "session_id": "", "request_id": ""}
+        try:
+            return {
+                "ip": str(app.storage.user.get("_request_ip", "") or ""),
+                "user_agent": str(app.storage.user.get("_request_user_agent", "") or ""),
+                "session_id": str(app.storage.user.get("_session_id", "") or ""),
+                "request_id": str(app.storage.user.get("_request_id", "") or ""),
+            }
+        except Exception:
+            return {"ip": "", "user_agent": "", "session_id": "", "request_id": ""}
+
+    def _get_current_user_id(self) -> Optional[int]:
+        if not is_authenticated_session():
+            return None
+        if not app:
+            return None
+        try:
+            raw = app.storage.user.get("user_id")
+            if raw is None:
+                return None
+            return int(raw)
+        except Exception:
+            return None
+
+    def _get_current_username(self) -> Optional[str]:
+        if not is_authenticated_session():
+            return None
+        if not app:
+            return None
+        try:
+            username = app.storage.user.get("username")
+            if username:
+                return str(username).strip()
+        except Exception:
+            pass
+        return None
+
+    def _report_generation_metadata(self) -> Dict[str, str]:
+        return {
+            "generated_by": self._get_current_username() or "",
+            "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "robin_commit": get_git_commit(),
+        }
+
+    def _is_current_user_admin(self) -> bool:
+        """Return True when the signed-in user has the admin role."""
+        user_id = self._get_current_user_id()
+        if user_id is None:
             return False
-        gen = app.storage.general.get("_auth_generation")
-        return bool(
-            app.storage.user.get("authenticated", False)
-            and gen is not None
-            and app.storage.user.get("_auth_generation") == gen
+        try:
+            if not self.security_store.user_has_role(user_id, "admin"):
+                return False
+            user = self.security_store.get_user_by_id(user_id)
+            return bool(user and user.is_active)
+        except Exception:
+            return False
+
+    def _render_admin_only_denied_page(
+        self,
+        *,
+        navtitle: str,
+        smalltitle: str,
+    ) -> None:
+        """Render a standard access-denied page for admin-only routes."""
+        with theme.frame(
+            navtitle,
+            smalltitle=smalltitle,
+            batphone=self.batman_mode,
+            center=self.center,
+            setup_notifications=self._setup_notification_system,
+        ):
+            with ui.column().classes("w-full max-w-lg mx-auto p-4 gap-3"):
+                ui.label("Access denied").classes(
+                    "classification-insight-heading text-headline-small"
+                )
+                ui.label(
+                    "This page is available to admin users only."
+                ).classes("classification-insight-foot")
+                ui.button(
+                    "Back to home",
+                    on_click=lambda: ui.navigate.to("/"),
+                    icon="home",
+                ).props("color=primary no-caps")
+
+    def _current_user_has_training(self) -> bool:
+        from robin.security.user_approvals import TRAINING_RECEIVED_KEY, user_has_approval
+
+        return user_has_approval(
+            self.security_store, self._get_current_user_id(), TRAINING_RECEIVED_KEY
+        )
+
+    def _current_user_can_export(self) -> bool:
+        from robin.security.user_approvals import REPORT_EXPORT_KEY, user_has_approval
+
+        return user_has_approval(
+            self.security_store, self._get_current_user_id(), REPORT_EXPORT_KEY
+        )
+
+    def _current_user_can_remote_control_minknow(self) -> bool:
+        from robin.security.user_approvals import (
+            MINKNOW_REMOTE_CONTROL_KEY,
+            user_has_approval,
+        )
+
+        return user_has_approval(
+            self.security_store,
+            self._get_current_user_id(),
+            MINKNOW_REMOTE_CONTROL_KEY,
+        )
+
+    def minknow_gui_accessible(self) -> bool:
+        """MinKNOW is configured and the signed-in user may use remote control."""
+        return self.minknow_gui_enabled and self._current_user_can_remote_control_minknow()
+
+    def _notify_export_denied(self) -> None:
+        from robin.security.user_approvals import EXPORT_DENIED_MESSAGE
+
+        ui.notify(EXPORT_DENIED_MESSAGE, type="warning")
+
+    def _require_export_or_notify(self) -> bool:
+        if self._current_user_can_export():
+            return True
+        self._notify_export_denied()
+        return False
+
+    def _render_training_required_page(
+        self,
+        *,
+        navtitle: str = "R.O.B.I.N",
+        smalltitle: str = "Training required",
+    ) -> None:
+        from robin.security.user_approvals import TRAINING_REQUIRED_MESSAGE
+
+        with theme.frame(
+            navtitle,
+            smalltitle=smalltitle,
+            batphone=self.batman_mode,
+            center=self.center,
+            setup_notifications=self._setup_notification_system,
+        ):
+            with ui.column().classes("w-full max-w-lg mx-auto p-4 gap-3"):
+                ui.label("Training approval required").classes(
+                    "classification-insight-heading text-headline-small"
+                )
+                ui.label(TRAINING_REQUIRED_MESSAGE).classes("classification-insight-foot")
+                ui.button(
+                    "Back to samples",
+                    on_click=lambda: ui.navigate.to("/live_data"),
+                    icon="view_list",
+                ).props("color=primary no-caps")
+
+    def _render_minknow_approval_required_page(self) -> None:
+        from robin.security.user_approvals import MINKNOW_REMOTE_CONTROL_DENIED_MESSAGE
+
+        with theme.frame(
+            "R.O.B.I.N - Sequencer (MinKNOW)",
+            smalltitle="Approval required",
+            batphone=self.batman_mode,
+            center=self.center,
+            setup_notifications=self._setup_notification_system,
+        ):
+            with ui.column().classes("w-full max-w-lg mx-auto p-4 gap-3"):
+                ui.label("MinKNOW remote control approval required").classes(
+                    "classification-insight-heading text-headline-small"
+                )
+                ui.label(MINKNOW_REMOTE_CONTROL_DENIED_MESSAGE).classes(
+                    "classification-insight-foot"
+                )
+                ui.button(
+                    "Back to samples",
+                    on_click=lambda: ui.navigate.to("/live_data"),
+                    icon="view_list",
+                ).props("color=primary no-caps")
+
+    def _open_sample_audit_dialog(self, sample_id: str) -> None:
+        from robin.gui.components.sample_audit import open_sample_audit_dialog
+
+        open_sample_audit_dialog(self, sample_id)
+
+    def _audit_log(
+        self,
+        *,
+        event_type: str,
+        result: str = "success",
+        user_id: Optional[int] = None,
+        target_type: str = "",
+        target_id: str = "",
+        details: Optional[Dict[str, Any]] = None,
+        error_code: str = "",
+    ) -> None:
+        ctx = self._get_request_context()
+        self.audit_service.log_event(
+            event_type=event_type,
+            result=result,
+            user_id=user_id,
+            target_type=target_type,
+            target_id=target_id,
+            details=details or {},
+            ip=ctx["ip"],
+            user_agent=ctx["user_agent"],
+            session_id=ctx["session_id"],
+            request_id=ctx["request_id"],
+            error_code=error_code,
+        )
+
+    def _audit_report_generated(
+        self,
+        *,
+        state: Dict[str, Any],
+        target_type: str = "sample",
+        target_id: str,
+        result: str = "success",
+        output_files: Optional[List[str]] = None,
+        generated_at: Optional[str] = None,
+        error_code: str = "",
+        error_message: str = "",
+        extra_details: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """Record report generation (PDF/CSV/TSV) in the audit trail."""
+        report_meta = self._report_generation_metadata()
+        details: Dict[str, Any] = {
+            "report_type": state.get("type", "detailed"),
+            "export_pdf": bool(state.get("export_pdf", True)),
+            "export_csv": bool(state.get("export_csv", False)),
+            "export_tsv": bool(state.get("export_tsv", False)),
+            "generated_by": report_meta["generated_by"],
+            "generated_at": generated_at or report_meta["generated_at"],
+            "robin_commit": report_meta.get("robin_commit") or None,
+            "include_sample_identifiers": bool(state.get("include_sample_ids")),
+        }
+        if output_files:
+            details["output_files"] = [
+                os.path.basename(path) for path in output_files if path
+            ]
+        if error_message:
+            details["error"] = error_message[:500]
+        if extra_details:
+            details.update(extra_details)
+        self._audit_log(
+            event_type="report.generated",
+            result=result,
+            user_id=self._get_current_user_id(),
+            target_type=target_type,
+            target_id=target_id,
+            details=details,
+            error_code=error_code,
         )
 
     def _register_auth_middleware(self) -> None:
@@ -529,36 +919,69 @@ class GUILauncher:
             pass
 
         unrestricted_page_routes = set(self._unrestricted_page_routes)
+        launcher = self
 
         @app.add_middleware
         class AuthMiddleware(BaseHTTPMiddleware):
             async def dispatch(self, request: Request, call_next):
-                # Store request host for theme (e.g. to show Quit only on localhost)
-                try:
-                    url = request.url
-                    host = getattr(url, "hostname", None)
-                    if not host and getattr(url, "host", None):
-                        host = str(url.host).split(":")[0]
-                    app.storage.user["_request_host"] = (host or "").strip()
-                except Exception:
-                    try:
-                        app.storage.user["_request_host"] = ""
-                    except Exception:
-                        pass
                 path = request.url.path
+                # Socket.IO / NiceGUI asset polls must not touch session storage.
+                # Mutating app.storage.user on every /_nicegui request (new
+                # _request_id, etc.) can break a long-lived Engine.IO session
+                # after SNP runs for many hours and surfaces as an ASGI
+                # ExceptionGroup in handle_request.
+                skip_session_touch = path.startswith("/_nicegui")
+                if not skip_session_touch:
+                    try:
+                        url = request.url
+                        host = getattr(url, "hostname", None)
+                        if not host and getattr(url, "host", None):
+                            host = str(url.host).split(":")[0]
+                        app.storage.user["_request_host"] = (host or "").strip()
+                        forwarded_for = request.headers.get("x-forwarded-for", "")
+                        real_ip = request.headers.get("x-real-ip", "")
+                        client_host = request.client.host if request.client else ""
+                        ip = (forwarded_for.split(",")[0].strip() if forwarded_for else "") or real_ip or client_host
+                        app.storage.user["_request_ip"] = ip
+                        app.storage.user["_request_user_agent"] = request.headers.get("user-agent", "")
+                        app.storage.user["_request_id"] = uuid.uuid4().hex
+                        if not app.storage.user.get("_session_id"):
+                            app.storage.user["_session_id"] = uuid.uuid4().hex
+                    except Exception:
+                        try:
+                            app.storage.user["_request_host"] = ""
+                            app.storage.user["_request_ip"] = ""
+                            app.storage.user["_request_user_agent"] = ""
+                            app.storage.user["_request_id"] = ""
+                        except Exception:
+                            pass
                 if (
-                    path.startswith("/_nicegui")
+                    skip_session_touch
                     or path in unrestricted_page_routes
                     or path.startswith("/api/v1/")
                 ):
                     return await call_next(request)
                 gen = app.storage.general.get("_auth_generation")
                 if not app.storage.user.get("authenticated", False) or gen is None or app.storage.user.get("_auth_generation") != gen:
+                    clear_auth_session_fields()
                     requested_path = path
                     if request.url.query:
                         requested_path = f"{requested_path}?{request.url.query}"
                     redirect_to = quote(requested_path, safe="/?=&")
                     return RedirectResponse(url=f"/login?redirect_to={redirect_to}")
+                user_id = app.storage.user.get("user_id")
+                if user_id is not None and path != "/change-password":
+                    try:
+                        if launcher.security_store.user_must_change_password(int(user_id)):
+                            requested_path = path
+                            if request.url.query:
+                                requested_path = f"{requested_path}?{request.url.query}"
+                            redirect_to = quote(requested_path, safe="/?=&")
+                            return RedirectResponse(
+                                url=f"/change-password?redirect_to={redirect_to}"
+                            )
+                    except Exception:
+                        pass
                 return await call_next(request)
 
         self._auth_middleware_registered = True
@@ -576,21 +999,92 @@ class GUILauncher:
         except OSError:
             return None
 
-    def _verify_password(self, candidate: str) -> bool:
-        """Verify the candidate password against the stored Argon2 hash."""
-        if not candidate or PasswordHasher is None:
+    def _verify_user_login(self, username: str, password: str) -> Optional[Dict[str, Any]]:
+        user = self.auth_service.verify_login(username, password)
+        if user is None:
+            return None
+        roles = self.security_store.get_user_roles(user.id)
+        return {
+            "user_id": user.id,
+            "username": user.username,
+            "roles": roles,
+            "must_change_password": user.must_change_password,
+        }
+
+    def _user_must_change_password(self) -> bool:
+        user_id = self._get_current_user_id()
+        if user_id is None:
             return False
-        stored = self._get_password_hash()
-        if not stored:
-            return False
-        try:
-            PasswordHasher().verify(stored, candidate)
+        return self.security_store.user_must_change_password(user_id)
+
+    def _complete_post_login_navigation(self, user_id: int, redirect_to: str) -> None:
+        """Send the user to password change, consent, or their target page after login."""
+        safe_target = (
+            redirect_to
+            if redirect_to and redirect_to not in ("/login", "/change-password")
+            else "/"
+        )
+        if self.security_store.user_must_change_password(user_id):
+            ui.navigate.to(f"/change-password?redirect_to={quote(safe_target, safe='/?=&')}")
+            return
+
+        has_consent = self.security_store.has_consent(user_id, self.consent_version)
+        if has_consent:
+            try:
+                app.storage.user["disclaimer_acknowledged"] = True
+            except Exception:
+                pass
+            ui.navigate.to(safe_target)
+            return
+
+        with ui.dialog().props("persistent") as consent_dialog, ui.card().classes(
+            "robin-dialog-surface p-4 md:p-5 min-w-[18rem] max-w-2xl"
+        ):
+            ui.label("Research use agreement").classes(
+                "classification-insight-heading text-headline-small q-mb-sm"
+            )
+            ui.label(EXTENDED_DISCLAIMER_TEXT).classes("classification-insight-foot q-mb-md")
+
+            def _accept_consent() -> None:
+                ctx = self._get_request_context()
+                self.security_store.record_consent(
+                    int(user_id),
+                    self.consent_version,
+                    ip=ctx["ip"],
+                    user_agent=ctx["user_agent"],
+                    session_id=ctx["session_id"],
+                )
+                self._audit_log(
+                    event_type="consent.accepted",
+                    user_id=int(user_id),
+                    target_type="consent",
+                    target_id=self.consent_version,
+                    details={"consent_version": self.consent_version},
+                )
+                try:
+                    app.storage.user["disclaimer_acknowledged"] = True
+                except Exception:
+                    pass
+                consent_dialog.close()
+                ui.navigate.to(safe_target)
+
+            ui.button("I agree", on_click=_accept_consent, icon="check_circle").props(
+                "color=primary no-caps"
+            )
+        consent_dialog.open()
+
+    def _bootstrap_security_from_legacy_password(self) -> bool:
+        """Backfill initial admin from legacy GUI password hash if needed."""
+        if self.security_store.has_users():
             return True
-        except (VerifyMismatchError, InvalidHashError):
-            return False
+        legacy_path = _get_gui_password_hash_path()
+        if self.auth_service.bootstrap_admin_from_legacy_hash(legacy_path):
+            logging.info("Bootstrapped default admin user from legacy GUI password hash")
+            return True
+        return False
 
     # ========== Master Record System Methods ==========
-    
+
     def _setup_master_record_cache(self) -> None:
         """Initialize cache file path when monitored_directory is known."""
         try:
@@ -608,10 +1102,10 @@ class GUILauncher:
         try:
             if not self._master_record_cache_file or not self._master_record_cache_file.exists():
                 return False
-            
+
             with open(self._master_record_cache_file, 'rb') as f:
                 cached_data = pickle.load(f)
-            
+
             if isinstance(cached_data, dict):
                 # Convert dicts back to SampleRecord objects
                 with self._samples_record_lock:
@@ -633,14 +1127,14 @@ class GUILauncher:
         try:
             if not self._master_record_cache_file:
                 return
-            
+
             with self._samples_record_lock:
                 # Convert SampleRecord objects to dicts for pickle
                 cache_data = {
                     sid: asdict(record)
                     for sid, record in self._samples_master_record.items()
                 }
-            
+
             # Save to temporary file first, then rename (atomic operation)
             temp_file = self._master_record_cache_file.with_suffix('.pkl.tmp')
             with open(temp_file, 'wb') as f:
@@ -649,6 +1143,83 @@ class GUILauncher:
             logging.debug(f"Saved master record cache ({len(cache_data)} samples)")
         except Exception as e:
             logging.debug(f"Error saving master record cache: {e}")
+
+    def _activity_is_from_this_session(self, last_seen: float) -> bool:
+        """True when ``last_seen`` was recorded after this process started."""
+        started = float(getattr(self, "_session_started_at", 0.0) or 0.0)
+        seen = float(last_seen or 0.0)
+        return seen >= started and seen > 0
+
+    def _apply_restart_settlement(self, record: SampleRecord) -> bool:
+        """Record previous-process in-flight jobs as unfinished. Returns True if changed."""
+        from robin.sample_lifecycle import settle_restarted_run
+
+        settled = settle_restarted_run(
+            origin=record.origin,
+            active_jobs=record.active_jobs,
+            pending_jobs=record.pending_jobs,
+            unfinished_jobs=record.unfinished_jobs,
+            last_seen=record._last_seen_raw,
+            session_started_at=float(getattr(self, "_session_started_at", 0.0) or 0.0),
+        )
+        if not settled.changed:
+            return False
+        record.origin = settled.origin
+        record.active_jobs = settled.active_jobs
+        record.pending_jobs = settled.pending_jobs
+        record.unfinished_jobs = settled.unfinished_jobs
+        if settled.last_seen != record._last_seen_raw:
+            record._last_seen_raw = settled.last_seen
+            if settled.last_seen > 0:
+                record.last_seen = time.strftime(
+                    "%Y-%m-%d %H:%M:%S", time.localtime(settled.last_seen)
+                )
+        record._dirty = True
+        return True
+
+    def _overview_persist_payload(self, record: SampleRecord) -> Dict[str, Any]:
+        return {
+            "active_jobs": int(record.active_jobs),
+            "pending_jobs": int(record.pending_jobs),
+            "total_jobs": int(record.total_jobs),
+            "completed_jobs": int(record.completed_jobs),
+            "failed_jobs": int(record.failed_jobs),
+            "unfinished_jobs": int(record.unfinished_jobs),
+            "job_types": record.job_types,
+            "last_seen": float(record._last_seen_raw),
+        }
+
+    def _settle_runs_interrupted_by_restart(self) -> None:
+        """A restarted process is not still running the previous session's jobs."""
+        if not self.monitored_directory:
+            return
+        settled_ids: List[str] = []
+        with self._samples_record_lock:
+            for record in self._samples_master_record.values():
+                if self._apply_restart_settlement(record):
+                    settled_ids.append(record.sample_id)
+        if not settled_ids:
+            return
+        try:
+            base = Path(self.monitored_directory)
+            if base.exists():
+                manager = MasterCSVManager(str(base))
+                with self._samples_record_lock:
+                    for sid in settled_ids:
+                        record = self._samples_master_record.get(sid)
+                        if record is None:
+                            continue
+                        manager.update_sample_overview(
+                            sid, self._overview_persist_payload(record)
+                        )
+        except Exception as e:
+            logging.debug(f"Error persisting interrupted-run state: {e}")
+        self._save_master_record_cache()
+        logging.info(
+            "Marked %d sample(s) interrupted by restart (unfinished jobs kept): %s",
+            len(settled_ids),
+            ", ".join(sorted(settled_ids)),
+        )
 
     def _ensure_job_baseline(self, sid: str) -> Dict[str, int]:
         """
@@ -695,10 +1266,46 @@ class GUILauncher:
             "pending_jobs": wp,
         }
 
+    def _prepare_sample_removal(self, sample_id: str) -> None:
+        """Block GUI rescans from rewriting a sample folder while delete/archive runs."""
+        with self._samples_record_lock:
+            self._samples_pending_removal.add(sample_id)
+            self._samples_master_record.pop(sample_id, None)
+        self._finalized_samples.discard(sample_id)
+        self._selected_sample_ids.discard(sample_id)
+        if self._selected_sample_id == sample_id:
+            self._selected_sample_id = None
+        if self._snp_analysis_running_sample == sample_id:
+            self._snp_analysis_running_sample = None
+        try:
+            from robin.gui.report_progress import progress_manager
+
+            progress_manager._remove_report(sample_id)
+        except Exception:
+            pass
+        self._save_master_record_cache()
+
+    def _finish_sample_removal(self, sample_id: str) -> None:
+        """Clear the delete/archive guard so background scans can resume."""
+        with self._samples_record_lock:
+            self._samples_pending_removal.discard(sample_id)
+
+    def _evict_sample_from_gui_state(self, sample_id: str) -> None:
+        """Remove a sample from in-memory GUI tracking after delete or archive."""
+        self._finish_sample_removal(sample_id)
+        try:
+            if hasattr(self, "samples_table"):
+                self._refresh_table_from_master()
+        except Exception:
+            pass
+
     def _is_target_bam_finalize_redundant(self, sample_id: str) -> bool:
         """
-        True when target.bam is already merged/indexed and no batch_*.bam remain.
-        In that case running finalize again only queues noise jobs and confuses the samples table.
+        True when target.bam is already indexed and nothing remains to flush/fold.
+
+        target.bam is now written incrementally during accumulation, so its
+        presence alone is not enough — leftover ``batch_*.bam`` files or pending
+        staging still need a finalize pass.
         """
         if not self.monitored_directory:
             return False
@@ -708,10 +1315,11 @@ class GUILauncher:
         if not (tb.exists() and tb.is_file() and bai.exists() and bai.is_file()):
             return False
         try:
-            batch_bams = list(sample_dir.glob("batch_*.bam"))
+            from robin.analysis.target_analysis import sample_needs_target_bam_finalize
+
+            return not sample_needs_target_bam_finalize(str(sample_dir))
         except Exception:
             return False
-        return len(batch_bams) == 0
 
     def _seed_finalized_samples_from_disk(self) -> None:
         """Populate _finalized_samples from disk so restarts do not re-trigger finalization."""
@@ -769,8 +1377,12 @@ class GUILauncher:
     def _background_scan_samples(self) -> None:
         """Schedule a background scan without blocking the UI thread."""
         try:
-            import asyncio
-            asyncio.create_task(self._background_scan_samples_async())
+            if background_tasks is None:
+                raise RuntimeError("NiceGUI background tasks unavailable")
+            background_tasks.create(
+                self._background_scan_samples_async(),
+                name="background-sample-scan",
+            )
         except RuntimeError:
             # Fallback if no event loop is available
             self._background_scan_samples_sync()
@@ -797,34 +1409,36 @@ class GUILauncher:
         try:
             if not self.monitored_directory:
                 return False
-            
+
             base = Path(self.monitored_directory)
             if not base.exists():
                 return False
-            
+
             # Scan all sample directories
             now_ts = time.time()
             updated_any = False
-            
+
             with self._samples_record_lock:
                 # Track which samples we've seen in this scan
                 seen_sample_ids = set()
-                
+
                 for sample_dir in base.iterdir():
                     if not sample_dir.is_dir():
                         continue
-                    
+
                     sid = sample_dir.name
+                    if sid in self._samples_pending_removal:
+                        continue
                     seen_sample_ids.add(sid)
                     master_csv = sample_dir / "master.csv"
-                    
+
                     if not master_csv.exists():
                         continue
-                    
+
                     try:
                         # Get file modification time
                         file_mtime = master_csv.stat().st_mtime
-                        
+
                         # Get or create record
                         record = self._samples_master_record.get(sid)
                         if record is None:
@@ -841,10 +1455,10 @@ class GUILauncher:
                             # File has changed - update record
                             record._dirty = True
                             updated_any = True
-                        
+
                         # Update file mtime
                         record._file_mtime = file_mtime
-                        
+
                         # Read master.csv for metadata
                         try:
                             with master_csv.open("r", newline="") as fh:
@@ -857,7 +1471,7 @@ class GUILauncher:
                                 )
                                 record.device = first_row.get("run_info_device", "") or ""
                                 record.flowcell = first_row.get("run_info_flow_cell", "") or ""
-                                
+
                                 # Update last_seen from saved value or use file mtime
                                 try:
                                     saved_last = float(
@@ -869,7 +1483,7 @@ class GUILauncher:
                                         record._last_seen_raw = file_mtime
                                 except Exception:
                                     record._last_seen_raw = file_mtime
-                                
+
                                 # Update job counts from persisted overview
                                 record.active_jobs = int(
                                     first_row.get("samples_overview_active_jobs", 0) or 0
@@ -886,19 +1500,25 @@ class GUILauncher:
                                 record.failed_jobs = int(
                                     first_row.get("samples_overview_failed_jobs", 0) or 0
                                 )
+                                record.unfinished_jobs = int(
+                                    first_row.get("samples_overview_unfinished_jobs", 0) or 0
+                                )
                                 record.job_types = str(
                                     first_row.get("samples_overview_job_types", "") or ""
                                 )
                         except Exception as e:
                             logging.debug(f"Error reading master.csv for {sid}: {e}")
-                        
+
                         # Update last_seen formatted string
                         record.last_seen = time.strftime(
                             "%Y-%m-%d %H:%M:%S", time.localtime(record._last_seen_raw)
                         )
                         # Load test_id from sample_identifier_manifest.json if present
                         record.test_id = _get_test_id_from_manifest(sample_dir)
-                        
+
+                        if self._apply_restart_settlement(record):
+                            updated_any = True
+
                         # Do not leave new records as default "Live" when this folder is already
                         # finished on disk — that would look like a Live→Complete transition and
                         # re-run target.bam finalization on every restart.
@@ -936,34 +1556,31 @@ class GUILauncher:
                         elif record.origin == "Pre-existing" and (now_ts - record._last_seen_raw) >= self.completion_timeout_seconds:
                             # Keep as Pre-existing if it was pre-existing and still inactive
                             pass
-                        elif record.origin == "Complete":
-                            # Reactivate if file was modified recently OR if there are active jobs
-                            if (now_ts - record._last_seen_raw) < self.completion_timeout_seconds or record.active_jobs > 0 or record.pending_jobs > 0:
+                        elif record.origin in ("Complete", "Interrupted"):
+                            # Only this process's activity can make a sample Live again.
+                            if self._activity_is_from_this_session(record._last_seen_raw) and (
+                                (now_ts - record._last_seen_raw) < self.completion_timeout_seconds
+                                or record.active_jobs > 0
+                                or record.pending_jobs > 0
+                            ):
                                 record.origin = "Live"
                                 record._dirty = True
-                        
+
                         # Save to master record
                         self._samples_master_record[sid] = record
-                        
+
                         # Persist overview to master.csv via MasterCSVManager
                         try:
                             manager = MasterCSVManager(str(base))
-                            persist_payload = {
-                                "active_jobs": int(record.active_jobs),
-                                "pending_jobs": int(record.pending_jobs),
-                                "total_jobs": int(record.total_jobs),
-                                "completed_jobs": int(record.completed_jobs),
-                                "failed_jobs": int(record.failed_jobs),
-                                "job_types": record.job_types,
-                                "last_seen": float(record._last_seen_raw),
-                            }
-                            manager.update_sample_overview(sid, persist_payload)
+                            manager.update_sample_overview(
+                                sid, self._overview_persist_payload(record)
+                            )
                         except Exception as e:
                             logging.debug(f"Error persisting overview for {sid}: {e}")
-                    
+
                     except Exception as e:
                         logging.debug(f"Error processing sample {sid}: {e}")
-                
+
                 # Remove samples that no longer exist
                 to_remove = set(self._samples_master_record.keys()) - seen_sample_ids
                 if to_remove:
@@ -971,13 +1588,13 @@ class GUILauncher:
                         del self._samples_master_record[sid]
                     updated_any = True
                     logging.debug(f"Removed {len(to_remove)} deleted samples from master record")
-            
+
             # Save cache if anything changed
             if updated_any:
                 self._save_master_record_cache()
-            
+
             return updated_any
-        
+
         except Exception as e:
             logging.error(f"Error in background sample scan: {e}")
             return False
@@ -988,21 +1605,21 @@ class GUILauncher:
         try:
             if not hasattr(self, "samples_table"):
                 return
-            
+
             # Get all records from master
             with self._samples_record_lock:
                 records = list(self._samples_master_record.values())
-            
+
             # Convert to row dicts
             rows = [record.to_dict() for record in records]
-            
+
             # Update cached rows
             self._last_samples_rows = rows
             self._last_cache_time = time.time()
-            
+
             # Apply filters and update table
             self._apply_samples_table_filters()
-            
+
         except Exception as e:
             logging.error(f"Error refreshing table from master: {e}")
 
@@ -1015,9 +1632,9 @@ class GUILauncher:
                     sid = s.get("sample_id", "") or "unknown"
                     if sid == "unknown":
                         continue
-                    
+
                     last_seen = float(s.get("last_seen", time.time()))
-                    
+
                     # Get or create record
                     record = self._samples_master_record.get(sid)
                     if record is None:
@@ -1031,7 +1648,7 @@ class GUILauncher:
                             record.origin = "Pre-existing"
                         else:
                             record.origin = "Live"
-                    
+
                     # Merge session-only coordinator stats with on-disk baseline (see _ensure_job_baseline)
                     merged = self._merge_workflow_sample_job_counts(sid, s)
                     record.active_jobs = merged["active_jobs"]
@@ -1039,18 +1656,18 @@ class GUILauncher:
                     record.total_jobs = merged["total_jobs"]
                     record.completed_jobs = merged["completed_jobs"]
                     record.failed_jobs = merged["failed_jobs"]
-                    
+
                     # Update file progress from job counts (same data source as other columns)
                     record.files_seen = record.total_jobs
                     record.files_processed = record.completed_jobs
-                    
+
                     # Union with persisted job types so restarts do not drop history
                     record.job_types = self._merge_job_types_with_persisted(sid, s)
                     # Load test_id from sample_identifier_manifest.json if present
                     if self.monitored_directory:
                         sample_dir = Path(self.monitored_directory) / sid
                         record.test_id = _get_test_id_from_manifest(sample_dir)
-                    
+
                     # Update last_seen if this is newer
                     if last_seen > record._last_seen_raw:
                         record._last_seen_raw = last_seen
@@ -1058,11 +1675,21 @@ class GUILauncher:
                             "%Y-%m-%d %H:%M:%S", time.localtime(last_seen)
                         )
                         record._dirty = True
-                    
+
                     # Mark as dirty to trigger UI update
                     record._dirty = True
+                    if self._activity_is_from_this_session(record._last_seen_raw) and record.origin in (
+                        "Complete",
+                        "Interrupted",
+                    ):
+                        if (
+                            record.active_jobs > 0
+                            or record.pending_jobs > 0
+                            or (time.time() - record._last_seen_raw) < self.completion_timeout_seconds
+                        ):
+                            record.origin = "Live"
                     self._samples_master_record[sid] = record
-                
+
                 # Persist updates to master.csv
                 try:
                     base = Path(self.monitored_directory) if self.monitored_directory else None
@@ -1070,24 +1697,17 @@ class GUILauncher:
                         manager = MasterCSVManager(str(base))
                         for record in self._samples_master_record.values():
                             if record._dirty:
-                                persist_payload = {
-                                    "active_jobs": int(record.active_jobs),
-                                    "pending_jobs": int(record.pending_jobs),
-                                    "total_jobs": int(record.total_jobs),
-                                    "completed_jobs": int(record.completed_jobs),
-                                    "failed_jobs": int(record.failed_jobs),
-                                    "job_types": record.job_types,
-                                    "last_seen": float(record._last_seen_raw),
-                                }
-                                manager.update_sample_overview(record.sample_id, persist_payload)
+                                manager.update_sample_overview(
+                                    record.sample_id, self._overview_persist_payload(record)
+                                )
                                 record._dirty = False
                 except Exception as e:
                     logging.debug(f"Error persisting workflow updates: {e}")
-            
+
             # Trigger UI refresh
             if hasattr(self, "samples_table"):
                 self._refresh_table_from_master()
-        
+
         except Exception as e:
             logging.error(f"Error updating master record from workflow: {e}")
 
@@ -1098,9 +1718,10 @@ class GUILauncher:
         monitored_directory: str = "",
         reload: bool = False,
         center: str = None,
+        workflow_toml: Optional[str] = None,
     ) -> bool:
         """Launch the GUI in a completely isolated background thread.
-        
+
         Note: When reload=True, the GUI must run in the main thread because
         signal handlers can only be set in the main thread. In this case,
         this method will block until the GUI is stopped.
@@ -1109,13 +1730,51 @@ class GUILauncher:
             logging.error("NiceGUI is not available")
             return False
 
-        if not ensure_gui_password_set():
-            logging.error("GUI password check failed. Cannot start GUI.")
-            return False
+        if not self.security_store.has_users():
+            if not ensure_default_admin_password_set(self.auth_service):
+                logging.error("Default admin password setup failed. Cannot start GUI.")
+                return False
 
         self.workflow_runner = workflow_runner
         self.workflow_steps = workflow_steps or []
+        self.display_config = self._load_display_config()
+        self.plotting_preferences = self._load_plotting_preferences()
         self.center = center
+        if workflow_toml:
+            try:
+                self.workflow_toml_path = Path(workflow_toml).expanduser().resolve()
+            except Exception:
+                self.workflow_toml_path = Path(workflow_toml).expanduser()
+        else:
+            self.workflow_toml_path = None
+
+        from robin.minknow.toml_config import resolve_minknow_gui_config
+
+        self._minknow_workflow_config = resolve_minknow_gui_config(
+            self.workflow_toml_path
+        )
+        if self._minknow_workflow_config is not None:
+            logging.info(
+                "MinKNOW GUI enabled (host=%s)",
+                self._minknow_workflow_config.settings.host,
+            )
+            if not self.minknow_gui_enabled:
+                logging.info(
+                    "MinKNOW GUI hidden: optional dependency minknow_api is not installed"
+                )
+        elif self.workflow_toml_path is not None:
+            logging.info(
+                "MinKNOW GUI disabled: no [minknow] section in %s",
+                self.workflow_toml_path,
+            )
+        else:
+            logging.info(
+                "MinKNOW GUI disabled: start with --toml containing [minknow], "
+                "or set ROBIN_WORKFLOW_TOML / MINKNOW_HOST"
+            )
+
+        if self.batman_mode:
+            logging.info("BATMAN mode enabled (readfish + live target updates)")
 
         # Store absolute monitored directory to avoid relative path issues
         try:
@@ -1124,7 +1783,7 @@ class GUILauncher:
             )
         except Exception:
             self.monitored_directory = monitored_directory
-        
+
         # Setup master record cache when directory is known
         if self.monitored_directory:
             self._setup_master_record_cache()
@@ -1133,6 +1792,8 @@ class GUILauncher:
                 logging.info("Loaded samples from cache - table will populate immediately")
             # Skip spurious target.bam finalization on restart when outputs already exist
             self._seed_finalized_samples_from_disk()
+            # Previous process's live runs and in-flight jobs are not still running.
+            self._settle_runs_interrupted_by_restart()
 
         try:
             # When reload is requested, we must run in the main thread
@@ -1158,7 +1819,7 @@ class GUILauncher:
                         "Run from main thread to enable reload."
                     )
                     self.reload = False
-            
+
             # Start GUI in completely isolated background thread (when reload is False)
             self.gui_thread = threading.Thread(
                 target=self._run_gui_worker, daemon=True, name="robin-GUI-Thread"
@@ -1195,7 +1856,7 @@ class GUILauncher:
             # Adaptive threshold: higher threshold for large workloads
             # Threshold increases based on queue size to prevent dropping updates during bursts
             threshold = 500 if queue_size < 200 else 1000
-            
+
             # Rate limiting: Skip low-priority updates if queue is getting too large
             if queue_size > threshold and priority < 5:
                 # Only log when queue size changes significantly to reduce log spam
@@ -1207,16 +1868,16 @@ class GUILauncher:
                     self._last_queue_size_logged = queue_size
                     self._last_log_time = current_time
                 return
-            
+
             # Update coalescing: Skip duplicate low-priority updates of the same type within 0.5 seconds
             # This prevents queue buildup from rapid duplicate updates
             last_time = self._last_update_times.get(update_type, 0)
             time_since_last = current_time - last_time
-            
+
             if priority < 5 and time_since_last < 0.5:
                 # Skip duplicate low-priority updates within coalescing window
                 return
-            
+
             # Create and enqueue the current update
             update = GUIUpdate(
                 update_type=update_type,
@@ -1224,7 +1885,7 @@ class GUILauncher:
                 data=data,
                 priority=priority,
             )
-            
+
             self._last_update_times[update_type] = current_time
 
             # Use negative priority so higher priority updates come first.
@@ -1233,7 +1894,7 @@ class GUILauncher:
             self._update_seq += 1
             self.update_queue.put((-priority, self._update_seq, update))
             self.total_updates_enqueued += 1
-            
+
             # Reduced logging: only log every 100th update or important updates
             if self.total_updates_enqueued % 100 == 0 or priority >= 8:
                 logging.debug(
@@ -1248,17 +1909,17 @@ class GUILauncher:
         """Process queued progress updates for report generation."""
         try:
             from robin.gui.report_progress import progress_manager
-            
+
             # Process updates in the UI context
             while not progress_manager.progress_queue.empty():
                 update = progress_manager.progress_queue.get_nowait()
                 self._handle_progress_update(update)
-                
+
         except queue.Empty:
             pass
         except Exception as e:
             logging.debug(f"Error processing progress queue: {e}")
-    
+
     def _setup_notification_system(self, container):
         """Set up the notification system with the provided container."""
         try:
@@ -1276,16 +1937,15 @@ class GUILauncher:
             message = data.get('message', '')
             notification_type = data.get('type', 'info')
             timeout = data.get('timeout', 5000)
-            
+
             # Create notification in the container
-            with container:
-                ui.notify(
-                    message,
-                    type=notification_type,
-                    timeout=timeout,
-                    position="top-right"
-                )
-                
+            notify_connected_clients(
+                message,
+                type=notification_type,
+                timeout=timeout,
+                position="top-right",
+            )
+
         except Exception as e:
             logging.error(f"Error showing notification in container: {e}")
 
@@ -1298,12 +1958,11 @@ class GUILauncher:
             notification_type = event_data.get('type', 'info')
             timeout = event_data.get('timeout', 5000)
 
-            # Show notification in the proper UI context
-            ui.notify(
+            notify_connected_clients(
                 message,
                 type=notification_type,
                 timeout=timeout,
-                position="top-right"
+                position="top-right",
             )
 
         except Exception as e:
@@ -1313,10 +1972,10 @@ class GUILauncher:
         """Handle a single progress update in the UI context."""
         try:
             from nicegui import ui
-            
+
             sample_id = update['sample_id']
             update_type = update['type']
-            
+
             if update_type == 'start':
                 # Emit event for initial notification
                 self.progress_notification_event.emit({
@@ -1325,18 +1984,18 @@ class GUILauncher:
                     'type': 'info',
                     'timeout': 3000  # 3 seconds
                 })
-                
+
                 logging.debug(f"Started report generation for {sample_id}")
-                
+
             elif update_type == 'update':
                 stage = update['stage']
                 message = update['message']
                 progress = update.get('progress')
-                
+
                 # Calculate progress percentage
                 progress_percent = int((progress or 0.0) * 100) if progress is not None else ""
                 progress_text = f" ({progress_percent}%)" if progress_percent else ""
-                
+
                 # Emit event for progress notification
                 self.progress_notification_event.emit({
                     'sample_id': sample_id,
@@ -1344,17 +2003,17 @@ class GUILauncher:
                     'type': 'info',
                     'timeout': 2000  # 2 seconds for progress updates
                 })
-                
+
                 logging.debug(f"Updated progress for {sample_id}: {stage} - {message}")
-                
+
             elif update_type == 'complete':
                 filename = update.get('filename')
-                
+
                 # Show completion notification
                 completion_message = f"[{sample_id}] Report generation completed"
                 if filename:
                     completion_message += f": {filename}"
-                
+
                 # Emit event for completion notification
                 self.progress_notification_event.emit({
                     'sample_id': sample_id,
@@ -1362,12 +2021,12 @@ class GUILauncher:
                     'type': 'positive',
                     'timeout': 5000
                 })
-                
+
                 logging.info(f"Completed report generation for {sample_id}")
-                
+
             elif update_type == 'error':
                 error_message = update['error_message']
-                
+
                 # Emit event for error notification
                 self.progress_notification_event.emit({
                     'sample_id': sample_id,
@@ -1375,27 +2034,27 @@ class GUILauncher:
                     'type': 'negative',
                     'timeout': 10000
                 })
-                
+
                 logging.error(f"Report generation failed for {sample_id}: {error_message}")
-                
+
         except Exception as e:
             logging.error(f"Error handling progress update: {e}")
 
     def _drain_updates_on_ui(self):
         """Drain queued updates and apply them on the UI thread (called by ui.timer).
-        
+
         Uses adaptive throttling: processes more updates when queue is large,
         fewer when queue is small. Batches UI updates for better performance.
         """
         if not self.gui_ready.is_set():
             return
-        
+
         processed_count = 0
         max_updates_per_cycle = 50  # Limit updates per cycle to prevent UI blocking
-        
+
         try:
             queue_size = self.update_queue.qsize()
-            
+
             # Adaptive processing: process more updates when queue is large
             if queue_size > 200:
                 max_updates_per_cycle = 100  # Process more aggressively when backlogged
@@ -1403,7 +2062,7 @@ class GUILauncher:
                 max_updates_per_cycle = 75
             elif queue_size < 20:
                 max_updates_per_cycle = 25  # Process fewer when queue is small
-            
+
             # Process updates in batch
             while processed_count < max_updates_per_cycle:
                 try:
@@ -1411,20 +2070,20 @@ class GUILauncher:
                     _, _, update = self.update_queue.get_nowait()
                 except queue.Empty:
                     break
-                
+
                 self._handle_update(update)
                 self.total_updates_processed += 1
                 processed_count += 1
-                
+
                 # Reduced logging: only log every 50th update or when queue size changes significantly
                 if self.total_updates_processed % 50 == 0:
                     logging.debug(
                         f"[GUI] Processed update #{self.total_updates_processed}: {update.update_type.value} (queue: {queue_size})"
                     )
-            
+
             # Note: Timer interval is fixed at 0.5s for consistent performance
             # Adaptive processing (max_updates_per_cycle) handles queue size variations
-                
+
         except Exception as e:
             logging.debug(f"[GUI] Error draining updates on UI: {e}")
         finally:
@@ -1602,11 +2261,11 @@ class GUILauncher:
                 # Combine analysis queues
                 analysis_running = sum(
                     data.get(q, {}).get("running", 0)
-                    for q in ["mgmt", "cnv", "target", "fusion"]
+                    for q in ["mgmt", "cnv", "target", "fusion", "itd"]
                 )
                 analysis_total = sum(
                     data.get(q, {}).get("total", 0)
-                    for q in ["mgmt", "cnv", "target", "fusion"]
+                    for q in ["mgmt", "cnv", "target", "fusion", "itd"]
                 )
                 self.analysis_status.set_text(f"{analysis_running}/{analysis_total}")
 
@@ -1697,18 +2356,18 @@ class GUILauncher:
         try:
             if not hasattr(self, "sample_files_progress_container") or not hasattr(self, "_last_samples_rows"):
                 return
-            
+
             rows = self._last_samples_rows or []
             total_files_seen = 0
             total_files_processed = 0
             sample_progress_data = []
-            
+
             # Calculate totals and collect per-sample data
             for row in rows:
                 files_seen = row.get("files_seen", 0) or 0
                 files_processed = row.get("files_processed", 0) or 0
                 sample_id = row.get("sample_id", "")
-                
+
                 if files_seen > 0:
                     total_files_seen += files_seen
                     total_files_processed += files_processed
@@ -1718,30 +2377,30 @@ class GUILauncher:
                         "files_processed": files_processed,
                         "progress": files_processed / files_seen if files_seen > 0 else 0.0
                     })
-            
+
             # Update overall progress
             if hasattr(self, "overall_files_progress") and hasattr(self, "overall_files_label"):
                 overall_progress = total_files_processed / total_files_seen if total_files_seen > 0 else 0.0
                 self.overall_files_progress.set_value(round(overall_progress, 2))
                 self.overall_files_label.set_text(f"{total_files_processed}/{total_files_seen} files processed")
-            
+
             # Update per-sample progress bars (limit to first 20 to avoid UI overload)
             if hasattr(self, "sample_files_progress_container"):
                 try:
                     # Clear existing content
                     self.sample_files_progress_container.clear()
-                    
+
                     if sample_progress_data:
                         # Sort by progress (lowest first) to show samples needing attention
                         sample_progress_data.sort(key=lambda x: x["progress"])
-                        
+
                         # Show up to 20 samples with most activity
                         for sample_info in sample_progress_data[:20]:
                             sample_id = sample_info["sample_id"]
                             progress = sample_info["progress"]
                             files_seen = sample_info["files_seen"]
                             files_processed = sample_info["files_processed"]
-                            
+
                             with self.sample_files_progress_container:
                                 with ui.row().classes(
                                     "w-full items-center gap-2 mb-1 min-w-0"
@@ -1766,7 +2425,7 @@ class GUILauncher:
                             ).classes("classification-insight-foot italic")
                 except Exception as e:
                     logging.debug(f"Error updating per-sample file progress: {e}")
-                            
+
         except Exception as e:
             logging.debug(f"Error updating file progress: {e}")
 
@@ -1795,13 +2454,22 @@ class GUILauncher:
         try:
             if ui is None:
                 return
-            
+
             message = data.get("message", "")
             title = data.get("title", "Warning")
             sample_id = data.get("sample_id", "")
             filename = data.get("filename", "")
             level = data.get("level", "warning")
-            
+
+            # Rollover writes many BAMs. One toast covers the problem; each
+            # skipped file is still written to the workflow log.
+            if title == "Missing Sample Name":
+                now = time.monotonic()
+                last_alert = float(getattr(self, "_missing_sample_alert_at", 0.0))
+                if now - last_alert < 60.0:
+                    return
+                self._missing_sample_alert_at = now
+
             # Build notification message
             if sample_id:
                 notification_msg = f"[{sample_id}] {message}"
@@ -1809,17 +2477,14 @@ class GUILauncher:
                 notification_msg = f"[{filename}] {message}"
             else:
                 notification_msg = message
-            
-            # Show dismissible notification
-            # NiceGUI notifications are dismissible by default with a close button
-            # timeout=0 makes it persistent until manually dismissed
-            ui.notify(
+
+            notify_connected_clients(
                 notification_msg,
                 type=level,
-                timeout=0,  # Persistent until manually dismissed (close button available)
+                timeout=8000,
                 position="top-right",
             )
-            
+
         except Exception as e:
             logging.debug(f"Error showing warning notification: {e}")
 
@@ -1841,6 +2506,27 @@ class GUILauncher:
             # Set thread name for identification
             threading.current_thread().name = "robin-GUI-Thread"
             self._register_auth_middleware()
+            theme.set_logout_callback(
+                lambda: self._audit_log(
+                    event_type="auth.logout",
+                    user_id=self._get_current_user_id(),
+                    target_type="session",
+                    target_id=str(app.storage.user.get("_session_id", "") or ""),
+                )
+            )
+
+            # Session cookie dark_mode (nicegui.io pattern): available on first HTML response so theme matches paint.
+            if app is not None:
+
+                @app.post("/robin_dark_mode")
+                async def _robin_dark_mode(request: Request):
+                    data = await request.json()
+                    v = data.get("value")
+                    app.storage.browser["dark_mode"] = bool(v)
+                    try:
+                        app.storage.user["dark_mode"] = bool(v)
+                    except Exception:
+                        pass
 
             @ui.page("/login")
             def login_page(redirect_to: str = "/"):
@@ -1849,24 +2535,59 @@ class GUILauncher:
                     safe_target = redirect_to if redirect_to and redirect_to != "/login" else "/"
                     return RedirectResponse(safe_target)
 
+                clear_auth_session_fields()
+
                 def try_login() -> None:
-                    if self._verify_password(password.value):
-                        app.storage.user.update({
+                    username_value = str(username.value or "").strip()
+                    login_result = self._verify_user_login(username_value, password.value)
+                    if login_result is None:
+                        self._audit_log(
+                            event_type="auth.login.failure",
+                            result="failure",
+                            target_type="user",
+                            target_id=username_value,
+                            details={"username": username_value},
+                            error_code="invalid_credentials",
+                        )
+                        ui.notify("Incorrect username or password", type="negative")
+                        return
+
+                    app.storage.user.update(
+                        {
                             "authenticated": True,
                             "_auth_generation": app.storage.general.get("_auth_generation"),
-                        })
-                        safe_target = (
-                            redirect_to if redirect_to and redirect_to != "/login" else "/"
-                        )
-                        ui.navigate.to(safe_target)
-                    else:
-                        ui.notify("Incorrect password", type="negative")
+                            "user_id": login_result["user_id"],
+                            "username": login_result["username"],
+                            "roles": login_result["roles"],
+                            "must_change_password": bool(
+                                login_result.get("must_change_password")
+                            ),
+                        }
+                    )
+                    self._audit_log(
+                        event_type="auth.login.success",
+                        user_id=int(login_result["user_id"]),
+                        target_type="user",
+                        target_id=str(login_result["username"]),
+                        details={
+                            "roles": login_result["roles"],
+                            "must_change_password": bool(
+                                login_result.get("must_change_password")
+                            ),
+                        },
+                    )
+
+                    safe_target = redirect_to if redirect_to and redirect_to != "/login" else "/"
+                    self._complete_post_login_navigation(
+                        int(login_result["user_id"]),
+                        safe_target,
+                    )
 
                 _setup_global_resources()
                 with theme.frame(
                     "<strong>R</strong>apid nanop<strong>O</strong>re <strong>B</strong>rain intraoperat<strong>I</strong>ve classificatio<strong>N</strong>",
                     smalltitle="<strong>R.O.B.I.N</strong>",
-                    batphone=False,
+                    batphone=self.batman_mode,
                     center=self.center,
                 ):
                     with ui.element("div").classes("w-full min-w-0").props(
@@ -1902,16 +2623,22 @@ class GUILauncher:
                                                 "shrink-0 text-center"
                                             )
                                         ui.label(
-                                            "Enter password to continue."
+                                            "Enter your username and password to continue."
                                         ).classes(
                                             "classification-insight-foot text-center"
+                                        )
+                                        username = (
+                                            ui.input("Username")
+                                            .props("autocomplete=username outlined dense")
+                                            .classes("w-full")
+                                            .on("keydown.enter", try_login)
                                         )
                                         password = (
                                             ui.input(
                                                 "Password",
                                             )
                                             .props(
-                                                "autocomplete=off outlined dense"
+                                                "autocomplete=current-password outlined dense"
                                             )
                                             .classes("w-full")
                                             .style("-webkit-text-security: disc;")
@@ -1922,14 +2649,34 @@ class GUILauncher:
                                             on_click=try_login,
                                             icon="login",
                                         ).props("color=primary no-caps").classes(
-                                            "w-full"
+                                            "robin-button robin-button--primary w-full"
                                         )
+
+            @ui.page("/change-password")
+            def change_password_page(redirect_to: str = "/", voluntary: str = ""):
+                """Force or voluntary password change for the signed-in user."""
+                _setup_global_resources()
+                if not self._is_authenticated():
+                    return RedirectResponse("/login")
+                from robin.gui.change_password import create_change_password_page
+
+                create_change_password_page(
+                    self,
+                    redirect_to=redirect_to,
+                    voluntary=voluntary.strip().lower() in ("1", "true", "yes"),
+                )
 
             # Create the main workflow monitor page
             @ui.page("/")
             def welcome_page():
                 """Welcome page at root route."""
                 _setup_global_resources()
+                self._audit_log(
+                    event_type="page.viewed",
+                    user_id=self._get_current_user_id(),
+                    target_type="page",
+                    target_id="/",
+                )
                 self._create_welcome_page()
 
             # Create the workflow monitoring page
@@ -1937,26 +2684,105 @@ class GUILauncher:
             def workflow_monitor():
                 """Workflow monitoring page under /robin route."""
                 _setup_global_resources()
+                if not self._is_current_user_admin():
+                    self._audit_log(
+                        event_type="admin.page.denied",
+                        result="failure",
+                        user_id=self._get_current_user_id(),
+                        target_type="page",
+                        target_id="/robin",
+                        error_code="not_admin",
+                    )
+                    self._render_admin_only_denied_page(
+                        navtitle="R.O.B.I.N - Workflow Monitor",
+                        smalltitle="Monitor",
+                    )
+                    return
+                self._audit_log(
+                    event_type="page.viewed",
+                    user_id=self._get_current_user_id(),
+                    target_type="page",
+                    target_id="/robin",
+                )
                 self._create_workflow_monitor()
 
+            # MinKNOW sequencer control (start/stop/monitor runs)
+            @ui.page("/minknow", response_timeout=60.0)
+            def minknow_control():
+                """Dedicated MinKNOW sequencer monitoring and run control page."""
+                _setup_global_resources()
+                if not self.minknow_gui_configured:
+                    self._render_minknow_not_configured_page()
+                    return
+                if not self.minknow_gui_enabled:
+                    self._render_minknow_unavailable_page()
+                    return
+                if not self._current_user_can_remote_control_minknow():
+                    self._audit_log(
+                        event_type="page.access.denied",
+                        result="failure",
+                        user_id=self._get_current_user_id(),
+                        target_type="page",
+                        target_id="/minknow",
+                        details={"reason": "minknow_remote_control_required"},
+                        error_code="minknow_remote_control_required",
+                    )
+                    self._render_minknow_approval_required_page()
+                    return
+                self._audit_log(
+                    event_type="page.viewed",
+                    user_id=self._get_current_user_id(),
+                    target_type="page",
+                    target_id="/minknow",
+                )
+                self._create_minknow_page()
+
             # Create the samples overview page
-            @ui.page("/live_data")
+            @ui.page("/live_data", response_timeout=60.0)
             def samples_overview():
                 """Samples overview page showing all tracked samples."""
                 _setup_global_resources()
+                self._audit_log(
+                    event_type="sample.list.viewed",
+                    user_id=self._get_current_user_id(),
+                    target_type="page",
+                    target_id="/live_data",
+                )
                 logging.info("[samples_overview] building page /live_data")
                 self._create_samples_overview()
 
             # Create individual sample detail pages
-            @ui.page("/live_data/{sample_id}")
+            @ui.page("/live_data/{sample_id}", response_timeout=60.0)
             def sample_detail(sample_id: str):
                 """Individual sample detail page."""
                 _setup_global_resources()
+                if not self._current_user_has_training():
+                    self._audit_log(
+                        event_type="sample.access.denied",
+                        result="failure",
+                        user_id=self._get_current_user_id(),
+                        target_type="sample",
+                        target_id=sample_id,
+                        details={"page": "detail", "reason": "training_required"},
+                        error_code="training_required",
+                    )
+                    self._render_training_required_page(
+                        navtitle=f"R.O.B.I.N - {sample_id}",
+                        smalltitle=sample_id,
+                    )
+                    return
+                self._audit_log(
+                    event_type="sample.viewed",
+                    user_id=self._get_current_user_id(),
+                    target_type="sample",
+                    target_id=sample_id,
+                    details={"page": "detail"},
+                )
 
                 # Clear cached state BEFORE creating the page so plots refresh on load
                 # This ensures all graphs load properly on each page visit
                 self._refresh_sample_plots(sample_id)
-                
+
                 # Add a page visit handler to refresh plots on reconnect
                 def on_page_visit():
                     """Handle page visit - refresh plots if needed."""
@@ -1979,10 +2805,32 @@ class GUILauncher:
                 self._create_sample_detail_page(sample_id)
 
             # Create sample details page
-            @ui.page("/live_data/{sample_id}/details")
+            @ui.page("/live_data/{sample_id}/details", response_timeout=60.0)
             def sample_details(sample_id: str):
                 """Sample details page with comprehensive information."""
                 _setup_global_resources()
+                if not self._current_user_has_training():
+                    self._audit_log(
+                        event_type="sample.access.denied",
+                        result="failure",
+                        user_id=self._get_current_user_id(),
+                        target_type="sample",
+                        target_id=sample_id,
+                        details={"page": "details", "reason": "training_required"},
+                        error_code="training_required",
+                    )
+                    self._render_training_required_page(
+                        navtitle=f"R.O.B.I.N - {sample_id}",
+                        smalltitle=sample_id,
+                    )
+                    return
+                self._audit_log(
+                    event_type="sample.viewed",
+                    user_id=self._get_current_user_id(),
+                    target_type="sample",
+                    target_id=sample_id,
+                    details={"page": "details"},
+                )
                 self._create_sample_details_page(sample_id)
 
             # Watched folders management page
@@ -1999,45 +2847,142 @@ class GUILauncher:
                 _setup_global_resources()
                 self._create_sample_id_generator_page()
 
+            @ui.page("/admin")
+            def admin_page():
+                """Administration: users and audit log (admin role required)."""
+                _setup_global_resources()
+                if not self._is_current_user_admin():
+                    self._audit_log(
+                        event_type="admin.page.denied",
+                        result="failure",
+                        user_id=self._get_current_user_id(),
+                        target_type="page",
+                        target_id="/admin",
+                        error_code="not_admin",
+                    )
+                    self._render_admin_only_denied_page(
+                        navtitle="R.O.B.I.N - Administration",
+                        smalltitle="Admin",
+                    )
+                    return
+                self._audit_log(
+                    event_type="admin.page.viewed",
+                    user_id=self._get_current_user_id(),
+                    target_type="page",
+                    target_id="/admin",
+                )
+                self._create_admin_page()
+
             # Download API endpoint
             @ui.page("/api/download/{sample_id}/{filename}")
             def download_file(sample_id: str, filename: str):
                 """Download a file from a sample directory."""
                 try:
+                    current_user_id = self._get_current_user_id()
+                    if not self._current_user_can_export():
+                        self._audit_log(
+                            event_type="report.exported",
+                            result="failure",
+                            user_id=current_user_id,
+                            target_type="sample",
+                            target_id=sample_id,
+                            details={"filename": filename},
+                            error_code="export_not_approved",
+                        )
+                        self._notify_export_denied()
+                        return
                     # Security: Only allow alphanumeric characters and common file extensions
                     import re
                     if not re.match(r'^[a-zA-Z0-9._-]+$', filename):
+                        self._audit_log(
+                            event_type="report.exported",
+                            result="failure",
+                            user_id=current_user_id,
+                            target_type="sample",
+                            target_id=sample_id,
+                            details={"filename": filename},
+                            error_code="invalid_filename",
+                        )
                         ui.notify("Invalid filename", type="error")
                         return
-                    
+
                     # Find the sample directory
                     base_dir = Path(self.monitored_directory) if self.monitored_directory else None
                     if not base_dir or not base_dir.exists():
+                        self._audit_log(
+                            event_type="report.exported",
+                            result="failure",
+                            user_id=current_user_id,
+                            target_type="sample",
+                            target_id=sample_id,
+                            details={"filename": filename},
+                            error_code="sample_directory_missing",
+                        )
                         ui.notify("Sample directory not found", type="error")
                         return
-                    
+
                     sample_dir = base_dir / sample_id
                     if not sample_dir.exists():
+                        self._audit_log(
+                            event_type="report.exported",
+                            result="failure",
+                            user_id=current_user_id,
+                            target_type="sample",
+                            target_id=sample_id,
+                            details={"filename": filename},
+                            error_code="sample_missing",
+                        )
                         ui.notify(f"Sample {sample_id} not found", type="error")
                         return
-                    
+
                     file_path = sample_dir / filename
                     if not file_path.exists() or not file_path.is_file():
+                        self._audit_log(
+                            event_type="report.exported",
+                            result="failure",
+                            user_id=current_user_id,
+                            target_type="sample",
+                            target_id=sample_id,
+                            details={"filename": filename},
+                            error_code="file_missing",
+                        )
                         ui.notify(f"File {filename} not found", type="error")
                         return
-                    
-                    # Read file content
-                    with open(file_path, 'rb') as f:
-                        content = f.read()
-                    
-                    # Use NiceGUI's download functionality
-                    ui.download(
-                        content,
-                        filename=filename,
-                        media_type='application/octet-stream'
+                    if FileResponse is None:
+                        self._audit_log(
+                            event_type="report.exported",
+                            result="failure",
+                            user_id=current_user_id,
+                            target_type="sample",
+                            target_id=sample_id,
+                            details={"filename": filename},
+                            error_code="endpoint_unavailable",
+                        )
+                        ui.notify("Download endpoint unavailable", type="error")
+                        return
+                    self._audit_log(
+                        event_type="report.exported",
+                        user_id=current_user_id,
+                        target_type="sample",
+                        target_id=sample_id,
+                        details={"filename": filename, "path": str(file_path)},
                     )
-                    
+                    return FileResponse(
+                        path=str(file_path),
+                        filename=filename,
+                        media_type="application/octet-stream",
+                    )
+
                 except Exception as e:
+                    self._audit_log(
+                        event_type="report.exported",
+                        result="failure",
+                        user_id=self._get_current_user_id(),
+                        target_type="sample",
+                        target_id=sample_id,
+                        details={"filename": filename},
+                        error_code="download_exception",
+                    )
                     ui.notify(f"Download failed: {e}", type="error")
 
             # Setup global CSS and static files - moved to a helper function
@@ -2070,7 +3015,7 @@ class GUILauncher:
                     # Faster drain rate: 0.5s to keep up with high-volume updates
                     # The _drain_updates_on_ui method adaptively processes more/fewer updates per cycle
                     app.timer(0.5, self._drain_updates_on_ui, active=True)
-                    
+
                     # Background master record scanner - scans folder periodically
                     # Runs every 10 seconds to keep master record up to date
                     # First scan happens immediately if cache was loaded, otherwise after 1 second
@@ -2082,7 +3027,7 @@ class GUILauncher:
                     )
                     # Subsequent scans every 10 seconds
                     app.timer(self._background_scan_interval, self._background_scan_samples, active=True)
-                    
+
                     # If cache was not loaded, do initial preexisting scan after GUI is ready
                     if not self._samples_master_record:
                         app.timer(
@@ -2090,10 +3035,10 @@ class GUILauncher:
                             lambda: self._background_scan_samples(),  # Initial scan
                             once=True,
                         )
-                    
+
                     # Process progress queue for report generation
                     app.timer(0.1, self._process_progress_queue, active=True)
-                    
+
                 except Exception:
                     pass
 
@@ -2106,18 +3051,18 @@ class GUILauncher:
             except Exception as e:
                 logging.error(f"Error locating favicon: {str(e)}")
                 iconfile = None
-            
+
             # Setup global timers once when the app starts
             _setup_global_timers()
-            
+
             try:
                 from robin_native_api import attach_native_api
                 attach_native_api(app, self)
             except Exception as e:
                 logging.warning("Native API not mounted: %s", e)
-            
-            
-            
+
+
+
             # Start the GUI
             ui.run(
                 host=self.host,
@@ -2141,7 +3086,7 @@ class GUILauncher:
         with theme.frame(
             "<strong>R</strong>apid nanop<strong>O</strong>re <strong>B</strong>rain intraoperat<strong>I</strong>ve classificatio<strong>N</strong>",
             smalltitle="<strong>R.O.B.I.N</strong>",
-            batphone=False,
+            batphone=self.batman_mode,
             center=self.center,
             setup_notifications=self._setup_notification_system,
         ):
@@ -2181,32 +3126,34 @@ class GUILauncher:
                         )
 
                         _cta_primary = (
-                            "bg-primary text-white rounded-lg px-6 py-4 text-title-medium "
-                            "text-center transition-opacity hover:opacity-90 no-underline"
+                            "robin-button robin-button--primary rounded-lg px-6 py-4 "
+                            "text-title-medium text-center no-underline"
                         )
                         _cta_secondary = (
-                            "border border-primary text-primary rounded-lg px-6 py-4 "
-                            "text-title-medium text-center bg-transparent "
-                            "hover:bg-[var(--md-primary-container)] "
-                            "hover:text-[var(--md-on-primary-container)] "
-                            "transition-colors no-underline"
+                            "robin-button robin-button--secondary rounded-lg px-6 py-4 "
+                            "text-title-medium text-center no-underline"
                         )
 
                         with ui.grid(columns=2).classes("w-full gap-3"):
                             ui.link("View All Samples", "/live_data").classes(
                                 _cta_primary
                             )
-                            ui.link("Open Workflow Monitor", "/robin").classes(
-                                _cta_primary
-                            )
+                            ui.link(
+                                "Generate Sample ID",
+                                "/sample_id_generator",
+                            ).classes(_cta_primary)
+                            if self.minknow_gui_accessible():
+                                ui.link("Sequencer (MinKNOW)", "/minknow").classes(
+                                    _cta_secondary
+                                )
                             ui.link(
                                 "Manage watched folders",
                                 "/watched_folders",
                             ).classes(_cta_secondary)
-                            ui.link(
-                                "Generate Sample ID",
-                                "/sample_id_generator",
-                            ).classes(_cta_secondary)
+                            if self._is_current_user_admin():
+                                ui.link("Open Workflow Monitor", "/robin").classes(
+                                    _cta_primary
+                                )
                             ui.link(
                                 "View Documentation",
                                 "https://looselab.github.io/ROBIN/",
@@ -2215,12 +3162,20 @@ class GUILauncher:
                 # News — card uses same surface treatment as global theme
                 with ui.card().classes("w-full max-w-6xl mx-auto mb-8"):
                     with ui.column().classes("w-full"):
-                        # Initialize news feed only if it hasn't been initialized yet
-                        if self.news_feed is None:
-                            self.news_feed = NewsFeed()
-                            self.news_feed.start_update_timer()
-                        # Create the news element
-                        self.news_feed.create_news_element()
+                        news_feed = None
+                        try:
+                            news_feed = app.storage.client.get("news_feed")
+                        except Exception:
+                            news_feed = None
+                        if news_feed is None:
+                            news_feed = NewsFeed()
+                            try:
+                                app.storage.client["news_feed"] = news_feed
+                            except Exception:
+                                pass
+                        # Build UI first so the immediate timer fetch can paint into a live container.
+                        news_feed.create_news_element()
+                        news_feed.start_update_timer()
 
     def _create_samples_overview(self):
         """Create the samples overview page showing all tracked samples (design.md Editorial Bioinformatics)."""
@@ -2228,14 +3183,14 @@ class GUILauncher:
         with theme.frame(
             "R.O.B.I.N - Sample Tracking Overview",
             smalltitle="Samples",
-            batphone=False,
+            batphone=self.batman_mode,
             center=self.center,
             setup_notifications=self._setup_notification_system,
         ):
             with ui.column().classes("w-full min-h-[70vh] p-3 md:p-6 gap-4"):
                 # Anchor: bold headline + secondary copy (Digital Curator hierarchy)
                 # w-full on inner column so the gradient spans the full card (not content width)
-                with ui.card().classes("w-full max-w-7xl mx-auto overflow-hidden"):
+                with ui.card().classes("w-full overflow-hidden"):
                     with ui.column().classes(
                         "w-full min-w-0 p-4 md:p-6 gap-3 bg-gradient-to-b from-slate-50 to-white "
                         "dark:from-slate-900/80 dark:to-[var(--md-surface)]"
@@ -2251,7 +3206,8 @@ class GUILauncher:
                         )
 
                 # Samples table section — outer column keeps mobile scroll behavior
-                with ui.column().classes("w-full max-w-7xl mx-auto gap-3"):
+                with ui.column().classes("w-full gap-3"):
+                    can_export_reports = self._current_user_can_export()
                     # Title + export/SNP actions on one row (must stay visible; a separate row below filters was easy to miss)
                     with ui.row().classes(
                         "w-full items-center justify-between flex-wrap gap-3 mb-2"
@@ -2259,7 +3215,9 @@ class GUILauncher:
                         ui.label("All tracked samples").classes(
                             "text-headline-medium text-slate-900 dark:text-slate-50 shrink-0"
                         )
-                        ui.label("A=Active  P=Pending  T=Total  C=Completed  F=Failed").classes(
+                        ui.label(
+                            "A=Active  P=Pending  T=Total  C=Completed  F=Failed  U=Unfinished"
+                        ).classes(
                             "text-[11px] text-slate-600 dark:text-slate-400 shrink-0"
                         )
                         with ui.row().classes(
@@ -2269,14 +3227,15 @@ class GUILauncher:
                                 size="sm", color="primary"
                             )
                             self.samples_loading_indicator.set_visibility(False)
-                            ui.button(
-                                "Select all",
-                                on_click=lambda: self._samples_select_all_visible_for_export(),
-                            ).props("flat dense no-caps outline")
-                            ui.button(
-                                "Clear selection",
-                                on_click=lambda: self._samples_clear_export_selection(),
-                            ).props("flat dense no-caps outline")
+                            if can_export_reports:
+                                ui.button(
+                                    "Select all",
+                                    on_click=lambda: self._samples_select_all_visible_for_export(),
+                                ).props("flat dense no-caps outline")
+                                ui.button(
+                                    "Clear selection",
+                                    on_click=lambda: self._samples_clear_export_selection(),
+                                ).props("flat dense no-caps outline")
                             self.bulk_snp_button = ui.button(
                                 "SNP: all missing",
                                 icon="biotech",
@@ -2284,14 +3243,8 @@ class GUILauncher:
                             ).props("color=secondary dense no-caps").classes(
                                 "border border-slate-300 dark:border-slate-600"
                             )
-                            # Optional bulk MNP-Flex action (only if credentials are available)
-                            _mnpflex_username = (
-                                os.getenv("MNPFLEX_USERNAME") or os.getenv("EPIGNOSTIX_USERNAME")
-                            )
-                            _mnpflex_password = (
-                                os.getenv("MNPFLEX_PASSWORD") or os.getenv("EPIGNOSTIX_PASSWORD")
-                            )
-                            if _mnpflex_username and _mnpflex_password:
+                            # Optional bulk MNP-Flex action (Docker or API backend)
+                            if self._is_mnpflex_enabled_for_gui():
                                 self.bulk_mnpflex_button = ui.button(
                                     "mnpflex run all",
                                     on_click=lambda: None,
@@ -2303,13 +3256,16 @@ class GUILauncher:
                             else:
                                 self.bulk_mnpflex_button = None
 
-                            self.export_reports_button = ui.button(
-                                "Export reports",
-                                on_click=lambda: None,
-                            ).props("color=primary").classes(
-                                "rounded-lg px-4 text-title-medium"
-                            )
-                            self.export_reports_button.disable()
+                            if can_export_reports:
+                                self.export_reports_button = ui.button(
+                                    "Export reports",
+                                    on_click=lambda: None,
+                                ).props("color=primary").classes(
+                                    "rounded-lg px-4 text-title-medium"
+                                )
+                                self.export_reports_button.disable()
+                            else:
+                                self.export_reports_button = None
                             logging.info(
                                 "[samples_overview] toolbar controls created "
                                 "(Select all / Clear / SNP / Export)"
@@ -2326,6 +3282,30 @@ class GUILauncher:
                         self._samples_filters = getattr(
                             self, "_samples_filters", None
                         ) or {"query": "", "origin": "All", "job_type": "All"}
+                        # Guard against stale persisted values:
+                        # job_type options are hydrated later from rows, but at initial render
+                        # the select only has ["All"] and NiceGUI rejects unknown defaults.
+                        try:
+                            if (
+                                not isinstance(self._samples_filters, dict)
+                                or self._samples_filters.get("job_type") != "All"
+                            ):
+                                self._samples_filters = {
+                                    "query": str(
+                                        (self._samples_filters or {}).get("query", "")
+                                    ),
+                                    "origin": str(
+                                        (self._samples_filters or {}).get("origin", "All")
+                                    )
+                                    or "All",
+                                    "job_type": "All",
+                                }
+                        except Exception:
+                            self._samples_filters = {
+                                "query": "",
+                                "origin": "All",
+                                "job_type": "All",
+                            }
 
                         # Global search box
                         self.samples_search = (
@@ -2349,7 +3329,7 @@ class GUILauncher:
                         # Origin filter
                         self.origin_filter = (
                             ui.select(
-                                options=["All", "Live", "Pre-existing", "Complete"],
+                                options=["All", "Live", "Pre-existing", "Complete", "Interrupted"],
                                 value=self._samples_filters.get("origin", "All"),
                                 label="Origin",
                             )
@@ -2388,13 +3368,12 @@ class GUILauncher:
                         ui.label("This may take a moment for large directories").classes(
                             "text-body-small text-slate-500 dark:text-slate-400 mt-2"
                         )
-                    
+
                     # Create a placeholder table that will be updated later
                     from robin.gui.theme import styled_table
 
                     # Create samples table
-                    _samples_container, self.samples_table = styled_table(
-                        columns=[
+                    _samples_table_columns = [
                             {
                                 "name": "actions",
                                 "label": "Actions",
@@ -2494,10 +3473,21 @@ class GUILauncher:
                                 "headerStyle": "width:52px; max-width:52px;",
                             },
                             {
+                                "name": "unfinished_jobs",
+                                "label": "U",
+                                "field": "unfinished_jobs",
+                                "sortable": True,
+                                "align": "center",
+                                "style": "width:52px; max-width:52px;",
+                                "headerStyle": "width:52px; max-width:52px;",
+                            },
+                            {
                                 "name": "job_types",
                                 "label": "Job Types",
                                 "field": "job_types",
                                 "sortable": True,
+                                "style": "min-width: 11rem;",
+                                "headerStyle": "min-width: 11rem;",
                             },
                             {
                                 "name": "last_seen",
@@ -2505,12 +3495,17 @@ class GUILauncher:
                                 "field": "last_seen",
                                 "sortable": True,
                             },
+                    ]
+                    if can_export_reports:
+                        _samples_table_columns.append(
                             {
                                 "name": "export",
                                 "label": "Export",
                                 "field": "export",
-                            },
-                        ],
+                            }
+                        )
+                    _samples_container, self.samples_table = styled_table(
+                        columns=_samples_table_columns,
                         rows=[],
                         pagination=20,
                         class_size="table-xs",
@@ -2530,7 +3525,7 @@ class GUILauncher:
                         logging.debug(
                             "[samples_overview] rows-per-page-options props: %s", e
                         )
-                    
+
                     # Set default sorting by last activity in reverse chronological order
                     try:
                         # Try multiple approaches to set default sorting
@@ -2544,7 +3539,7 @@ class GUILauncher:
                                 break
                     except Exception as e:
                         logging.debug("[samples_overview] default sort props: %s", e)
-                    
+
                     # Populate table from master record if available (fast initial load)
                     try:
                         if self._samples_master_record:
@@ -2575,7 +3570,7 @@ class GUILauncher:
                             e,
                             exc_info=True,
                         )
-                    
+
                     # Add job progress column with linear progress bar
                     try:
                         self.samples_table.add_slot(
@@ -2583,10 +3578,10 @@ class GUILauncher:
                             """
 <q-td key=\"file_progress\" :props=\"props\">
   <div style=\"min-width: 120px;\">
-    <q-linear-progress 
-      :value=\"props.row.file_progress || 0\" 
-      :color=\"props.row.file_progress >= 1 ? 'positive' : 'primary'\" 
-      size=\"12px\" 
+    <q-linear-progress
+      :value=\"props.row.file_progress || 0\"
+      :color=\"props.row.file_progress >= 1 ? 'positive' : 'primary'\"
+      size=\"12px\"
       rounded
       class=\"q-mb-xs\" />
     <div class=\"text-center text-[10px] text-slate-600 dark:text-slate-400\">
@@ -2640,15 +3635,24 @@ class GUILauncher:
                             exc_info=True,
                         )
 
-                    # Job types: allow wrapping (comma+space separated in row data)
+                    # Job types: compact chips for every job type seen on the sample
                     try:
                         self.samples_table.add_slot(
                             "body-cell-job_types",
                             """
 <q-td key="job_types" :props="props">
-  <div class="text-xs whitespace-normal break-words max-w-[min(28rem,50vw)]"
-       style="word-break: break-word;">
-    {{ props.row.job_types }}
+  <div class="flex flex-wrap items-center gap-0.5" style="min-width: 10rem;">
+    <q-chip
+      v-for="(jt, idx) in (props.row.job_types_list || [])"
+      :key="jt + '-' + idx"
+      dense
+      square
+      size="sm"
+      class="text-[9px] leading-tight"
+      style="white-space: nowrap;"
+    >
+      {{ jt }}
+    </q-chip>
   </div>
 </q-td>
 """,
@@ -2659,12 +3663,13 @@ class GUILauncher:
                             e,
                             exc_info=True,
                         )
-                    
+
                     # Add export checkbox as rightmost column + header "select all" checkbox
-                    try:
-                        self.samples_table.add_slot(
-                            "header-cell-export",
-                            """
+                    if can_export_reports:
+                        try:
+                            self.samples_table.add_slot(
+                                "header-cell-export",
+                                """
 <q-th :props="props">
   <div class="column items-center q-gutter-xs">
     <span class="text-caption text-slate-500">All</span>
@@ -2676,37 +3681,37 @@ class GUILauncher:
   </div>
 </q-th>
 """,
-                        )
-                        self.samples_table.add_slot(
-                            "body-cell-export",
-                            """
+                            )
+                            self.samples_table.add_slot(
+                                "body-cell-export",
+                                """
 <q-td key=\"export\" :props=\"props\">
   <q-checkbox size=\"sm\"
               :model-value=\"props.row.export === true\"
               @update:model-value=\"$parent.$emit('export-toggled', { id: props.row.sample_id, value: $event })\" />
 </q-td>
 """,
-                        )
-                    except Exception as e:
-                        logging.warning(
-                            "[samples_overview] add_slot export column failed: %s",
-                            e,
-                            exc_info=True,
-                        )
-                    
+                            )
+                        except Exception as e:
+                            logging.warning(
+                                "[samples_overview] add_slot export column failed: %s",
+                                e,
+                                exc_info=True,
+                            )
+
                     # Handle finalize-target action
                     def _on_finalize_target(event):
                         try:
-                            print(f"[DEBUG finalize] event={event!r}", flush=True)
+                            logging.debug("finalize-target event: %r", event)
                             sample_id = getattr(event, "args", None) if hasattr(event, "args") else None
-                            print(f"[DEBUG finalize] extracted sample_id={sample_id!r}", flush=True)
+                            logging.debug("finalize-target sample_id=%r", sample_id)
                             if isinstance(sample_id, str):
                                 # Keep this UI callback non-blocking.
                                 # All heavyweight checks/submissions run in background logic.
                                 self._trigger_target_bam_finalization(sample_id, trigger_snp=True)
-                                print(
-                                    f"[DEBUG finalize] called _trigger_target_bam_finalization(sample_id={sample_id}, trigger_snp=True)",
-                                    flush=True,
+                                logging.debug(
+                                    "finalize-target queued: sample_id=%s trigger_snp=True",
+                                    sample_id,
                                 )
                                 ui.notify(
                                     f"Triggered run finalization for {sample_id}. "
@@ -2717,7 +3722,7 @@ class GUILauncher:
                                 ui.notify("Invalid sample ID", type="warning")
                         except Exception as e:
                             ui.notify(f"Error triggering finalization: {e}", type="negative")
-                    
+
                     try:
                         self.samples_table.on("finalize-target", _on_finalize_target)
                     except Exception as e:
@@ -2728,103 +3733,109 @@ class GUILauncher:
                         )
 
                     # Track multi-selection for batch export via custom checkbox column
-                    try:
-                        self._selected_sample_ids = set()
+                    if can_export_reports:
+                        try:
+                            self._set_selected_sample_ids(set())
 
-                        def _on_export_toggled(event):
-                            try:
-                                payload = None
-                                if hasattr(event, "args"):
-                                    payload = getattr(event, "args", None)
-                                elif isinstance(event, dict):
-                                    payload = event
-                                if isinstance(payload, dict):
-                                    sid = payload.get("id")
-                                    val = bool(payload.get("value"))
-                                    if sid:
-                                        if val:
-                                            self._selected_sample_ids.add(sid)
-                                        else:
-                                            self._selected_sample_ids.discard(sid)
-                                        # reflect state back into rows
-                                        try:
-                                            for r in self.samples_table.rows or []:
-                                                if r.get("sample_id") == sid:
-                                                    r["export"] = (
-                                                        sid in self._selected_sample_ids
-                                                    )
-                                            self.samples_table.update()
-                                        except Exception as ue:
-                                            logging.debug(
-                                                "[samples_overview] export row sync failed: %s",
-                                                ue,
-                                                exc_info=True,
+                            def _on_export_toggled(event):
+                                try:
+                                    payload = None
+                                    if hasattr(event, "args"):
+                                        payload = getattr(event, "args", None)
+                                    elif isinstance(event, dict):
+                                        payload = event
+                                    if isinstance(payload, dict):
+                                        sid = payload.get("id")
+                                        val = bool(payload.get("value"))
+                                        if sid:
+                                            selected_ids = self._get_selected_sample_ids()
+                                            if val:
+                                                selected_ids.add(str(sid))
+                                            else:
+                                                selected_ids.discard(str(sid))
+                                            selected_ids = self._set_selected_sample_ids(
+                                                selected_ids
                                             )
-                                        if self._selected_sample_ids:
-                                            self.export_reports_button.enable()
+                                            # reflect state back into rows
+                                            try:
+                                                for r in self.samples_table.rows or []:
+                                                    if r.get("sample_id") == sid:
+                                                        r["export"] = (
+                                                            str(sid) in selected_ids
+                                                        )
+                                                self.samples_table.update()
+                                            except Exception as ue:
+                                                logging.debug(
+                                                    "[samples_overview] export row sync failed: %s",
+                                                    ue,
+                                                    exc_info=True,
+                                                )
+                                            if selected_ids:
+                                                if self.export_reports_button is not None:
+                                                    self.export_reports_button.enable()
+                                            elif self.export_reports_button is not None:
+                                                self.export_reports_button.disable()
+                                            logging.info(
+                                                "[samples_overview] export-toggled id=%s value=%s "
+                                                "selected_count=%s",
+                                                sid,
+                                                val,
+                                                len(selected_ids),
+                                            )
+                                except Exception as e:
+                                    logging.warning(
+                                        "[samples_overview] export-toggled handler error: %s",
+                                        e,
+                                        exc_info=True,
+                                    )
+
+                            self.samples_table.on("export-toggled", _on_export_toggled)
+
+                            def _on_export_header_toggle(event):
+                                try:
+                                    logging.info(
+                                        "[samples_overview] export-header-toggle raw_args=%r",
+                                        getattr(event, "args", None)
+                                        if hasattr(event, "args")
+                                        else event,
+                                    )
+                                    val = True
+                                    if hasattr(event, "args"):
+                                        a = getattr(event, "args", None)
+                                        if isinstance(a, (list, tuple)) and len(a) > 0:
+                                            val = bool(a[0])
+                                        elif isinstance(a, dict):
+                                            val = bool(a.get("value", True))
                                         else:
-                                            self.export_reports_button.disable()
-                                        logging.info(
-                                            "[samples_overview] export-toggled id=%s value=%s "
-                                            "selected_count=%s",
-                                            sid,
-                                            val,
-                                            len(self._selected_sample_ids),
-                                        )
-                            except Exception as e:
-                                logging.warning(
-                                    "[samples_overview] export-toggled handler error: %s",
-                                    e,
-                                    exc_info=True,
-                                )
-
-                        self.samples_table.on("export-toggled", _on_export_toggled)
-
-                        def _on_export_header_toggle(event):
-                            try:
-                                logging.info(
-                                    "[samples_overview] export-header-toggle raw_args=%r",
-                                    getattr(event, "args", None)
-                                    if hasattr(event, "args")
-                                    else event,
-                                )
-                                val = True
-                                if hasattr(event, "args"):
-                                    a = getattr(event, "args", None)
-                                    if isinstance(a, (list, tuple)) and len(a) > 0:
-                                        val = bool(a[0])
-                                    elif isinstance(a, dict):
-                                        val = bool(a.get("value", True))
+                                            val = bool(a)
+                                    elif isinstance(event, dict):
+                                        val = bool(event.get("value", True))
+                                    if val:
+                                        self._samples_select_all_visible_for_export()
                                     else:
-                                        val = bool(a)
-                                elif isinstance(event, dict):
-                                    val = bool(event.get("value", True))
-                                if val:
+                                        self._samples_clear_export_selection()
+                                except Exception as e:
+                                    logging.warning(
+                                        "[samples_overview] export-header-toggle failed (%s); "
+                                        "falling back to select-all",
+                                        e,
+                                        exc_info=True,
+                                    )
                                     self._samples_select_all_visible_for_export()
-                                else:
-                                    self._samples_clear_export_selection()
-                            except Exception as e:
-                                logging.warning(
-                                    "[samples_overview] export-header-toggle failed (%s); "
-                                    "falling back to select-all",
-                                    e,
-                                    exc_info=True,
-                                )
-                                self._samples_select_all_visible_for_export()
 
-                        self.samples_table.on(
-                            "export-header-toggle", _on_export_header_toggle
-                        )
-                        logging.info(
-                            "[samples_overview] export-toggled and export-header-toggle "
-                            "handlers registered"
-                        )
-                    except Exception as e:
-                        logging.warning(
-                            "[samples_overview] export checkbox table.on wiring failed: %s",
-                            e,
-                            exc_info=True,
-                        )
+                            self.samples_table.on(
+                                "export-header-toggle", _on_export_header_toggle
+                            )
+                            logging.info(
+                                "[samples_overview] export-toggled and export-header-toggle "
+                                "handlers registered"
+                            )
+                        except Exception as e:
+                            logging.warning(
+                                "[samples_overview] export checkbox table.on wiring failed: %s",
+                                e,
+                                exc_info=True,
+                            )
 
                     # Batch export selected reports + wire SNP bulk (separate try so one failure does not block the other)
                     try:
@@ -3017,24 +4028,28 @@ class GUILauncher:
                         async def _export_selected_reports(state: Dict[str, Any], progress_dialog, files_to_download, download_complete, progress_callback, progress_updates):
                             try:
                                 selected = list(
-                                    getattr(self, "_selected_sample_ids", set()) or []
+                                    self._get_selected_sample_ids() or []
                                 )
                                 if not selected:
                                     ui.notify("No samples selected", type="warning")
                                     return
-                                
+
                                 total_samples = len(selected)
-                                
+
                                 try:
                                     from nicegui import run as ng_run  # type: ignore
                                 except Exception:
                                     ng_run = None  # type: ignore
-                                
+
+                                should_generate_report = bool(
+                                    state.get("export_pdf", True)
+                                    or state.get("export_csv", False)
+                                )
                                 for idx, sid in enumerate(selected):
                                     try:
                                         # Update overall progress
                                         overall_progress = (idx / total_samples) * 0.9
-                                        
+
                                         # Emit progress update showing current sample and mark as starting
                                         current_sample_msg = f"Generating {idx + 1}/{total_samples} - {sid}"
                                         progress_updates.put({
@@ -3043,7 +4058,7 @@ class GUILauncher:
                                             'progress': 0.0,
                                             'sample_id': sid
                                         })
-                                        
+
                                         sample_dir = (
                                             Path(self.monitored_directory) / sid
                                             if self.monitored_directory
@@ -3051,76 +4066,115 @@ class GUILauncher:
                                         )
                                         if not sample_dir or not sample_dir.exists():
                                             logging.warning(f"Missing output for {sid}")
-                                            continue
-                                        
-                                        # Don't use notification system - only update dialog
-                                        
-                                        filename = f"{sid}_run_report.pdf"
-                                        pdf_path = os.path.join(
-                                            str(sample_dir), filename
-                                        )
-                                        os.makedirs(str(sample_dir), exist_ok=True)
-                                        export_csv_dir = None
-                                        if bool(state.get("export_csv", False)):
-                                            export_csv_dir = os.path.join(
-                                                str(sample_dir), "report_csv"
+                                            self._audit_report_generated(
+                                                state=state,
+                                                target_id=sid,
+                                                result="failure",
+                                                error_code="sample_directory_missing",
+                                                error_message="Missing output directory",
+                                                extra_details={"bulk_export": True},
                                             )
-                                        
-                                        # Don't use the notification system - use only our dialog callback
-                                        if ng_run is not None:
-                                            # Use custom callback that updates dialog only
-                                            def sample_progress_callback(data: Dict[str, Any]):
-                                                data['sample_id'] = sid  # Add sample ID to track which bar to update
-                                                progress_callback(data)  # This updates the dialog via progress_updates queue
-                                            
-                                            pdf_file = await ng_run.io_bound(
-                                                create_pdf,
-                                                pdf_path,
-                                                str(sample_dir),
-                                                self.center or "Unknown",
-                                                report_type=state.get("type", "detailed"),
-                                                export_csv_dir=export_csv_dir,
-                                                export_xlsx=False,
-                                                export_zip=bool(
-                                                    state.get("export_csv", False)
-                                                ),
-                                                progress_callback=sample_progress_callback,  # Pass the dialog-only callback
-                                                workflow_steps=self.workflow_steps if hasattr(self, 'workflow_steps') else None,
+                                            continue
+
+                                        # Don't use notification system - only update dialog
+
+                                        if should_generate_report:
+                                            filename = f"{sid}_run_report.pdf"
+                                            pdf_path = os.path.join(
+                                                str(sample_dir), filename
+                                            )
+                                            os.makedirs(str(sample_dir), exist_ok=True)
+                                            export_csv_dir = None
+                                            if bool(state.get("export_csv", False)):
+                                                export_csv_dir = os.path.join(
+                                                    str(sample_dir), "report_csv"
+                                                )
+
+                                            sample_outputs: List[str] = []
+                                            report_meta = self._report_generation_metadata()
+
+                                            # Don't use the notification system - use only our dialog callback
+                                            if ng_run is not None:
+                                                # Use custom callback that updates dialog only
+                                                def sample_progress_callback(data: Dict[str, Any]):
+                                                    data['sample_id'] = sid
+                                                    progress_callback(data)
+
+                                                pdf_file = await ng_run.io_bound(
+                                                    create_pdf,
+                                                    pdf_path,
+                                                    str(sample_dir),
+                                                    self.center or "Unknown",
+                                                    report_type=state.get("type", "detailed"),
+                                                    export_csv_dir=export_csv_dir,
+                                                    export_xlsx=False,
+                                                    export_zip=bool(
+                                                        state.get("export_csv", False)
+                                                    ),
+                                                    progress_callback=sample_progress_callback,
+                                                    workflow_steps=self.workflow_steps if hasattr(self, 'workflow_steps') else None,
+                                                    display_config=self.display_config if hasattr(self, 'display_config') else None,
+                                                    viewer_role=resolve_viewer_role(self),
+                                                    generated_by=report_meta["generated_by"] or None,
+                                                    generated_at=report_meta["generated_at"],
+                                                    plotting_preferences=self.plotting_preferences,
+                                                )
+                                            else:
+                                                # Use custom callback that updates dialog only
+                                                def sample_progress_callback(data: Dict[str, Any]):
+                                                    data['sample_id'] = sid
+                                                    progress_callback(data)
+
+                                                pdf_file = create_pdf(
+                                                    pdf_path,
+                                                    str(sample_dir),
+                                                    self.center or "Unknown",
+                                                    report_type=state.get("type", "detailed"),
+                                                    export_csv_dir=export_csv_dir,
+                                                    export_xlsx=False,
+                                                    export_zip=bool(
+                                                        state.get("export_csv", False)
+                                                    ),
+                                                    progress_callback=sample_progress_callback,
+                                                    workflow_steps=self.workflow_steps if hasattr(self, 'workflow_steps') else None,
+                                                    display_config=self.display_config if hasattr(self, 'display_config') else None,
+                                                    viewer_role=resolve_viewer_role(self),
+                                                    generated_by=report_meta["generated_by"] or None,
+                                                    generated_at=report_meta["generated_at"],
+                                                    plotting_preferences=self.plotting_preferences,
+                                                )
+
+                                            if bool(state.get("export_pdf", True)):
+                                                files_to_download.append(pdf_file)
+                                                sample_outputs.append(pdf_file)
+
+                                            # Also offer CSV ZIP if requested
+                                            if (
+                                                bool(state.get("export_csv", False))
+                                                and export_csv_dir
+                                            ):
+                                                zip_path = os.path.join(
+                                                    export_csv_dir, f"{sid}_report_data.zip"
+                                                )
+                                                if os.path.exists(zip_path):
+                                                    files_to_download.append(zip_path)
+                                                    sample_outputs.append(zip_path)
+
+                                            self._audit_report_generated(
+                                                state=state,
+                                                target_id=sid,
+                                                output_files=sample_outputs,
+                                                generated_at=report_meta["generated_at"],
+                                                extra_details={"bulk_export": True},
                                             )
                                         else:
-                                            # Use custom callback that updates dialog only
-                                            def sample_progress_callback(data: Dict[str, Any]):
-                                                data['sample_id'] = sid  # Add sample ID to track which bar to update
-                                                progress_callback(data)  # This updates the dialog via progress_updates queue
-                                            
-                                            pdf_file = create_pdf(
-                                                pdf_path,
-                                                str(sample_dir),
-                                                self.center or "Unknown",
-                                                report_type=state.get("type", "detailed"),
-                                                export_csv_dir=export_csv_dir,
-                                                export_xlsx=False,
-                                                export_zip=bool(
-                                                    state.get("export_csv", False)
-                                                ),
-                                                progress_callback=sample_progress_callback,  # Pass the dialog-only callback
-                                                workflow_steps=self.workflow_steps if hasattr(self, 'workflow_steps') else None,
-                                            )
-                                        
-                                        # Queue file for download instead of downloading immediately
-                                        files_to_download.append(pdf_file)
-                                        
-                                        # Also offer CSV ZIP if requested
-                                        if (
-                                            bool(state.get("export_csv", False))
-                                            and export_csv_dir
-                                        ):
-                                            zip_path = os.path.join(
-                                                export_csv_dir, f"{sid}_report_data.zip"
-                                            )
-                                            if os.path.exists(zip_path):
-                                                files_to_download.append(zip_path)
-                                        
+                                            progress_updates.put({
+                                                'stage': 'processing_sections',
+                                                'message': 'No PDF/CSV selected; skipping report build',
+                                                'progress': 1.0,
+                                                'sample_id': sid
+                                            })
+
                                         # Mark sample as complete
                                         progress_updates.put({
                                             'stage': 'completed',
@@ -3128,10 +4182,18 @@ class GUILauncher:
                                             'progress': 1.0,
                                             'sample_id': sid
                                         })
-                                        
+
                                     except Exception as e:
                                         # Report generation failed
                                         logging.error(f"Export failed for {sid}: {e}")
+                                        self._audit_report_generated(
+                                            state=state,
+                                            target_id=sid,
+                                            result="failure",
+                                            error_code="generation_exception",
+                                            error_message=str(e),
+                                            extra_details={"bulk_export": True},
+                                        )
                                         # Mark sample as failed
                                         progress_updates.put({
                                             'stage': 'error',
@@ -3139,7 +4201,7 @@ class GUILauncher:
                                             'progress': 1.0,
                                             'sample_id': sid
                                         })
-                                
+
                                 # Mark as complete
                                 download_complete["done"] = True
                                 logging.info(f"Bulk export complete. {len(files_to_download)} file(s) ready for download.")
@@ -3151,16 +4213,16 @@ class GUILauncher:
                             logging.info(
                                 "[samples_overview] Export reports clicked "
                                 "selected=%s",
-                                len(
-                                    getattr(self, "_selected_sample_ids", None) or []
-                                ),
+                                len(self._get_selected_sample_ids() or []),
                             )
+                            if not self._require_export_or_notify():
+                                return
                             # Ensure there is at least one selection before opening
-                            if not getattr(self, "_selected_sample_ids", None):
+                            if not self._get_selected_sample_ids():
                                 ui.notify("No samples selected", type="warning")
                                 return
 
-                            selected_ids = list(getattr(self, "_selected_sample_ids", set()) or [])
+                            selected_ids = list(self._get_selected_sample_ids() or [])
                             num_selected = len(selected_ids)
 
                             report_types = {
@@ -3169,7 +4231,9 @@ class GUILauncher:
                             }
                             state: Dict[str, Any] = {
                                 "type": "detailed",
+                                "export_pdf": True,
                                 "export_csv": False,
+                                "export_tsv": True,
                             }
 
                             with ui.dialog().props("persistent") as dialog:
@@ -3194,8 +4258,15 @@ class GUILauncher:
                                             )
 
                                         with ui.column().classes("mb-4"):
-                                            ui.label("Include data").classes(
+                                            ui.label("Output formats").classes(
                                                 "target-coverage-panel__meta-label mb-2"
+                                            )
+                                            ui.checkbox(
+                                                "PDF report",
+                                                value=True,
+                                                on_change=lambda e: state.update(
+                                                    {"export_pdf": bool(e.value)}
+                                                ),
                                             )
                                             ui.checkbox(
                                                 "CSV data (ZIP)",
@@ -3204,16 +4275,12 @@ class GUILauncher:
                                                     {"export_csv": bool(e.value)}
                                                 ),
                                             )
-
-                                        with ui.column().classes("mb-4"):
-                                            ui.label("Disclaimer").classes(
-                                                "target-coverage-panel__meta-label mb-2"
-                                            )
-                                            formatted_text = EXTENDED_DISCLAIMER_TEXT.replace(
-                                                "\n\n", "<br><br>"
-                                            ).replace("\n", " ")
-                                            ui.label(formatted_text).classes(
-                                                "text-sm text-gray-600 mb-4"
+                                            ui.checkbox(
+                                                "Sample tracking TSV",
+                                                value=True,
+                                                on_change=lambda e: state.update(
+                                                    {"export_tsv": bool(e.value)}
+                                                ),
                                             )
 
                                         ui.label(
@@ -3245,6 +4312,38 @@ class GUILauncher:
                             dialog_result = await dialog
                             if dialog_result != "Export":
                                 return
+                            if not (
+                                bool(state.get("export_pdf", True))
+                                or bool(state.get("export_csv", False))
+                                or bool(state.get("export_tsv", True))
+                            ):
+                                ui.notify(
+                                    "Select at least one output format (PDF, CSV, or TSV).",
+                                    type="warning",
+                                )
+                                return
+
+                            tsv_export_path = None
+                            if bool(state.get("export_tsv", True)):
+                                report_meta = self._report_generation_metadata()
+                                tsv_export_path = self._build_sample_tracking_tsv_export(
+                                    selected_ids,
+                                    generated_by=report_meta["generated_by"] or None,
+                                    generated_at=report_meta["generated_at"],
+                                    robin_commit=report_meta.get("robin_commit") or None,
+                                )
+                                if tsv_export_path and os.path.exists(tsv_export_path):
+                                    self._audit_report_generated(
+                                        state=state,
+                                        target_type="batch",
+                                        target_id=f"{num_selected}_samples",
+                                        output_files=[tsv_export_path],
+                                        generated_at=report_meta["generated_at"],
+                                        extra_details={
+                                            "sample_ids": selected_ids,
+                                            "artifact": "sample_tracking_tsv",
+                                        },
+                                    )
 
                             # Now show the progress dialog
                             with ui.dialog().props("persistent") as progress_dialog:
@@ -3263,15 +4362,22 @@ class GUILauncher:
                                     ui.label(
                                         f"Report Type: {state.get('type', 'detailed').title()}"
                                     ).classes("text-sm mb-2")
-                                    
+
+                                    selected_outputs = []
+                                    if bool(state.get("export_pdf", True)):
+                                        selected_outputs.append("PDF")
+                                    if bool(state.get("export_csv", False)):
+                                        selected_outputs.append("CSV (ZIP)")
+                                    if bool(state.get("export_tsv", True)):
+                                        selected_outputs.append("TSV")
                                     ui.label(
-                                        f"Output: PDF{' + CSV (ZIP)' if state.get('export_csv', False) else ''}"
+                                        f"Output: {' + '.join(selected_outputs) if selected_outputs else 'None'}"
                                     ).classes("text-sm mb-4")
-                                    
+
                                     # Create individual progress bars for each sample
                                     sample_progress_bars = {}
                                     sample_progress_labels = {}
-                                    
+
                                     with ui.column().classes("w-full"):
                                         for sid in selected_ids:
                                             with ui.column().classes("mb-3 w-full"):
@@ -3280,17 +4386,17 @@ class GUILauncher:
                                                 progress_label = ui.label("Waiting...").classes("text-xs text-gray-500")
                                                 sample_progress_bars[sid] = progress_bar
                                                 sample_progress_labels[sid] = progress_label
-                                    
+
                                     # Messages container - use label with newlines for multiple messages
                                     messages_label = ui.label("").classes("text-xs text-gray-500")
 
                                     # Track messages
                                     progress_updates = queue.Queue()
                                     messages_list = []
-                                    
+
                                     # Track current sample being processed
                                     current_sample = {"id": None}
-                                    
+
                                     # Timer to process progress updates on UI thread
                                     def process_progress_updates():
                                         """Process queued progress updates."""
@@ -3301,33 +4407,36 @@ class GUILauncher:
                                                 message = update.get("message", "")
                                                 progress = update.get("progress", 0.0)
                                                 sample_id = update.get("sample_id")
-                                                
+
                                                 # Update the current sample's progress bar
                                                 if sample_id and sample_id in sample_progress_bars:
                                                     if progress is not None:
+                                                        from robin.gui.report_progress import normalize_report_progress
+
+                                                        progress = normalize_report_progress(progress)
                                                         sample_progress_bars[sample_id].value = progress
                                                         sample_progress_labels[sample_id].text = f"{int(progress * 100)}% - {message}"
                                                     else:
                                                         sample_progress_labels[sample_id].text = message
                                                     current_sample["id"] = sample_id
-                                                
+
                                                 # Add message to messages list
                                                 messages_list.append(message)
                                                 # Keep only last 10 messages
                                                 if len(messages_list) > 10:
                                                     messages_list.pop(0)
-                                                
+
                                                 # Update messages label
                                                 messages_label.text = "\n".join(messages_list[-5:])
-                                                
+
                                         except queue.Empty:
                                             pass
                                         except Exception as e:
                                             logging.debug(f"Error processing progress updates: {e}")
-                                    
+
                                     # Set up timer to process updates
                                     update_timer = ui.timer(0.1, process_progress_updates)
-                                    
+
                                     def progress_callback(progress_data: Dict[str, Any]):
                                         """Custom progress callback to update dialog (called from background thread)."""
                                         try:
@@ -3335,14 +4444,14 @@ class GUILauncher:
                                             progress_updates.put(progress_data)
                                         except Exception as e:
                                             logging.debug(f"Error in progress callback: {e}")
-                                    
+
                                     # Track if still generating
                                     is_generating = {"active": True}
 
                                     # Storage for the files to download
-                                    files_to_download = []
+                                    files_to_download = [tsv_export_path] if tsv_export_path else []
                                     download_complete = {"done": False}
-                                    
+
                                     # Timer to handle downloads once background task is done
                                     def handle_downloads():
                                         """Handle downloads in UI context once generation is complete."""
@@ -3377,9 +4486,9 @@ class GUILauncher:
                                             # Close dialog after 3 seconds
                                             ui.timer(3.0, lambda: progress_dialog.submit(None), once=True)
                                             download_timer.deactivate()
-                                    
+
                                     download_timer = ui.timer(0.1, handle_downloads)
-                                    
+
                                     # Start report generation
                                     async def complete_export():
                                         """Complete the export and close dialog."""
@@ -3389,13 +4498,22 @@ class GUILauncher:
                                             # Clean up timer
                                             update_timer.deactivate()
                                             is_generating["active"] = False
-                                    
-                                    asyncio.create_task(complete_export())
+
+                                    if background_tasks is not None:
+                                        background_tasks.create(
+                                            complete_export(),
+                                            name="bulk-report-export",
+                                        )
+                                    else:
+                                        raise RuntimeError(
+                                            "NiceGUI background tasks unavailable"
+                                        )
 
                             await progress_dialog
 
                         # Wire the button now that handlers exist
-                        self.export_reports_button.on_click(_confirm_bulk_export)
+                        if can_export_reports and self.export_reports_button is not None:
+                            self.export_reports_button.on_click(_confirm_bulk_export)
                         logging.info(
                             "[samples_overview] bulk SNP and Export reports buttons "
                             "on_click wired successfully"
@@ -3503,12 +4621,12 @@ class GUILauncher:
                     total_jobs = merged["total_jobs"]
                     completed_jobs = merged["completed_jobs"]
                     failed_jobs = merged["failed_jobs"]
-                    
+
                     # Set file progress directly from job counts (same data source as other columns)
                     files_seen = total_jobs
                     files_processed = completed_jobs
                     file_progress = completed_jobs / total_jobs if total_jobs > 0 else 0.0
-                    
+
                     by_id[sid] = {
                         "sample_id": sid,
                         "origin": origin_value,
@@ -3582,7 +4700,7 @@ class GUILauncher:
             rows = list(existing_rows_by_id.values())
             # Replace rows to avoid duplicates then apply filters
             self._last_samples_rows = rows
-            
+
             # Update UI on main thread
             if rows and hasattr(self, "samples_table"):
                 self._apply_samples_table_filters()
@@ -3618,18 +4736,21 @@ class GUILauncher:
             except Exception:
                 return ""
 
-    def _format_job_types_display(self, job_types: Any) -> str:
-        """Normalize job types to comma + space separated text so cells wrap in the table."""
+    def _parse_job_types_list(self, job_types: Any) -> List[str]:
+        """Normalize job types to a sorted list of unique tokens."""
         if job_types is None:
-            return ""
+            return []
         if isinstance(job_types, (list, set, tuple)):
-            parts = sorted({str(x).strip() for x in job_types if str(x).strip()})
-            return ", ".join(parts)
+            return sorted({str(x).strip() for x in job_types if str(x).strip()})
         s = str(job_types).strip()
         if not s:
-            return ""
+            return []
         parts = [p.strip() for p in s.replace(", ", ",").split(",") if p.strip()]
-        return ", ".join(parts)
+        return parts
+
+    def _format_job_types_display(self, job_types: Any) -> str:
+        """Normalize job types to comma + space separated text for sorting/filtering."""
+        return ", ".join(self._parse_job_types_list(job_types))
 
     def _get_samples_search_query(self) -> str:
         try:
@@ -3674,7 +4795,9 @@ class GUILauncher:
                 continue
             jt = r.get("job_types")
             r = dict(r)
-            r["job_types"] = self._format_job_types_display(jt)
+            parts = self._parse_job_types_list(jt)
+            r["job_types"] = ", ".join(parts)
+            r["job_types_list"] = parts
             normalized.append(r)
         return normalized
 
@@ -3726,14 +4849,14 @@ class GUILauncher:
                     "origin": "All",
                     "job_type": "All",
                 }
-            
+
             # Normalize the query
             normalized_query = (query or "").strip().lower()
             self._samples_filters["query"] = normalized_query
-            
+
             # Apply filters immediately
             self._apply_samples_table_filters()
-            
+
             # Debug logging
             logging.debug(f"Search query updated: '{normalized_query}'")
         except Exception as e:
@@ -3749,14 +4872,14 @@ class GUILauncher:
                     "origin": "All",
                     "job_type": "All",
                 }
-            
+
             # Normalize the origin value
             normalized_origin = origin_value or "All"
             self._samples_filters["origin"] = normalized_origin
-            
+
             # Apply filters immediately
             self._apply_samples_table_filters()
-            
+
             # Debug logging
             logging.debug(f"Origin filter updated: '{normalized_origin}'")
         except Exception as e:
@@ -3810,7 +4933,7 @@ class GUILauncher:
             )
             self._last_samples_rows = base_rows
             rows = self._normalize_rows_for_display(base_rows)
-            
+
             logging.debug(f"Applying filters to {len(rows)} base rows")
 
             # Origin filter, compute dynamic 'Complete' for display if needed
@@ -3895,7 +5018,7 @@ class GUILauncher:
 
             # annotate export selection state per row for rightmost checkbox column
             try:
-                selected = getattr(self, "_selected_sample_ids", set()) or set()
+                selected = self._get_selected_sample_ids()
             except Exception:
                 selected = set()
             for r in rows:
@@ -3931,7 +5054,7 @@ class GUILauncher:
                 logging.debug(f"Updated samples table with {len(rows)} filtered rows")
             else:
                 logging.warning("samples_table not found, cannot update")
-                
+
         except Exception as e:
             logging.error(f"Error applying samples table filters: {e}")
             pass
@@ -3971,8 +5094,33 @@ class GUILauncher:
                         state_dict[key] = {}
                         logging.info(f"Cleared all {attr} state for sample {sample_id}")
 
+            self._prune_component_state_caches()
+
         except Exception as e:
             logging.debug(f"Failed to refresh sample plots for {sample_id}: {e}")
+
+    def _touch_component_state_key(self, sample_key: str) -> None:
+        """Mark a sample key as recently used in component state dicts."""
+        for attr in ["_coverage_state", "_mgmt_state", "_cnv_state", "_fusion_state"]:
+            if not hasattr(self, attr):
+                continue
+            state_dict = getattr(self, attr)
+            if isinstance(state_dict, dict) and sample_key in state_dict:
+                value = state_dict.pop(sample_key)
+                state_dict[sample_key] = value
+
+    def _prune_component_state_caches(self) -> None:
+        """Bound component state dicts to avoid unbounded growth across samples."""
+        max_samples = max(1, int(getattr(self, "_component_state_max_samples", 24)))
+        for attr in ["_coverage_state", "_mgmt_state", "_cnv_state", "_fusion_state"]:
+            if not hasattr(self, attr):
+                continue
+            state_dict = getattr(self, attr)
+            if not isinstance(state_dict, dict):
+                continue
+            while len(state_dict) > max_samples:
+                oldest_key = next(iter(state_dict))
+                state_dict.pop(oldest_key, None)
 
     '''
     def _refresh_all_sample_plots(self):
@@ -4035,34 +5183,28 @@ class GUILauncher:
 
             def on_show() -> None:
                 _v = dob_input.value
-                dob_val = (_v.strftime("%Y-%m-%d") if hasattr(_v, "strftime") else (str(_v).strip() if _v else ""))
+                dob_val = normalize_dob(_v)
                 if not dob_val:
                     ui.notify("Please enter date of birth.", type="warning")
                     return
                 result_container.clear()
                 with result_container:
                     try:
-                        fn = _decrypt_identifier_manifest_field(
-                            encrypted["first_name"], dob_val
-                        )
-                        ln = _decrypt_identifier_manifest_field(
-                            encrypted["last_name"], dob_val
-                        )
-                        dob_plain = _decrypt_identifier_manifest_field(
-                            encrypted["dob"], dob_val
-                        )
-                        ui.label("First name:").classes("font-semibold text-sm")
-                        ui.label(fn or "—").classes("mb-2")
-                        ui.label("Last name:").classes("font-semibold text-sm")
-                        ui.label(ln or "—").classes("mb-2")
-                        ui.label("Date of birth:").classes("font-semibold text-sm")
-                        ui.label(dob_plain or "—").classes("mb-2")
-                        if "nhs_number" in encrypted:
-                            nhs_plain = _decrypt_identifier_manifest_field(
-                                encrypted["nhs_number"], dob_val
+                        labels = [
+                            ("first_name", "First name"),
+                            ("last_name", "Last name"),
+                            ("dob", "Date of birth"),
+                            ("nhs_number", "Hospital Number"),
+                            ("notes", "Notes"),
+                        ]
+                        for key, label in labels:
+                            if key not in encrypted:
+                                continue
+                            plain = _decrypt_identifier_manifest_field(
+                                encrypted[key], dob_val
                             )
-                            ui.label("Hospital Number:").classes("font-semibold text-sm")
-                            ui.label(nhs_plain or "—").classes("mb-2")
+                            ui.label(f"{label}:").classes("font-semibold text-sm")
+                            ui.label(plain or "—").classes("mb-2")
                     except InvalidToken:
                         ui.label("Incorrect date of birth. Please try again.").classes(
                             "text-red-600 dark:text-red-400"
@@ -4082,6 +5224,9 @@ class GUILauncher:
             if self.monitored_directory
             else None
         )
+        if sample_dir:
+            self._touch_component_state_key(str(sample_dir))
+            self._prune_component_state_caches()
         test_id = _get_test_id_from_manifest(sample_dir) if sample_dir else ""
 
         # Check if this is a page refresh vs navigation
@@ -4089,30 +5234,34 @@ class GUILauncher:
         is_page_refresh = False
         try:
             # Check if we have a flag indicating this page was recently loaded
-            if hasattr(ui, 'storage') and hasattr(ui.storage, 'browser'):
-                last_load_time = ui.storage.browser.get(f'sample_{sample_id}_last_load', 0)
+            if app is not None:
+                last_load_time = app.storage.tab.get(f"sample_{sample_id}_last_load", 0)
                 current_time = time.time()
                 # If last load was very recent (< 2 seconds), it's likely a page refresh
                 is_page_refresh = (current_time - last_load_time) < 2.0
-                
+
                 # Update the last load time
-                ui.storage.browser[f'sample_{sample_id}_last_load'] = current_time
+                app.storage.tab[f"sample_{sample_id}_last_load"] = current_time
         except Exception:
             # If storage is not available, assume it's navigation (show loading)
             is_page_refresh = False
-        
+
         # Show loading spinner unless it's a page refresh
         show_loading = not is_page_refresh
-        
+
         async def confirm_report_generation():
             """Show a confirmation dialog before generating the report."""
+            if not self._require_export_or_notify():
+                return
             report_types = {
                 "summary": "Summary Only",
                 "detailed": "Detailed",
             }
             state: Dict[str, Any] = {
                 "type": "detailed",
+                "export_pdf": True,
                 "export_csv": False,
+                "export_tsv": False,
                 "include_sample_ids": False,
                 "sample_dob": "",
             }
@@ -4167,25 +5316,28 @@ class GUILauncher:
                             sample_dob_input.on("update:model-value", _on_sample_dob_change)
 
                         with ui.column().classes("mb-4"):
-                            ui.label("Disclaimer").classes(
+                            ui.label("Output formats").classes(
                                 "target-coverage-panel__meta-label mb-2"
                             )
-                            formatted_text = EXTENDED_DISCLAIMER_TEXT.replace(
-                                "\n\n", "<br><br>"
-                            ).replace("\n", " ")
-                            ui.label(formatted_text).classes(
-                                "text-sm text-gray-600 mb-4"
+                            ui.checkbox(
+                                "PDF report",
+                                value=True,
+                                on_change=lambda e: state.update(
+                                    {"export_pdf": bool(e.value)}
+                                ),
                             )
-
-                        with ui.column().classes("mb-4"):
-                            ui.label("Include data").classes(
-                                "target-coverage-panel__meta-label mb-2"
-                            )
-                            csv_checkbox = ui.checkbox(
+                            ui.checkbox(
                                 "CSV data (ZIP)",
                                 value=False,
                                 on_change=lambda e: state.update(
                                     {"export_csv": bool(e.value)}
+                                ),
+                            )
+                            ui.checkbox(
+                                "Sample summary TSV",
+                                value=False,
+                                on_change=lambda e: state.update(
+                                    {"export_tsv": bool(e.value)}
                                 ),
                             )
 
@@ -4214,7 +5366,7 @@ class GUILauncher:
                                 "Yes",
                                 on_click=_capture_dob_and_confirm,
                             ).props("color=primary no-caps")
-                    
+
                     # Run name below buttons
                     ui.label(f"Exporting data for run: {sample_id}").classes(
                         "text-sm font-medium text-gray-700 mt-4"
@@ -4222,6 +5374,16 @@ class GUILauncher:
 
             dialog_result = await dialog
             if dialog_result != "Yes":
+                return
+            if not (
+                bool(state.get("export_pdf", True))
+                or bool(state.get("export_csv", False))
+                or bool(state.get("export_tsv", False))
+            ):
+                ui.notify(
+                    "Select at least one output format (PDF, CSV, or TSV).",
+                    type="warning",
+                )
                 return
 
             # If user requested sample identifiers, decrypt with DOB
@@ -4238,23 +5400,21 @@ class GUILauncher:
                     if encrypted:
                         try:
                             from cryptography.fernet import InvalidToken
-                            decrypted = {
-                                "first_name": _decrypt_identifier_manifest_field(
-                                    encrypted["first_name"], dob_val
-                                ),
-                                "last_name": _decrypt_identifier_manifest_field(
-                                    encrypted["last_name"], dob_val
-                                ),
-                                "dob": _decrypt_identifier_manifest_field(
-                                    encrypted["dob"], dob_val
-                                ),
+                            decrypted: Dict[str, str] = {
+                                "sample_id": sample_id,
+                                "test_id": _get_test_id_from_manifest(sample_dir),
                             }
-                            if "nhs_number" in encrypted:
-                                decrypted["nhs_number"] = _decrypt_identifier_manifest_field(
-                                    encrypted["nhs_number"], dob_val
-                                )
-                            decrypted["sample_id"] = sample_id
-                            decrypted["test_id"] = _get_test_id_from_manifest(sample_dir)
+                            for key in (
+                                "first_name",
+                                "last_name",
+                                "dob",
+                                "nhs_number",
+                                "notes",
+                            ):
+                                if key in encrypted:
+                                    decrypted[key] = _decrypt_identifier_manifest_field(
+                                        encrypted[key], dob_val
+                                    )
                             state["sample_identifiers"] = decrypted
                         except InvalidToken:
                             ui.notify(
@@ -4275,10 +5435,10 @@ class GUILauncher:
                     ui.label("Generating report").classes(
                         "classification-insight-heading text-headline-small mb-2"
                     )
-                    
+
                     # Divider
                     ui.separator().classes("mb-4")
-                    
+
                     # Run name
                     ui.label(f"Exporting data for run: {sample_id}").classes(
                         "text-sm font-medium text-gray-700 mb-4"
@@ -4288,26 +5448,33 @@ class GUILauncher:
                     report_type_display = ui.label(
                         f"Report Type: {state.get('type', 'detailed').title()}"
                     ).classes("text-sm mb-2")
-                    
+
+                    selected_outputs = []
+                    if bool(state.get("export_pdf", True)):
+                        selected_outputs.append("PDF")
+                    if bool(state.get("export_csv", False)):
+                        selected_outputs.append("CSV (ZIP)")
+                    if bool(state.get("export_tsv", False)):
+                        selected_outputs.append("TSV")
                     output_display = ui.label(
-                        f"Output: PDF{' + CSV (ZIP)' if state.get('export_csv', False) else ''}"
+                        f"Output: {' + '.join(selected_outputs) if selected_outputs else 'None'}"
                     ).classes("text-sm mb-4")
-                    
+
                     # Progress indicator
                     progress_bar = ui.linear_progress(0.0).classes("mb-2")
-                    
+
                     # Progress text
                     progress_text = ui.label("Preparing...").classes(
                         "text-xs text-gray-600 text-center mb-2"
                     )
-                    
+
                     # Messages container - use label with newlines for multiple messages
                     messages_label = ui.label("").classes("text-xs text-gray-500")
 
                     # Track messages
                     progress_updates = queue.Queue()
                     messages_list = []
-                    
+
                     # Timer to process progress updates on UI thread
                     def process_progress_updates():
                         """Process queued progress updates."""
@@ -4317,30 +5484,33 @@ class GUILauncher:
                                 stage = update.get("stage", "unknown")
                                 message = update.get("message", "")
                                 progress = update.get("progress", 0.0)
-                                
+
                                 if progress is not None:
+                                    from robin.gui.report_progress import normalize_report_progress
+
+                                    progress = normalize_report_progress(progress)
                                     progress_bar.value = progress
                                     progress_text.text = f"{int(progress * 100)}% - {message}"
                                 else:
                                     progress_text.text = message
-                                
+
                                 # Add message to messages list
                                 messages_list.append(message)
                                 # Keep only last 10 messages
                                 if len(messages_list) > 10:
                                     messages_list.pop(0)
-                                
+
                                 # Update messages label
                                 messages_label.text = "\n".join(messages_list[-5:])
-                                
+
                         except queue.Empty:
                             pass
                         except Exception as e:
                             logging.debug(f"Error processing progress updates: {e}")
-                    
+
                     # Set up timer to process updates
                     update_timer = ui.timer(0.1, process_progress_updates)
-                    
+
                     def progress_callback(progress_data: Dict[str, Any]):
                         """Custom progress callback to update dialog (called from background thread)."""
                         try:
@@ -4348,14 +5518,14 @@ class GUILauncher:
                             progress_updates.put(progress_data)
                         except Exception as e:
                             logging.debug(f"Error in progress callback: {e}")
-                    
+
                     # Track if still generating
                     is_generating = {"active": True}
 
                     # Storage for the files to download (will be populated by background task)
                     files_to_download = []
                     download_complete = {"done": False}
-                    
+
                     # Timer to handle downloads once background task is done
                     def handle_downloads():
                         """Handle downloads in UI context once generation is complete."""
@@ -4363,7 +5533,7 @@ class GUILauncher:
                             # Log that report generation is complete and downloads are available
                             file_count = len([f for f in files_to_download if f is not None])
                             logging.info(f"Report generation complete for {sample_id}. {file_count} file(s) ready for download.")
-                            
+
                             for file_path in files_to_download:
                                 if file_path is not None:
                                     logging.debug(f"Initiating download: {file_path}")
@@ -4371,9 +5541,9 @@ class GUILauncher:
                             # Close dialog after 3 seconds
                             ui.timer(3.0, lambda: progress_dialog.submit(None), once=True)
                             download_timer.deactivate()
-                    
+
                     download_timer = ui.timer(0.1, handle_downloads)
-                    
+
                     # Start report generation
                     async def complete_generation():
                         """Complete the report generation and close dialog."""
@@ -4384,17 +5554,33 @@ class GUILauncher:
                             update_timer.deactivate()
                             is_generating["active"] = False
                             download_complete["done"] = True
-                    
-                    asyncio.create_task(complete_generation())
+
+                    if background_tasks is not None:
+                        background_tasks.create(
+                            complete_generation(),
+                            name="single-report-generation",
+                        )
+                    else:
+                        raise RuntimeError("NiceGUI background tasks unavailable")
 
             await progress_dialog
 
         async def generate_and_download_report(state: Dict[str, Any], progress_callback, progress_dialog, is_generating, files_to_download):
             """Generate report and update progress in dialog."""
+            generated_files: List[str] = []
+            report_meta = self._report_generation_metadata()
             try:
                 from nicegui import run as ng_run  # type: ignore
-                
+
                 if not sample_dir or not sample_dir.exists():
+                    self._audit_report_generated(
+                        state=state,
+                        target_id=sample_id,
+                        result="failure",
+                        error_code="sample_directory_missing",
+                        error_message="Output directory not available for this sample",
+                        generated_at=report_meta["generated_at"],
+                    )
                     # Queue error notification
                     files_to_download.append(None)  # Signal error
                     ui.timer(0.1, lambda: ui.notify(
@@ -4402,55 +5588,94 @@ class GUILauncher:
                         type="warning",
                     ), once=True)
                     return
-                
-                filename = f"{sample_id}_run_report.pdf"
-                pdf_path = os.path.join(str(sample_dir), filename)
-                os.makedirs(str(sample_dir), exist_ok=True)
-                export_csv_dir = None
-                if bool(state.get("export_csv", False)):
-                    export_csv_dir = os.path.join(
-                        str(sample_dir), "report_csv"
-                    )
-                
-                # Use only our custom callback, not the notification system
-                def combined_callback(progress_data: Dict[str, Any]):
-                    """Custom callback for dialog updates only (no notifications)."""
-                    progress_callback(progress_data)
-                
-                pdf_file = await ng_run.io_bound(
-                    create_pdf,
-                    pdf_path,
-                    str(sample_dir),
-                    self.center or "Unknown",
-                    report_type=state.get("type", "detailed"),
-                    export_csv_dir=export_csv_dir,
-                    export_xlsx=False,
-                    export_zip=bool(state.get("export_csv", False)),
-                    progress_callback=combined_callback,
-                    workflow_steps=self.workflow_steps if hasattr(self, 'workflow_steps') else None,
-                    sample_identifiers=state.get("sample_identifiers"),
+
+                should_generate_report = bool(
+                    state.get("export_pdf", True) or state.get("export_csv", False)
                 )
-                
-                # Mark report as completed
-                from robin.gui.report_progress import progress_manager
-                progress_manager.complete_report(sample_id, filename)
-                
-                # Queue files for download in UI context
-                files_to_download.append(pdf_file)
-                
-                # Also offer CSV ZIP if requested
-                if bool(state.get("export_csv", False)) and export_csv_dir:
-                    zip_path = os.path.join(
-                        export_csv_dir, f"{sample_id}_report_data.zip"
+                if should_generate_report:
+                    filename = f"{sample_id}_run_report.pdf"
+                    pdf_path = os.path.join(str(sample_dir), filename)
+                    os.makedirs(str(sample_dir), exist_ok=True)
+                    export_csv_dir = None
+                    if bool(state.get("export_csv", False)):
+                        export_csv_dir = os.path.join(
+                            str(sample_dir), "report_csv"
+                        )
+
+                    # Use only our custom callback, not the notification system
+                    def combined_callback(progress_data: Dict[str, Any]):
+                        """Custom callback for dialog updates only (no notifications)."""
+                        progress_callback(progress_data)
+
+                    pdf_file = await ng_run.io_bound(
+                        create_pdf,
+                        pdf_path,
+                        str(sample_dir),
+                        self.center or "Unknown",
+                        report_type=state.get("type", "detailed"),
+                        export_csv_dir=export_csv_dir,
+                        export_xlsx=False,
+                        export_zip=bool(state.get("export_csv", False)),
+                        progress_callback=combined_callback,
+                        workflow_steps=self.workflow_steps if hasattr(self, 'workflow_steps') else None,
+                        display_config=self.display_config if hasattr(self, 'display_config') else None,
+                        viewer_role=resolve_viewer_role(self),
+                        sample_identifiers=state.get("sample_identifiers"),
+                        generated_by=report_meta["generated_by"] or None,
+                        generated_at=report_meta["generated_at"],
+                        plotting_preferences=self.plotting_preferences,
                     )
-                    if os.path.exists(zip_path):
-                        files_to_download.append(zip_path)
-                
+
+                    # Mark report as completed
+                    from robin.gui.report_progress import progress_manager
+                    progress_manager.complete_report(sample_id, filename)
+
+                    # Queue files for download in UI context
+                    if bool(state.get("export_pdf", True)):
+                        files_to_download.append(pdf_file)
+                        generated_files.append(pdf_file)
+
+                    # Also offer CSV ZIP if requested
+                    if bool(state.get("export_csv", False)) and export_csv_dir:
+                        zip_path = os.path.join(
+                            export_csv_dir, f"{sample_id}_report_data.zip"
+                        )
+                        if os.path.exists(zip_path):
+                            files_to_download.append(zip_path)
+                            generated_files.append(zip_path)
+
+                if bool(state.get("export_tsv", False)):
+                    tsv_path = self._build_sample_tracking_tsv_export(
+                        [sample_id],
+                        generated_by=report_meta["generated_by"] or None,
+                        generated_at=report_meta["generated_at"],
+                        robin_commit=report_meta.get("robin_commit") or None,
+                    )
+                    if tsv_path and os.path.exists(tsv_path):
+                        files_to_download.append(tsv_path)
+                        generated_files.append(tsv_path)
+
+                self._audit_report_generated(
+                    state=state,
+                    target_id=sample_id,
+                    output_files=generated_files,
+                    generated_at=report_meta["generated_at"],
+                )
+
             except Exception as e:
                 # Mark report as failed
                 from robin.gui.report_progress import progress_manager
                 progress_manager.error_report(sample_id, str(e))
-                
+                self._audit_report_generated(
+                    state=state,
+                    target_id=sample_id,
+                    result="failure",
+                    output_files=generated_files,
+                    generated_at=report_meta["generated_at"],
+                    error_code="generation_exception",
+                    error_message=str(e),
+                )
+
                 # Queue error notification in UI context
                 ui.timer(0.1, lambda: ui.notify(
                     f"Error generating report: {str(e)}",
@@ -4460,18 +5685,28 @@ class GUILauncher:
 
         async def download_report(state: Dict[str, Any]):
             """Generate and download the report for this sample."""
+            generated_files: List[str] = []
+            report_meta = self._report_generation_metadata()
             try:
                 # Import here to avoid global dependency if GUI isn't used
                 from nicegui import run as ng_run  # type: ignore
 
-                
+
                 if not sample_dir or not sample_dir.exists():
+                    self._audit_report_generated(
+                        state=state,
+                        target_id=sample_id,
+                        result="failure",
+                        error_code="sample_directory_missing",
+                        error_message="Output directory not available for this sample",
+                        generated_at=report_meta["generated_at"],
+                    )
                     ui.notify(
                         "Output directory not available for this sample",
                         type="warning",
                     )
                     return
-                
+
                 # Show initial notification with more explicit styling
                 ui.notify(
                     f"[{sample_id}] Starting report generation...",
@@ -4479,7 +5714,7 @@ class GUILauncher:
                     timeout=0,  # Persistent notification
                     position="top-right"
                 )
-                
+
                 filename = f"{sample_id}_run_report.pdf"
                 pdf_path = os.path.join(str(sample_dir), filename)
                 os.makedirs(str(sample_dir), exist_ok=True)
@@ -4488,11 +5723,11 @@ class GUILauncher:
                     export_csv_dir = os.path.join(
                         str(sample_dir), "report_csv"
                     )
-                
+
                 # Create progress callback
                 from robin.gui.report_progress import create_progress_callback
                 progress_callback = create_progress_callback(sample_id)
-                
+
                 pdf_file = await ng_run.io_bound(
                     create_pdf,
                     pdf_path,
@@ -4504,12 +5739,18 @@ class GUILauncher:
                     export_zip=bool(state.get("export_csv", False)),
                     progress_callback=progress_callback,
                     workflow_steps=self.workflow_steps if hasattr(self, 'workflow_steps') else None,
+                    display_config=self.display_config if hasattr(self, 'display_config') else None,
+                    viewer_role=resolve_viewer_role(self),
+                    generated_by=report_meta["generated_by"] or None,
+                    generated_at=report_meta["generated_at"],
+                    plotting_preferences=self.plotting_preferences,
                 )
-                
+
                 # Mark report as completed
                 from robin.gui.report_progress import progress_manager
                 progress_manager.complete_report(sample_id, filename)
-                
+
+                generated_files.append(pdf_file)
                 ui.download(pdf_file)
                 # Also offer CSV ZIP if requested
                 if bool(state.get("export_csv", False)) and export_csv_dir:
@@ -4517,18 +5758,35 @@ class GUILauncher:
                         export_csv_dir, f"{sample_id}_report_data.zip"
                     )
                     if os.path.exists(zip_path):
+                        generated_files.append(zip_path)
                         ui.download(zip_path)
-                
+
+                self._audit_report_generated(
+                    state=state,
+                    target_id=sample_id,
+                    output_files=generated_files,
+                    generated_at=report_meta["generated_at"],
+                )
+
             except Exception as e:
                 # Mark report as failed
                 from robin.gui.report_progress import progress_manager
                 progress_manager.error_report(sample_id, str(e))
-                
+                self._audit_report_generated(
+                    state=state,
+                    target_id=sample_id,
+                    result="failure",
+                    output_files=generated_files,
+                    generated_at=report_meta["generated_at"],
+                    error_code="generation_exception",
+                    error_message=str(e),
+                )
+
         title_suffix = f" | {test_id}" if test_id else ""
         with theme.frame(
             f"R.O.B.I.N - Sample {sample_id}{title_suffix}",
             smalltitle=f"{sample_id}{title_suffix}".strip(),
-            batphone=False,
+            batphone=self.batman_mode,
             center=self.center,
             setup_notifications=self._setup_notification_system,
         ):
@@ -4552,7 +5810,7 @@ class GUILauncher:
                     ui.button(
                         "Back to samples", on_click=lambda: ui.navigate.to("/live_data")
                     ).props("color=primary").classes("rounded-lg mt-2")
-                
+
                 # Soft redirect after short delay
                 def redirect_to_samples():
                     """Redirect to the sample list page."""
@@ -4565,7 +5823,7 @@ class GUILauncher:
                             ui.run_javascript('window.location.href = "/live_data"')
                         except Exception as e2:
                             logging.error(f"Failed JavaScript redirect: {e2}")
-                
+
                 # Create and activate the timer
                 redirect_timer = ui.timer(2.0, redirect_to_samples, once=True)
                 redirect_timer.activate()
@@ -4576,7 +5834,7 @@ class GUILauncher:
                 ui.notify(f"Opening sample {sample_id}", type="info")
             except Exception:
                 pass
-            
+
             # Check directory existence asynchronously to avoid blocking
             async def check_directory_and_notify():
                 try:
@@ -4587,7 +5845,7 @@ class GUILauncher:
                         )
                 except Exception:
                     pass
-            
+
             # Start directory check in background
             ui.timer(0.1, check_directory_and_notify, once=True)
 
@@ -4640,7 +5898,8 @@ class GUILauncher:
                                     sample_dir, sample_id
                                 ),
                             ).classes(
-                                "mt-1 w-full sm:w-auto self-stretch sm:self-start"
+                                "sample-action-button mt-1 w-full sm:w-auto "
+                                "self-stretch sm:self-start"
                             ).props(
                                 "flat dense color=primary no-caps"
                             )
@@ -4651,25 +5910,39 @@ class GUILauncher:
                                 target_bam.exists() and target_bam.is_file()
                             )
                         with ui.column().classes(
-                            "w-full shrink-0 flex flex-col gap-2 "
-                            "md:w-auto md:min-w-[12rem] md:items-end"
+                            "sample-action-panel w-full shrink-0 flex flex-col gap-2 p-2 "
+                            "md:w-auto md:min-w-[12rem] md:items-stretch"
                         ):
                             if target_bam_exists:
+                                from robin.gui.config import (
+                                    any_sample_details_visible_for_launcher,
+                                )
+
+                                if any_sample_details_visible_for_launcher(self):
+                                    ui.button(
+                                        "More details",
+                                        on_click=lambda: ui.navigate.to(
+                                            f"/live_data/{sample_id}/details"
+                                        ),
+                                    ).classes(
+                                        "sample-action-button text-title-medium "
+                                        "w-full md:w-auto md:min-w-[10rem]"
+                                    ).props("flat no-caps")
+                            if self._current_user_can_export():
                                 ui.button(
-                                    "More details",
-                                    on_click=lambda: ui.navigate.to(
-                                        f"/live_data/{sample_id}/details"
-                                    ),
-                                ).classes(
-                                    "rounded-lg border border-slate-300 dark:border-slate-600 "
-                                    "text-title-medium w-full md:w-auto md:min-w-[10rem]"
-                                ).props("flat no-caps")
+                                    "Generate report",
+                                    on_click=confirm_report_generation,
+                                ).props("color=primary no-caps").classes(
+                                    "sample-primary-action px-4 py-2 text-title-medium "
+                                    "w-full md:w-auto md:min-w-[10rem]"
+                                )
                             ui.button(
-                                "Generate report",
-                                on_click=confirm_report_generation,
-                            ).props("color=primary no-caps").classes(
-                                "rounded-lg px-4 py-2 text-title-medium "
-                                "w-full md:w-auto md:min-w-[10rem]"
+                                "View audit",
+                                on_click=lambda: self._open_sample_audit_dialog(sample_id),
+                                icon="history",
+                            ).props("flat no-caps outline").classes(
+                                "sample-action-button w-full md:w-auto "
+                                "md:min-w-[10rem]"
                             )
                 # Main content area with conditional loading state
                 with ui.column().classes("w-full p-2 md:p-3 gap-2"):
@@ -4711,7 +5984,10 @@ class GUILauncher:
                                 from robin.gui.components.summary import add_summary_section
 
                             # Create the UI components immediately on the main thread
-                            add_summary_section(sample_dir, sample_id, self)
+                            with _sample_page_section_timer(
+                                "live_data", sample_id, "summary"
+                            ):
+                                add_summary_section(sample_dir, sample_id, self)
                         except Exception as e:
                             logging.exception(f"[GUI] Summary section failed: {e}")
                             try:
@@ -4721,12 +5997,28 @@ class GUILauncher:
 
                         # Import section visibility helper
                         try:
-                            from robin.gui.config import is_section_enabled, get_enabled_classification_steps
+                            from robin.gui.config import (
+                                any_classification_visible,
+                                is_section_visible,
+                                resolve_viewer_role,
+                            )
                         except ImportError:
-                            is_section_enabled = lambda name, steps: True
-                            get_enabled_classification_steps = lambda steps: {"sturgeon", "nanodx", "random_forest", "pannanodx"}
-                        
-                        workflow_steps = self.workflow_steps if hasattr(self, 'workflow_steps') else None
+                            def is_section_visible(section_id, **kwargs):  # type: ignore[misc]
+                                return True
+
+                            def any_classification_visible(**kwargs):  # type: ignore[misc]
+                                return True
+
+                            def resolve_viewer_role(_launcher):  # type: ignore[misc]
+                                return "user"
+
+                        workflow_steps = (
+                            self.workflow_steps if hasattr(self, "workflow_steps") else None
+                        )
+                        display_config = (
+                            self.display_config if hasattr(self, "display_config") else None
+                        )
+                        viewer_role = resolve_viewer_role(self)
 
                         # Defer heavy analysis sections until after initial render
                         analysis_loading_card = ui.card().classes(
@@ -4757,26 +6049,13 @@ class GUILauncher:
                                         pass
                                 analysis_container.clear()
                                 with analysis_container:
-                                    # MNP-Flex section
-                                    try:
-                                        try:
-                                            from .gui.components.mnpflex import add_mnpflex_section  # type: ignore
-                                        except ImportError:
-                                            from robin.gui.components.mnpflex import add_mnpflex_section
-
-                                        add_mnpflex_section(self, sample_dir, sample_id)
-                                    except Exception as e:
-                                        logging.exception(f"[GUI] MNP-Flex section failed: {e}")
-                                        try:
-                                            ui.notify(
-                                                f"MNP-Flex section failed: {e}", type="warning"
-                                            )
-                                        except Exception:
-                                            pass
-
+                                    t_analysis_start = time.perf_counter()
                                     # Classification section
-                                    enabled_classification_steps = get_enabled_classification_steps(workflow_steps)
-                                    if not workflow_steps or enabled_classification_steps:
+                                    if any_classification_visible(
+                                        workflow_steps=workflow_steps,
+                                        display_config=display_config,
+                                        viewer_role=viewer_role,
+                                    ):
                                         try:
                                             try:
                                                 from .gui.components.classification import add_classification_section  # type: ignore
@@ -4785,7 +6064,14 @@ class GUILauncher:
                                                     add_classification_section,
                                                 )
 
-                                            add_classification_section(sample_dir, self)
+                                            with _sample_page_section_timer(
+                                                "live_data",
+                                                sample_id,
+                                                "classification",
+                                            ):
+                                                add_classification_section(
+                                                    sample_dir, self
+                                                )
                                         except Exception as e:
                                             logging.exception(f"[GUI] Classification section failed: {e}")
                                             try:
@@ -4795,8 +6081,41 @@ class GUILauncher:
                                             except Exception:
                                                 pass
 
+                                    # V12 Classifier (MNP-Flex)
+                                    if is_section_visible(
+                                        "mnpflex",
+                                        workflow_steps=workflow_steps,
+                                        display_config=display_config,
+                                        viewer_role=viewer_role,
+                                    ):
+                                        try:
+                                            try:
+                                                from .gui.components.mnpflex import add_mnpflex_section  # type: ignore
+                                            except ImportError:
+                                                from robin.gui.components.mnpflex import add_mnpflex_section
+
+                                            with _sample_page_section_timer(
+                                                "live_data", sample_id, "mnpflex"
+                                            ):
+                                                add_mnpflex_section(
+                                                    self, sample_dir, sample_id
+                                                )
+                                        except Exception as e:
+                                            logging.exception(f"[GUI] MNP-Flex section failed: {e}")
+                                            try:
+                                                ui.notify(
+                                                    f"MNP-Flex section failed: {e}", type="warning"
+                                                )
+                                            except Exception:
+                                                pass
+
                                     # Coverage section (target)
-                                    if not workflow_steps or is_section_enabled("target", workflow_steps):
+                                    if is_section_visible(
+                                        "target",
+                                        workflow_steps=workflow_steps,
+                                        display_config=display_config,
+                                        viewer_role=viewer_role,
+                                    ):
                                         try:
                                             try:
                                                 from .gui.components.coverage import add_coverage_section  # type: ignore
@@ -4806,38 +6125,61 @@ class GUILauncher:
                                                     add_igv_viewer,
                                                 )
 
-                                            add_coverage_section(self, sample_dir)
+                                            with _sample_page_section_timer(
+                                                "live_data",
+                                                sample_id,
+                                                "coverage",
+                                            ):
+                                                add_coverage_section(
+                                                    self, sample_dir
+                                                )
                                         except Exception as e:
                                             try:
                                                 ui.notify(f"Coverage section failed: {e}", type="warning")
                                             except Exception:
                                                 pass
-                                    
+
                                     # MGMT section
-                                    if not workflow_steps or is_section_enabled("mgmt", workflow_steps):
+                                    if is_section_visible(
+                                        "mgmt",
+                                        workflow_steps=workflow_steps,
+                                        display_config=display_config,
+                                        viewer_role=viewer_role,
+                                    ):
                                         try:
                                             try:
                                                 from .gui.components.mgmt import add_mgmt_section  # type: ignore
                                             except ImportError:
                                                 from robin.gui.components.mgmt import add_mgmt_section
 
-                                            add_mgmt_section(self, sample_dir)
+                                            with _sample_page_section_timer(
+                                                "live_data", sample_id, "mgmt"
+                                            ):
+                                                add_mgmt_section(self, sample_dir)
                                         except Exception as e:
                                             logging.exception(f"[GUI] MGMT section failed: {e}")
                                             try:
                                                 ui.notify(f"MGMT section failed: {e}", type="warning")
                                             except Exception:
                                                 pass
-                                    
+
                                     # CNV section
-                                    if not workflow_steps or is_section_enabled("cnv", workflow_steps):
+                                    if is_section_visible(
+                                        "cnv",
+                                        workflow_steps=workflow_steps,
+                                        display_config=display_config,
+                                        viewer_role=viewer_role,
+                                    ):
                                         try:
                                             try:
                                                 from .gui.components.cnv import add_cnv_section  # type: ignore
                                             except ImportError:
                                                 from robin.gui.components.cnv import add_cnv_section
 
-                                            add_cnv_section(self, sample_dir)
+                                            with _sample_page_section_timer(
+                                                "live_data", sample_id, "cnv"
+                                            ):
+                                                add_cnv_section(self, sample_dir)
                                         except Exception as e:
                                             logging.exception(f"[GUI] CNV section failed: {e}")
                                             try:
@@ -4846,34 +6188,84 @@ class GUILauncher:
                                                 pass
 
                                     # Fusion section + BED coverage
-                                    if not workflow_steps or is_section_enabled("fusion", workflow_steps):
+                                    if is_section_visible(
+                                        "fusion",
+                                        workflow_steps=workflow_steps,
+                                        display_config=display_config,
+                                        viewer_role=viewer_role,
+                                    ):
                                         try:
                                             try:
                                                 from .gui.components.fusion import add_fusion_section  # type: ignore
                                             except ImportError:
                                                 from robin.gui.components.fusion import add_fusion_section
 
-                                            add_fusion_section(self, sample_dir)
+                                            with _sample_page_section_timer(
+                                                "live_data", sample_id, "fusion"
+                                            ):
+                                                add_fusion_section(self, sample_dir)
                                         except Exception as e:
                                             logging.exception(f"[GUI] Fusion section failed: {e}")
                                             try:
                                                 ui.notify(f"Fusion section failed: {e}", type="warning")
                                             except Exception:
                                                 pass
-                                        
+
+                                        if self.batman_mode:
+                                            try:
+                                                try:
+                                                    from .gui.components.bed_coverage import add_bed_coverage_section  # type: ignore
+                                                except ImportError:
+                                                    from robin.gui.components.bed_coverage import add_bed_coverage_section
+
+                                                if is_section_visible(
+                                                    "bed_coverage",
+                                                    workflow_steps=workflow_steps,
+                                                    display_config=display_config,
+                                                    viewer_role=viewer_role,
+                                                ):
+                                                    with _sample_page_section_timer(
+                                                        "live_data", sample_id, "bed_coverage"
+                                                    ):
+                                                        add_bed_coverage_section(self, sample_dir)
+                                            except Exception as e:
+                                                logging.exception(f"[GUI] BED coverage section failed: {e}")
+                                                try:
+                                                    ui.notify(f"BED Coverage section failed: {e}", type="warning")
+                                                except Exception:
+                                                    pass
+
+                                    # ITD / insertion hotspot section
+                                    if is_section_visible(
+                                        "itd",
+                                        workflow_steps=workflow_steps,
+                                        display_config=display_config,
+                                        viewer_role=viewer_role,
+                                    ):
                                         try:
                                             try:
-                                                from .gui.components.bed_coverage import add_bed_coverage_section  # type: ignore
+                                                from .gui.components.itd import add_itd_section  # type: ignore
                                             except ImportError:
-                                                from robin.gui.components.bed_coverage import add_bed_coverage_section
-                                            
-                                            add_bed_coverage_section(self, sample_dir)
+                                                from robin.gui.components.itd import add_itd_section
+
+                                            with _sample_page_section_timer(
+                                                "live_data", sample_id, "itd"
+                                            ):
+                                                add_itd_section(self, sample_dir)
                                         except Exception as e:
-                                            logging.exception(f"[GUI] BED Coverage section failed: {e}")
+                                            logging.exception(f"[GUI] ITD section failed: {e}")
                                             try:
-                                                ui.notify(f"BED Coverage section failed: {e}", type="warning")
+                                                ui.notify(f"ITD section failed: {e}", type="warning")
                                             except Exception:
                                                 pass
+
+                                    total_elapsed = time.perf_counter() - t_analysis_start
+                                    logging.debug(
+                                        "[SamplePage] page=live_data sample=%s "
+                                        "section=analysis_sections_total elapsed_s=%.3f",
+                                        sample_id,
+                                        total_elapsed,
+                                    )
                             except Exception as e:
                                 logging.exception(f"[GUI] Failed to build analysis sections: {e}")
 
@@ -4883,257 +6275,263 @@ class GUILauncher:
                         from robin.gui.theme import styled_table
 
                         # Files in output directory (design.md §9 — insight shell)
-                        with ui.element("div").classes("w-full min-w-0").props(
-                            "id=analysis-detail-output-files"
+                        if is_section_visible(
+                            "output_files",
+                            workflow_steps=workflow_steps,
+                            display_config=display_config,
+                            viewer_role=viewer_role,
                         ):
-                            with ui.element("div").classes(
-                                "classification-insight-shell w-full min-w-0"
+                            with ui.element("div").classes("w-full min-w-0").props(
+                                "id=analysis-detail-output-files"
                             ):
-                                ui.label("Output files").classes(
-                                    "classification-insight-heading text-headline-small"
-                                )
                                 with ui.element("div").classes(
-                                    "classification-insight-card w-full min-w-0"
+                                    "classification-insight-shell w-full min-w-0"
                                 ):
-                                    with ui.column().classes(
-                                        "w-full min-w-0 gap-2 p-2 md:p-3"
+                                    ui.label("Output files").classes(
+                                        "classification-insight-heading text-headline-small"
+                                    )
+                                    with ui.element("div").classes(
+                                        "classification-insight-card w-full min-w-0"
                                     ):
-                                        with ui.row().classes(
-                                            "items-center gap-2 min-w-0"
+                                        with ui.column().classes(
+                                            "w-full min-w-0 gap-2 p-2 md:p-3"
                                         ):
-                                            ui.icon("folder_open").classes(
-                                                "classification-insight-icon"
+                                            with ui.row().classes(
+                                                "items-center gap-2 min-w-0"
+                                            ):
+                                                ui.icon("folder_open").classes(
+                                                    "classification-insight-icon"
+                                                )
+                                                ui.label("Sample output directory").classes(
+                                                    "classification-insight-model flex-1 min-w-0"
+                                                )
+                                            ui.label(sample_id).classes(
+                                                "classification-insight-result w-full"
                                             )
-                                            ui.label("Sample output directory").classes(
-                                                "classification-insight-model flex-1 min-w-0"
+                                            ui.label(str(sample_dir)).classes(
+                                                "classification-insight-meta w-full break-all"
                                             )
-                                        ui.label(sample_id).classes(
-                                            "classification-insight-result w-full"
+                                            ui.label(
+                                                "Browse or download files from this run."
+                                            ).classes("classification-insight-foot")
+
+                                    ui.label("File list").classes(
+                                        "target-coverage-panel__meta-label mt-4 mb-1"
+                                    )
+                                    with ui.row().classes(
+                                        "items-center gap-3 mb-2 w-full flex-wrap"
+                                    ):
+                                        files_search = ui.input("Search files…").props(
+                                            "borderless dense clearable"
                                         )
-                                        ui.label(str(sample_dir)).classes(
-                                            "classification-insight-meta w-full break-all"
-                                        )
-                                        ui.label(
-                                            "Browse or download files from this run."
-                                        ).classes("classification-insight-foot")
 
-                                ui.label("File list").classes(
-                                    "target-coverage-panel__meta-label mt-4 mb-1"
-                                )
-                                with ui.row().classes(
-                                    "items-center gap-3 mb-2 w-full flex-wrap"
-                                ):
-                                    files_search = ui.input("Search files…").props(
-                                        "borderless dense clearable"
-                                    )
-
-                                _files_container, files_table = styled_table(
-                                    columns=[
-                                        {
-                                            "name": "name",
-                                            "label": "File",
-                                            "field": "name",
-                                            "sortable": True,
-                                        },
-                                        {
-                                            "name": "size",
-                                            "label": "Size (bytes)",
-                                            "field": "size",
-                                            "sortable": True,
-                                        },
-                                        {
-                                            "name": "mtime",
-                                            "label": "Last Modified",
-                                            "field": "mtime",
-                                            "sortable": True,
-                                        },
-                                        {
-                                            "name": "actions",
-                                            "label": "Download",
-                                            "field": "actions",
-                                            "sortable": False,
-                                            "align": "center",
-                                        },
-                                    ],
-                                    rows=[],
-                                    pagination=20,
-                                    class_size="table-xs",
-                                )
-                                try:
-                                    files_table.props(
-                                        "multi-sort rows-per-page-options="
-                                        '"[10,20,50,0]"'
-                                    )
-                                    files_search.bind_value(files_table, "filter")
-                                except Exception:
-                                    pass
-
-                                # Add download button slot that emits an event
-                                try:
-                                    files_table.add_slot(
-                                        "body-cell-actions",
-                                        """
-<q-td key="actions" :props="props">
-  <q-btn color="primary" size="sm" icon="download"
-         @click="() => $parent.$emit('download-file', props.row.name)"
-         title="Download file" />
-</q-td>
-""",
-                                    )
-                                except Exception:
-                                    pass
-
-                                try:
-                                    files_table.on(
-                                        "download-file",
-                                        lambda event: _download_file(event.args),
-                                    )
-                                except Exception:
-                                    pass
-
-                    # master.csv fields (BAM counters, etc.) are shown in Run summary (summary.py)
-
-                    # Download method for individual files
-                    def _download_file(filename: str):
-                        """Download a single file from the sample directory."""
-                        try:
-                            if not sample_dir or not sample_dir.exists():
-                                ui.notify("Sample directory not found", type="error")
-                                return
-
-                            file_path = sample_dir / filename
-                            if not file_path.exists() or not file_path.is_file():
-                                ui.notify(f"File {filename} not found", type="error")
-                                return
-
-                            with open(file_path, 'rb') as f:
-                                content = f.read()
-
-                            ui.download(
-                                content,
-                                filename=filename,
-                                media_type='application/octet-stream'
-                            )
-
-                        except Exception as e:
-                            ui.notify(f"Download failed: {e}", type="error")
-
-                    # Periodic refresher for files table
-                    _notify_state = {"files_error": False}
-
-                    def _refresh_files_list_sync() -> List[Dict[str, Any]]:
-                        """Synchronous file list refresh - runs in background thread"""
-                        rows = []
-                        if sample_dir and sample_dir.exists():
-                            for f in sorted(sample_dir.iterdir()):
-                                if f.is_file():
-                                    try:
-                                        stat = f.stat()
-                                        rows.append(
+                                    _files_container, files_table = styled_table(
+                                        columns=[
                                             {
-                                                "name": f.name,
-                                                "size": stat.st_size,
-                                                "mtime": time.strftime(
-                                                    "%Y-%m-%d %H:%M:%S",
-                                                    time.localtime(stat.st_mtime),
-                                                ),
-                                                "actions": f.name,  # Store filename for actions
-                                            }
+                                                "name": "name",
+                                                "label": "File",
+                                                "field": "name",
+                                                "sortable": True,
+                                            },
+                                            {
+                                                "name": "size",
+                                                "label": "Size (bytes)",
+                                                "field": "size",
+                                                "sortable": True,
+                                            },
+                                            {
+                                                "name": "mtime",
+                                                "label": "Last Modified",
+                                                "field": "mtime",
+                                                "sortable": True,
+                                            },
+                                            {
+                                                "name": "actions",
+                                                "label": "Download",
+                                                "field": "actions",
+                                                "sortable": False,
+                                                "align": "center",
+                                            },
+                                        ],
+                                        rows=[],
+                                        pagination=20,
+                                        class_size="table-xs",
+                                    )
+                                    try:
+                                        files_table.props(
+                                            "multi-sort rows-per-page-options="
+                                            '"[10,20,50,0]"'
+                                        )
+                                        files_search.bind_value(files_table, "filter")
+                                    except Exception:
+                                        pass
+
+                                    # Add download button slot that emits an event
+                                    try:
+                                        files_table.add_slot(
+                                            "body-cell-actions",
+                                            """
+    <q-td key="actions" :props="props">
+      <q-btn color="primary" size="sm" icon="download"
+             @click="() => $parent.$emit('download-file', props.row.name)"
+             title="Download file" />
+    </q-td>
+    """,
                                         )
                                     except Exception:
-                                        continue
-                        return rows
+                                        pass
 
-                    async def _refresh_sample_detail_async() -> None:
-                        """Asynchronous version of sample detail refresh"""
-                        try:
-                            # Run file operations in background threads
-                            #import concurrent.futures
-                            # Run file I/O operations in background threads to avoid blocking GUI
-                            import asyncio
-                            files_result = await asyncio.to_thread(_refresh_files_list_sync)
+                                    try:
+                                        files_table.on(
+                                            "download-file",
+                                            lambda event: _download_file(event.args),
+                                        )
+                                    except Exception:
+                                        pass
 
-                            # Update UI with results
-                            files_table.rows = files_result
-                            files_table.update()
+                            # master.csv fields (BAM counters, etc.) are shown in Run summary (summary.py)
 
-                            # Reset error states on success
-                            _notify_state["files_error"] = False
-                            
-                        except Exception as e:
-                            logging.error(f"Error in async sample detail refresh: {e}")
-                            # Only show error notification once per error type
-                            if not _notify_state["files_error"]:
+                            # Download method for individual files
+                            def _download_file(filename: str):
+                                """Download a single file from the sample directory."""
                                 try:
-                                    ui.notify(
-                                        f"Failed to refresh sample data for {sample_id}: {e}",
-                                        type="warning",
+                                    if not self._require_export_or_notify():
+                                        return
+                                    if not sample_dir or not sample_dir.exists():
+                                        ui.notify("Sample directory not found", type="error")
+                                        return
+
+                                    file_path = sample_dir / filename
+                                    if not file_path.exists() or not file_path.is_file():
+                                        ui.notify(f"File {filename} not found", type="error")
+                                        return
+
+                                    with open(file_path, "rb") as f:
+                                        content = f.read()
+
+                                    ui.download(
+                                        content,
+                                        filename=filename,
+                                        media_type="application/octet-stream",
                                     )
+
+                                except Exception as e:
+                                    ui.notify(f"Download failed: {e}", type="error")
+
+                            # Periodic refresher for files table
+                            _notify_state = {"files_error": False}
+
+                            def _refresh_files_list_sync() -> List[Dict[str, Any]]:
+                                """Synchronous file list refresh - runs in background thread"""
+                                rows = []
+                                if sample_dir and sample_dir.exists():
+                                    for f in sorted(sample_dir.iterdir()):
+                                        if f.is_file():
+                                            try:
+                                                stat = f.stat()
+                                                rows.append(
+                                                    {
+                                                        "name": f.name,
+                                                        "size": stat.st_size,
+                                                        "mtime": time.strftime(
+                                                            "%Y-%m-%d %H:%M:%S",
+                                                            time.localtime(stat.st_mtime),
+                                                        ),
+                                                        "actions": f.name,
+                                                    }
+                                                )
+                                            except Exception:
+                                                continue
+                                return rows
+
+                            async def _refresh_sample_detail_async() -> None:
+                                """Asynchronous version of sample detail refresh"""
+                                try:
+                                    import asyncio
+
+                                    files_result = await asyncio.to_thread(
+                                        _refresh_files_list_sync
+                                    )
+                                    files_table.rows = files_result
+                                    files_table.update()
+                                    _notify_state["files_error"] = False
+                                except Exception as e:
+                                    logging.error(
+                                        f"Error in async sample detail refresh: {e}"
+                                    )
+                                    if not _notify_state["files_error"]:
+                                        try:
+                                            ui.notify(
+                                                f"Failed to refresh sample data for {sample_id}: {e}",
+                                                type="warning",
+                                            )
+                                        except Exception:
+                                            pass
+                                        _notify_state["files_error"] = True
+
+                            def _refresh_sample_detail() -> None:
+                                """Synchronous version - kept for backward compatibility"""
+                                try:
+                                    rows = _refresh_files_list_sync()
+                                    files_table.rows = rows
+                                    files_table.update()
+                                except Exception as e:
+                                    if not _notify_state["files_error"]:
+                                        try:
+                                            ui.notify(
+                                                f"Failed to list output files for {sample_id}: {e}",
+                                                type="warning",
+                                            )
+                                        except Exception:
+                                            pass
+                                        _notify_state["files_error"] = True
+
+                            if show_loading and loading_container:
+                                async def _load_initial_data_and_show():
+                                    try:
+                                        await _refresh_sample_detail_async()
+                                        loading_container.style("display: none")
+                                        content_container.style("display: flex")
+                                    except Exception as e:
+                                        logging.error(f"Error loading initial data: {e}")
+                                        loading_container.style("display: none")
+                                        content_container.style("display: flex")
+
+                                try:
+                                    ui.timer(0.1, _load_initial_data_and_show, once=True)
+                                except Exception:
+                                    loading_container.style("display: none")
+                                    content_container.style("display: flex")
+                            else:
+                                try:
+                                    ui.timer(0.1, _refresh_sample_detail_async, once=True)
                                 except Exception:
                                     pass
-                                _notify_state["files_error"] = True
 
-                    def _refresh_sample_detail() -> None:
-                        """Synchronous version - kept for backward compatibility"""
-                        # Refresh files list
-                        try:
-                            rows = _refresh_files_list_sync()
-                            files_table.rows = rows
-                            files_table.update()
-                        except Exception as e:
-                            if not _notify_state["files_error"]:
-                                try:
-                                    ui.notify(
-                                        f"Failed to list output files for {sample_id}: {e}",
-                                        type="warning",
-                                    )
-                                except Exception:
-                                    pass
-                                _notify_state["files_error"] = True
-
-                    # Show content and hide loading after initial data load (only when showing loading)
-                    if show_loading and loading_container:
-                        async def _load_initial_data_and_show():
-                            """Load initial data asynchronously then show content"""
                             try:
-                                # Load initial data
-                                await _refresh_sample_detail_async()
-                                
-                                # Show content and hide loading
-                                loading_container.style("display: none")
-                                content_container.style("display: flex")
-                                
-                            except Exception as e:
-                                logging.error(f"Error loading initial data: {e}")
-                                # Show content anyway to avoid infinite loading
+                                from robin.gui.theme import client_timer, stop_timer
+
+                                refresh_timer = client_timer(
+                                    30.0, _refresh_sample_detail_async
+                                )
+                                try:
+                                    ui.context.client.on_disconnect(
+                                        lambda: stop_timer(refresh_timer)
+                                    )
+                                except Exception:
+                                    pass
+                            except Exception:
+                                pass
+                        elif show_loading and loading_container:
+                            def _show_content_without_files() -> None:
                                 loading_container.style("display: none")
                                 content_container.style("display: flex")
 
-                        # Start initial data loading
-                        try:
-                            ui.timer(0.1, _load_initial_data_and_show, once=True)
-                        except Exception:
-                            # Fallback: show content immediately if timer fails
-                            loading_container.style("display: none")
-                            content_container.style("display: flex")
-                    else:
-                        # For page refreshes, load data immediately
-                        try:
-                            ui.timer(0.1, _refresh_sample_detail_async, once=True)
-                        except Exception:
-                            pass
-
-                    # Start periodic refresh with async version
-                    try:
-                        refresh_timer = ui.timer(30.0, _refresh_sample_detail_async)
-                        try:
-                            ui.context.client.on_disconnect(
-                                lambda: refresh_timer.deactivate()
-                            )
-                        except Exception:
-                            pass
-                    except Exception:
-                        pass
+                            try:
+                                ui.timer(0.1, _show_content_without_files, once=True)
+                            except Exception:
+                                loading_container.style("display: none")
+                                content_container.style("display: flex")
 
     def _create_sample_details_page(self, sample_id: str):
         """Create the sample details page with comprehensive information."""
@@ -5143,6 +6541,9 @@ class GUILauncher:
             if self.monitored_directory
             else None
         )
+        if sample_dir:
+            self._touch_component_state_key(str(sample_dir))
+            self._prune_component_state_caches()
         test_id = _get_test_id_from_manifest(sample_dir) if sample_dir else ""
 
         # Check if sample is known
@@ -5150,7 +6551,7 @@ class GUILauncher:
             with theme.frame(
                 f"R.O.B.I.N - Sample Details",
                 smalltitle="Details",
-                batphone=False,
+                batphone=self.batman_mode,
                 center=self.center,
                 setup_notifications=self._setup_notification_system,
             ):
@@ -5179,16 +6580,69 @@ class GUILauncher:
                         "mt-1 rounded-lg border border-slate-300 dark:border-slate-600"
                     ).props("flat")
             return
-        
+
         # Create the page with theme frame
         title_suffix = f" | {test_id}" if test_id else ""
         with theme.frame(
             f"R.O.B.I.N - Sample Details: {sample_id}{title_suffix}",
             smalltitle=f"{sample_id} Details{title_suffix}".strip(),
-            batphone=False,
+            batphone=self.batman_mode,
             center=self.center,
             setup_notifications=self._setup_notification_system,
         ):
+            from robin.gui.config import is_section_visible, launcher_visibility_context
+            from robin.gui.display_config import SAMPLE_DETAILS_SURFACE
+
+            workflow_steps, display_config, viewer_role = launcher_visibility_context(self)
+            details_surface = SAMPLE_DETAILS_SURFACE
+            show_details_igv = is_section_visible(
+                "target",
+                workflow_steps=workflow_steps,
+                display_config=display_config,
+                surface=details_surface,
+                viewer_role=viewer_role,
+            )
+            show_details_target_genes = show_details_igv
+            show_details_snp = is_section_visible(
+                "snp",
+                workflow_steps=workflow_steps,
+                display_config=display_config,
+                surface=details_surface,
+                viewer_role=viewer_role,
+            )
+            show_details_itd = is_section_visible(
+                "itd",
+                workflow_steps=workflow_steps,
+                display_config=display_config,
+                surface=details_surface,
+                viewer_role=viewer_role,
+            )
+            if show_details_itd and sample_dir is not None:
+                show_details_itd = (sample_dir / "itd_events.csv").is_file() or (
+                    sample_dir / "itd_summary.csv"
+                ).is_file()
+            show_fusion_target = is_section_visible(
+                "fusion_target",
+                workflow_steps=workflow_steps,
+                display_config=display_config,
+                surface=details_surface,
+                viewer_role=viewer_role,
+            )
+            show_fusion_genome = is_section_visible(
+                "fusion_genome",
+                workflow_steps=workflow_steps,
+                display_config=display_config,
+                surface=details_surface,
+                viewer_role=viewer_role,
+            )
+            show_details_fusion_pairs = is_section_visible(
+                "fusion",
+                workflow_steps=workflow_steps,
+                display_config=display_config,
+                surface=details_surface,
+                viewer_role=viewer_role,
+            ) and (show_fusion_target or show_fusion_genome)
+
             with ui.element("div").classes("w-full min-w-0").props("id=sample-details-page"):
                 with ui.element("div").classes("classification-insight-shell w-full min-w-0"):
                     with ui.row().classes(
@@ -5208,25 +6662,76 @@ class GUILauncher:
                             ui.label(details_label).classes(
                                 "classification-insight-meta w-full font-mono break-all"
                             )
-                            ui.label(
-                                "IGV browser, sample identifiers, SNP tables, fusion pairs, "
-                                "and target genes."
-                            ).classes("classification-insight-foot")
+                            details_blurbs: List[str] = []
+                            if show_details_igv:
+                                details_blurbs.append("IGV browser")
+                            if show_details_snp:
+                                details_blurbs.append("SNP tables")
+                            if show_details_itd:
+                                details_blurbs.append("ITDs / insertions")
+                            if show_details_fusion_pairs:
+                                details_blurbs.append("fusion pairs")
+                            if show_details_target_genes:
+                                details_blurbs.append("target genes")
+                            if details_blurbs:
+                                ui.label(
+                                    " · ".join(details_blurbs).capitalize() + "."
+                                ).classes("classification-insight-foot")
+                            else:
+                                ui.label(
+                                    "No analysis sections are enabled for this page."
+                                ).classes("classification-insight-foot")
+                            with ui.row().classes(
+                                "w-full flex-wrap items-center gap-x-4 gap-y-1 mt-1"
+                            ):
+                                if sample_dir:
+                                    with ui.row().classes("items-center gap-1 min-w-0"):
+                                        ui.icon("folder_open", size="xs").classes(
+                                            "text-emerald-600 dark:text-emerald-400"
+                                        )
+                                        ui.label("Output").classes(
+                                            "text-label-small text-slate-500 dark:text-slate-400"
+                                        )
+                                        ui.label(str(sample_dir)).classes(
+                                            "text-body-small text-mono text-slate-700 "
+                                            "dark:text-slate-300 break-all"
+                                        )
+                                if self.center:
+                                    with ui.row().classes("items-center gap-1"):
+                                        ui.icon("hub", size="xs").classes(
+                                            "text-emerald-600 dark:text-emerald-400"
+                                        )
+                                        ui.label("Center").classes(
+                                            "text-label-small text-slate-500 dark:text-slate-400"
+                                        )
+                                        ui.label(str(self.center)).classes(
+                                            "text-body-small text-slate-700 dark:text-slate-300"
+                                        )
                             ui.button(
                                 "View sample identifiers",
                                 on_click=lambda: self._open_view_identifiers_modal(
                                     sample_dir, sample_id
                                 ),
-                            ).classes("mt-1 self-start").props(
+                            ).classes("sample-action-button mt-1 self-start").props(
                                 "flat dense color=primary no-caps"
                             )
-                        ui.button(
-                            "Back to sample",
-                            on_click=lambda: ui.navigate.to(f"/live_data/{sample_id}"),
-                        ).props("color=primary no-caps").classes(
-                            "rounded-lg shrink-0 self-stretch md:self-start "
-                            "w-full md:w-auto md:min-w-[10rem]"
-                        )
+                        with ui.column().classes(
+                            "sample-action-panel shrink-0 self-stretch md:self-start "
+                            "w-full md:w-auto gap-2 p-2"
+                        ):
+                            ui.button(
+                                "View audit",
+                                on_click=lambda: self._open_sample_audit_dialog(sample_id),
+                                icon="history",
+                            ).props("flat no-caps outline").classes(
+                                "sample-action-button w-full md:min-w-[10rem]"
+                            )
+                            ui.button(
+                                "Back to sample",
+                                on_click=lambda: ui.navigate.to(f"/live_data/{sample_id}"),
+                            ).props("color=primary no-caps").classes(
+                                "sample-primary-action w-full md:min-w-[10rem]"
+                            )
 
                 with ui.column().classes("w-full gap-3 p-2 md:p-3"):
                     with ui.element("div").classes(
@@ -5293,807 +6798,150 @@ class GUILauncher:
                                     )
 
                     # IGV Viewer section - moved to top, before tables
-                    if sample_dir and sample_dir.exists():
+                    if sample_dir and sample_dir.exists() and show_details_igv:
                         from robin.gui.components.coverage import add_igv_viewer
-                        add_igv_viewer(self, sample_dir)
-                    
+
+                        with _sample_page_section_timer(
+                            "sample_details", sample_id, "igv_viewer"
+                        ):
+                            add_igv_viewer(self, sample_dir)
+
                     # SNP Analysis section
-                    if sample_dir and sample_dir.exists():
+                    if sample_dir and sample_dir.exists() and show_details_snp:
                         from robin.gui.components.snp import add_snp_section
-                        add_snp_section(self, sample_dir)
-                    
-                    # Fusion Pairs Table section
-                    if sample_dir and sample_dir.exists():
-                        from robin.gui.components.fusion import (
-                            _load_processed_pickle,
-                            _cluster_fusion_reads
-                        )
-                        import pandas as pd
-                        
-                        # Load fusion data
-                        fusion_data_loaded = False
-                        fusion_data = None
+
+                        with _sample_page_section_timer(
+                            "sample_details", sample_id, "snp"
+                        ):
+                            add_snp_section(self, sample_dir)
+
+                    # ITD / insertion events (with IGV links)
+                    if sample_dir and sample_dir.exists() and show_details_itd:
                         try:
-                            target_file = sample_dir / "fusion_candidates_master_processed.pkl"
-                            genome_file = sample_dir / "fusion_candidates_all_processed.pkl"
-                            
-                            # Try to load target panel data first, then genome-wide
-                            if target_file.exists():
-                                fusion_data = _load_processed_pickle(target_file)
-                                if fusion_data and fusion_data.get("annotated_data") is not None:
-                                    fusion_data_loaded = True
-                            elif genome_file.exists():
-                                fusion_data = _load_processed_pickle(genome_file)
-                                if fusion_data and fusion_data.get("annotated_data") is not None:
-                                    fusion_data_loaded = True
-                        except Exception as e:
-                            logging.warning(f"Failed to load fusion data: {e}")
-                        
-                        if fusion_data_loaded and fusion_data:
-                            annotated_data = fusion_data.get("annotated_data", pd.DataFrame())
-                            goodpairs = fusion_data.get("goodpairs", pd.Series())
-                            
-                            if not annotated_data.empty:
-                                # Filter to good pairs if available
-                                if not goodpairs.empty and goodpairs.sum() > 0:
-                                    aligned_goodpairs = goodpairs.reindex(annotated_data.index, fill_value=False)
-                                    filtered_data = annotated_data[aligned_goodpairs]
-                                else:
-                                    filtered_data = annotated_data
-                                
-                                # Cluster fusion reads
-                                clustered_data = _cluster_fusion_reads(
-                                    filtered_data, 
-                                    max_distance=10000, 
-                                    use_breakpoint_validation=True
-                                )
-                                
-                                if not clustered_data.empty:
-                                    with ui.element("div").classes(
-                                        "classification-insight-shell w-full min-w-0"
-                                    ):
-                                        ui.label("Fusion pairs").classes(
-                                            "classification-insight-heading text-headline-small"
-                                        )
-                                        ui.label(
-                                            "Click a row to open the fusion region in IGV."
-                                        ).classes("classification-insight-meta w-full mb-2")
-                                        
-                                        # Create columns for the table
-                                        from robin.gui.theme import styled_table
-                                        
-                                        columns = [
-                                            {"name": "fusion_pair", "label": "Fusion Pair", "field": "fusion_pair", "sortable": True},
-                                            {"name": "chr1", "label": "Chr 1", "field": "chr1", "sortable": True},
-                                            {"name": "pos1", "label": "Breakpoint 1", "field": "pos1", "sortable": True},
-                                            {"name": "chr2", "label": "Chr 2", "field": "chr2", "sortable": True},
-                                            {"name": "pos2", "label": "Breakpoint 2", "field": "pos2", "sortable": True},
-                                            {"name": "reads", "label": "Supporting Reads", "field": "reads", "sortable": True},
-                                            {"name": "action", "label": "View in IGV", "field": "action", "sortable": False}
-                                        ]
-                                        
-                                        # Format rows for display
-                                        rows = []
-                                        fusion_region_map = {}  # Store region info for each row
-                                        
-                                        # Import re for position parsing
-                                        import re
-                                        
-                                        for idx, row in clustered_data.iterrows():
-                                            # Try to get start/end coordinates from the row if available
-                                            # (e.g., from breakpoint validation)
-                                            if all(col in row for col in ["gene1_start", "gene1_end", "gene2_start", "gene2_end"]):
-                                                # Use actual start/end coordinates if available
-                                                start1_raw = int(row["gene1_start"])
-                                                end1_raw = int(row["gene1_end"])
-                                                start2_raw = int(row["gene2_start"])
-                                                end2_raw = int(row["gene2_end"])
-                                            else:
-                                                # Parse from position strings (format: "start-end")
-                                                pos1_str = str(row.get("gene1_position", ""))
-                                                pos2_str = str(row.get("gene2_position", ""))
-                                                
-                                                # Parse range format "start-end" or just a single number
-                                                pos1_match = re.match(r'(\d+)[-–—](\d+)', pos1_str.replace(',', ''))
-                                                pos2_match = re.match(r'(\d+)[-–—](\d+)', pos2_str.replace(',', ''))
-                                                
-                                                if pos1_match and pos2_match:
-                                                    # Extract both start and end from the range
-                                                    start1_raw = int(pos1_match.group(1))
-                                                    end1_raw = int(pos1_match.group(2))
-                                                    start2_raw = int(pos2_match.group(1))
-                                                    end2_raw = int(pos2_match.group(2))
-                                                else:
-                                                    # Fallback: try to extract single coordinates
-                                                    pos1_single = re.search(r'(\d+)', pos1_str.replace(',', ''))
-                                                    pos2_single = re.search(r'(\d+)', pos2_str.replace(',', ''))
-                                                    if pos1_single and pos2_single:
-                                                        # Single coordinate - use it as both start and end
-                                                        start1_raw = end1_raw = int(pos1_single.group(1))
-                                                        start2_raw = end2_raw = int(pos2_single.group(1))
-                                                    else:
-                                                        # Skip this row if we can't parse coordinates
-                                                        continue
-                                            
-                                            # Use the actual range (start to end), then add/subtract 10kb padding
-                                            padding = 10000
-                                            min1 = min(start1_raw, end1_raw)
-                                            max1 = max(start1_raw, end1_raw)
-                                            min2 = min(start2_raw, end2_raw)
-                                            max2 = max(start2_raw, end2_raw)
-                                            
-                                            # Subtract 10kb from min and add 10kb to max
-                                            start1 = max(1, min1 - padding)
-                                            end1 = max1 + padding
-                                            start2 = max(1, min2 - padding)
-                                            end2 = max2 + padding
-                                            
-                                            chr1 = str(row.get("chr1", "Unknown"))
-                                            chr2 = str(row.get("chr2", "Unknown"))
-                                            
-                                            # Format region as "chr1:start-end chr2:start-end"
-                                            region = f"{chr1}:{start1}-{end1} {chr2}:{start2}-{end2}"
-                                            
-                                            # For display, show the breakpoint range (not the padded version)
-                                            # Use a single representative coordinate or the range midpoint
-                                            display_pos1 = f"{min1:,}-{max1:,}" if min1 != max1 else f"{min1:,}"
-                                            display_pos2 = f"{min2:,}-{max2:,}" if min2 != max2 else f"{min2:,}"
-                                            
-                                            formatted_row = {
-                                                "fusion_pair": row.get("fusion_pair", ""),
-                                                "chr1": chr1,
-                                                "pos1": display_pos1,
-                                                "chr2": chr2,
-                                                "pos2": display_pos2,
-                                                "reads": int(row.get("reads", 0)),
-                                                "action": "",
-                                            }
-                                            
-                                            rows.append(formatted_row)
-                                            fusion_region_map[len(rows) - 1] = region
-                                        
-                                        if rows:
-                                            # Store fusion regions mapped by fusion pair for easy lookup
-                                            fusion_regions_by_pair = {}
-                                            for idx, row_data in enumerate(rows):
-                                                fusion_regions_by_pair[row_data["fusion_pair"]] = fusion_region_map[idx]
-                                            
-                                            # Create JavaScript map of regions for IGV navigation
-                                            import json
-                                            js_regions_json = json.dumps(fusion_regions_by_pair)
-                                            
-                                            # Function to navigate IGV to a fusion region
-                                            def navigate_to_fusion_region(fusion_pair: str):
-                                                """Navigate IGV browser to the specified fusion pair region."""
-                                                if fusion_pair in fusion_regions_by_pair:
-                                                    region = fusion_regions_by_pair[fusion_pair]
-                                                    # Escape region string for JavaScript
-                                                    escaped_region = region.replace('"', '\\"').replace("'", "\\'")
-                                                    js_navigate = f"""
-                                                        (function() {{
-                                                            try {{
-                                                                if (window.lj_igv && window.lj_igv_browser_ready) {{
-                                                                    console.log('[IGV] Navigating to fusion region: {escaped_region}');
-                                                                    window.lj_igv.search('{escaped_region}');
-                                                                }} else {{
-                                                                    console.warn('[IGV] Browser not ready yet, will navigate when ready');
-                                                                    setTimeout(function() {{
-                                                                        if (window.lj_igv && window.lj_igv_browser_ready) {{
-                                                                            window.lj_igv.search('{escaped_region}');
-                                                                        }}
-                                                                    }}, 500);
-                                                                }}
-                                                            }} catch (error) {{
-                                                                console.error('[IGV] Navigation error:', error);
-                                                            }}
-                                                        }})();
-                                                    """
-                                                    ui.run_javascript(js_navigate, timeout=5.0)
-                                            
-                                            # Initialize fusion regions map in window BEFORE creating table
-                                            # This ensures it's available when the slot template renders
-                                            js_init_regions = f"""
-                                                (function() {{
-                                                    window.fusionRegionsMap = window.fusionRegionsMap || {{}};
-                                                    Object.assign(window.fusionRegionsMap, {js_regions_json});
-                                                    console.log('[Fusion] Initialized fusion regions map with', Object.keys(window.fusionRegionsMap).length, 'regions');
-                                                }})();
-                                            """
-                                            ui.run_javascript(js_init_regions, timeout=5.0)
-                                            
-                                            # Create styled table
-                                            table_container, fusion_table = styled_table(
-                                                columns=columns,
-                                                rows=rows,
-                                                pagination=20,
-                                                class_size="table-xs"
-                                            )
-                                            
-                                            # Add clickable action button column using slot that emits events to Python
-                                            try:
-                                                # Use Vue event emission which is more reliable than window functions
-                                                fusion_table.add_slot(
-                                                    "body-cell-action",
-                                                    """
-<q-td key="action" :props="props">
-  <q-btn 
-    icon="visibility" 
-    size="sm" 
-    dense 
-    flat 
-    color="primary"
-    @click="$parent.$emit('fusion-view-igv', props.row.fusion_pair)"
-    title="View in IGV"
-  />
-</q-td>
-"""
-                                                )
-                                                
-                                                # Handle the event from the slot
-                                                def on_fusion_view_igv(e):
-                                                    """Handle fusion view IGV event from table button."""
-                                                    try:
-                                                        fusion_pair = e.args if isinstance(e.args, str) else getattr(e, 'args', None)
-                                                        if fusion_pair:
-                                                            logging.debug(f"[Fusion] Button clicked for: {fusion_pair}")
-                                                            navigate_to_fusion_region(fusion_pair)
-                                                    except Exception as ex:
-                                                        logging.warning(f"Error handling fusion view IGV event: {ex}")
-                                                
-                                                fusion_table.on("fusion-view-igv", on_fusion_view_igv)
-                                                logging.debug("Added action button column slot with event handler")
-                                            except Exception as slot_ex:
-                                                logging.warning(f"Could not add action column slot: {slot_ex}")
-                                                import traceback
-                                                logging.warning(traceback.format_exc())
-                                                
-                                                # Fallback: Use JavaScript with inline region lookup
-                                                try:
-                                                    # Create a safer inline handler that doesn't rely on window functions
-                                                    js_inline_handler = f"""
-                                                        (function() {{
-                                                            // Store regions as a constant in the closure
-                                                            const fusionRegions = {js_regions_json};
-                                                            
-                                                            // Create handler function immediately
-                                                            window.handleFusionNav = function(fusionPair) {{
-                                                                console.log('[Fusion] Navigation handler called for:', fusionPair);
-                                                                const region = fusionRegions[fusionPair];
-                                                                if (region) {{
-                                                                    console.log('[Fusion] Navigating to:', region);
-                                                                    function nav() {{
-                                                                        if (window.lj_igv && window.lj_igv_browser_ready) {{
-                                                                            window.lj_igv.search(region);
-                                                                            return true;
-                                                                        }}
-                                                                        return false;
-                                                                    }}
-                                                                    if (!nav()) {{
-                                                                        setTimeout(nav, 500);
-                                                                        setTimeout(nav, 1500);
-                                                                    }}
-                                                                }}
-                                                            }};
-                                                            console.log('[Fusion] Created navigation handler');
-                                                        }})();
-                                                    """
-                                                    ui.run_javascript(js_inline_handler, timeout=5.0)
-                                                    
-                                                    # Wait a moment for JS to execute, then add slot
-                                                    ui.timer(0.1, lambda: None, once=True)
-                                                    
-                                                    fusion_table.add_slot(
-                                                        "body-cell-action",
-                                                        """
-<q-td key="action" :props="props">
-  <q-btn 
-    icon="visibility" 
-    size="sm" 
-    dense 
-    flat 
-    color="primary"
-    @click="window.handleFusionNav && window.handleFusionNav(props.row.fusion_pair)"
-    title="View in IGV"
-  />
-</q-td>
-"""
-                                                    )
-                                                except Exception as fallback_ex:
-                                                    logging.warning(f"Fallback approach also failed: {fallback_ex}")
-                                            
-                                            # Use JavaScript to attach click handlers to rows - improved with event delegation
-                                            js_attach_handlers = f"""
-                                                (function() {{
-                                                    let attached = false;
-                                                    
-                                                    function attachFusionHandlers() {{
-                                                        if (attached) return;
-                                                        
-                                                        console.log('[Fusion] Attaching click handlers...');
-                                                        
-                                                        // Use event delegation on the document body for better reliability
-                                                        function handleFusionRowClick(e) {{
-                                                            // Check if click is on a fusion table row
-                                                            let target = e.target;
-                                                            let row = target.closest('tbody tr');
-                                                            
-                                                            if (!row) return;
-                                                            
-                                                            // Check if this row is in a fusion table
-                                                            const table = row.closest('table');
-                                                            if (!table) return;
-                                                            
-                                                            const headers = table.querySelectorAll('thead th');
-                                                            let isFusionTable = false;
-                                                            for (let i = 0; i < headers.length; i++) {{
-                                                                if ((headers[i].textContent || '').toLowerCase().includes('fusion pair')) {{
-                                                                    isFusionTable = true;
-                                                                    break;
-                                                                }}
-                                                            }}
-                                                            
-                                                            if (!isFusionTable) return;
-                                                            
-                                                            // Skip if clicking on the action button (let button handle it)
-                                                            if (target.closest('button') || target.closest('.q-btn')) {{
-                                                                return;
-                                                            }}
-                                                            
-                                                            e.preventDefault();
-                                                            e.stopPropagation();
-                                                            
-                                                            console.log('[Fusion] Row clicked');
-                                                            
-                                                            // Get fusion pair from first cell
-                                                            const cells = row.querySelectorAll('td');
-                                                            if (cells.length > 0) {{
-                                                                const fusionPair = cells[0].textContent.trim();
-                                                                console.log('[Fusion] Fusion pair:', fusionPair);
-                                                                
-                                                                if (fusionPair && window.fusionRegionsMap && window.fusionRegionsMap[fusionPair]) {{
-                                                                    const region = window.fusionRegionsMap[fusionPair];
-                                                                    console.log('[Fusion] Navigating to region:', region);
-                                                                    
-                                                                    // Visual feedback
-                                                                    row.style.backgroundColor = '#e3f2fd';
-                                                                    setTimeout(function() {{
-                                                                        row.style.backgroundColor = '';
-                                                                    }}, 400);
-                                                                    
-                                                                    // Navigate IGV
-                                                                    function navIGV() {{
-                                                                        if (window.lj_igv && window.lj_igv_browser_ready) {{
-                                                                            try {{
-                                                                                window.lj_igv.search(region);
-                                                                                console.log('[Fusion] IGV navigation successful');
-                                                                                return true;
-                                                                            }} catch(err) {{
-                                                                                console.error('[Fusion] IGV error:', err);
-                                                                                return false;
-                                                                            }}
-                                                                        }}
-                                                                        return false;
-                                                                    }}
-                                                                    
-                                                                    if (!navIGV()) {{
-                                                                        setTimeout(function() {{ navIGV(); }}, 500);
-                                                                        setTimeout(function() {{ navIGV(); }}, 1500);
-                                                                    }}
-                                                                }}
-                                                            }}
-                                                        }}
-                                                        
-                                                        // Attach event listener to document (event delegation)
-                                                        document.addEventListener('click', handleFusionRowClick, true);
-                                                        
-                                                        // Also make rows visually clickable
-                                                        const tables = document.querySelectorAll('table');
-                                                        tables.forEach(function(table) {{
-                                                            const headers = table.querySelectorAll('thead th');
-                                                            let isFusionTable = false;
-                                                            for (let i = 0; i < headers.length; i++) {{
-                                                                if ((headers[i].textContent || '').toLowerCase().includes('fusion pair')) {{
-                                                                    isFusionTable = true;
-                                                                    break;
-                                                                }}
-                                                            }}
-                                                            
-                                                            if (isFusionTable) {{
-                                                                const tbody = table.querySelector('tbody');
-                                                                if (tbody) {{
-                                                                    const rows = tbody.querySelectorAll('tr');
-                                                                    rows.forEach(function(row) {{
-                                                                        row.style.cursor = 'pointer';
-                                                                    }});
-                                                                    console.log('[Fusion] Made', rows.length, 'rows clickable');
-                                                                }}
-                                                            }}
-                                                        }});
-                                                        
-                                                        attached = true;
-                                                        console.log('[Fusion] Click handlers attached successfully');
-                                                    }}
-                                                    
-                                                    // Try multiple times to ensure table is rendered
-                                                    attachFusionHandlers();
-                                                    setTimeout(attachFusionHandlers, 300);
-                                                    setTimeout(attachFusionHandlers, 800);
-                                                    setTimeout(attachFusionHandlers, 1500);
-                                                    setTimeout(attachFusionHandlers, 2500);
-                                                }})();
-                                            """
-                                            
-                                            # Execute JavaScript after table is created
-                                            ui.timer(0.5, lambda: ui.run_javascript(js_attach_handlers, timeout=10.0), once=True)
-                                            ui.timer(2.0, lambda: ui.run_javascript(js_attach_handlers, timeout=10.0), once=True)
-                                            
-                                            # Add summary
-                                            total_fusions = len(rows)
-                                            total_reads = sum(r["reads"] for r in rows)
-                                            ui.label(
-                                                f"Total fusions: {total_fusions} | "
-                                                f"Total supporting reads: {total_reads}"
-                                            ).classes("classification-insight-foot")
-                                        else:
-                                            ui.label("No fusion pairs found").classes(
-                                                "classification-insight-meta"
-                                            )
-                                else:
-                                    with ui.element("div").classes(
-                                        "classification-insight-shell w-full min-w-0"
-                                    ):
-                                        ui.label("Fusion pairs").classes(
-                                            "classification-insight-heading text-headline-small"
-                                        )
-                                        ui.label(
-                                            "No validated fusion pairs found in this run."
-                                        ).classes("classification-insight-meta")
-                            else:
-                                with ui.element("div").classes(
-                                    "classification-insight-shell w-full min-w-0"
-                                ):
-                                    ui.label("Fusion pairs").classes(
-                                        "classification-insight-heading text-headline-small"
-                                    )
-                                    ui.label("Fusion data is empty.").classes(
-                                        "classification-insight-meta"
-                                    )
-                        else:
-                            with ui.element("div").classes(
-                                "classification-insight-shell w-full min-w-0"
-                            ):
-                                ui.label("Fusion pairs").classes(
-                                    "classification-insight-heading text-headline-small"
-                                )
-                                ui.label(
-                                    "Fusion analysis data not available. Run fusion analysis first."
-                                ).classes("classification-insight-meta")
-                    
+                            from robin.gui.components.itd import add_itd_section
+                        except ImportError:
+                            from .gui.components.itd import add_itd_section  # type: ignore
+
+                        with _sample_page_section_timer(
+                            "sample_details", sample_id, "itd"
+                        ):
+                            add_itd_section(self, sample_dir, include_igv=True)
+
+                    # Fusion Pairs Table section
+                    if sample_dir and sample_dir.exists() and show_details_fusion_pairs:
+                        from robin.gui.components.fusion import add_sample_details_fusion_pairs
+
+                        with _sample_page_section_timer(
+                            "sample_details", sample_id, "fusion_pairs"
+                        ):
+                            add_sample_details_fusion_pairs(
+                                self,
+                                sample_dir,
+                                show_fusion_target=show_fusion_target,
+                                show_fusion_genome=show_fusion_genome,
+                            )
                     # Target Genes Table section
-                    if sample_dir and sample_dir.exists():
-                        target_coverage_file = sample_dir / "target_coverage.csv"
-                        bed_coverage_file = sample_dir / "bed_coverage_main.csv"
-                        
-                        # Try target_coverage.csv first, fallback to bed_coverage_main.csv
-                        coverage_file = None
-                        if target_coverage_file.exists():
-                            coverage_file = target_coverage_file
-                        elif bed_coverage_file.exists():
-                            coverage_file = bed_coverage_file
-                        
-                        if coverage_file:
-                            # Load coverage data asynchronously to avoid blocking GUI
-                            def load_coverage_data():
-                                try:
-                                    import pandas as pd
-                                    return pd.read_csv(coverage_file)
-                                except Exception as e:
-                                    logging.error(f"Failed to load coverage file {coverage_file}: {e}")
-                                    return None
-                            
-                            # Create placeholder table that will be updated when data loads
-                            coverage_table_placeholder = ui.table(
-                                columns=[
-                                    {"name": "gene", "label": "Gene", "field": "gene"},
-                                    {"name": "chrom", "label": "Chrom", "field": "chrom"},
-                                    {"name": "startpos", "label": "Start", "field": "startpos"},
-                                    {"name": "endpos", "label": "End", "field": "endpos"},
-                                    {"name": "coverage", "label": "Coverage", "field": "coverage"},
-                                ],
-                                rows=[],
-                            ).classes("w-full")
-                            
-                            # Load coverage data synchronously (fast enough for typical file sizes)
-                            # Note: This runs during page creation, not during user interaction
-                            try:
-                                import pandas as pd
-                                df = pd.read_csv(coverage_file)
-                                
-                                # Ensure we have the required columns
-                                required_cols = ["chrom", "startpos", "endpos", "name"]
-                                if all(col in df.columns for col in required_cols):
-                                    # Calculate coverage if not present
-                                    if "coverage" not in df.columns:
-                                        if "length" in df.columns and "bases" in df.columns:
-                                            df["coverage"] = df["bases"] / df["length"]
-                                        elif "startpos" in df.columns and "endpos" in df.columns:
-                                            df["length"] = df["endpos"] - df["startpos"] + 1
-                                            if "bases" in df.columns:
-                                                df["coverage"] = df["bases"] / df["length"]
-                                            else:
-                                                df["coverage"] = 0
-                                    
-                                    # Prepare table data
-                                    table_data = []
-                                    gene_regions_by_name = {}  # Store regions for navigation
-                                    for _, row in df.iterrows():
-                                        gene_name = str(row["name"])
-                                        chrom = str(row["chrom"])
-                                        startpos_raw = int(row["startpos"])
-                                        endpos_raw = int(row["endpos"])
-                                        
-                                        # Store region info for navigation (with 10kb padding)
-                                        padding = 10000
-                                        startpos_nav = max(1, startpos_raw - padding)
-                                        endpos_nav = endpos_raw + padding
-                                        region = f"{chrom}:{startpos_nav}-{endpos_nav}"
-                                        gene_regions_by_name[gene_name] = region
-                                        
-                                        table_data.append({
-                                            "chrom": chrom,
-                                            "startpos": f"{startpos_raw:,}",  # Format with commas for display
-                                            "endpos": f"{endpos_raw:,}",  # Format with commas for display
-                                            "name": gene_name,
-                                            "coverage": float(row.get("coverage", 0)),
-                                            "action": "",
-                                        })
-                                    
-                                    if table_data:
-                                        with ui.element("div").classes(
-                                            "classification-insight-shell w-full min-w-0"
-                                        ):
-                                            ui.label("Target genes").classes(
-                                                "classification-insight-heading text-headline-small"
-                                            )
-                                            ui.label(
-                                                "Click a gene row to open the region in IGV."
-                                            ).classes("classification-insight-meta w-full mb-2")
-                                            
-                                            from robin.gui.theme import styled_table
-                                            
-                                            columns = [
-                                                {"name": "name", "label": "Gene Name", "field": "name", "sortable": True},
-                                                {"name": "chrom", "label": "Chromosome", "field": "chrom", "sortable": True},
-                                                {"name": "startpos", "label": "Start", "field": "startpos", "sortable": True},
-                                                {"name": "endpos", "label": "End", "field": "endpos", "sortable": True},
-                                                {"name": "coverage", "label": "Coverage (x)", "field": "coverage", "sortable": True},
-                                                {"name": "action", "label": "View in IGV", "field": "action", "sortable": False}
-                                            ]
-                                            
-                                            table_container, gene_table = styled_table(
-                                                columns=columns,
-                                                rows=table_data,
-                                                pagination=25,
-                                                class_size="table-xs"
-                                            )
-                                            
-                                            # Add search functionality
-                                            try:
-                                                with gene_table.add_slot("top-right"):
-                                                    with ui.input(placeholder="Search genes...").props("type=search").bind_value(
-                                                        gene_table, "filter"
-                                                    ).add_slot("append"):
-                                                        ui.icon("search")
-                                            except Exception:
-                                                pass
-                                            
-                                            # Add colored coverage badges
-                                            try:
-                                                gene_table.add_slot(
-                                                    "body-cell-coverage",
-                                                    """
-    <q-td key="coverage" :props="props">
-    <q-badge :color="props.value >= 30 ? 'green' : props.value >= 20 ? 'blue' : props.value >= 10 ? 'orange' : 'red'">
-        {{ Number(props.value).toFixed(2) }}
-    </q-badge>
-    </q-td>
-    """,
-                                                )
-                                            except Exception:
-                                                pass
-                                            
-                                            # Function to navigate IGV to a gene region
-                                            import json
-                                            js_gene_regions_json = json.dumps(gene_regions_by_name)
-                                            
-                                            def navigate_to_gene_region(gene_name: str):
-                                                """Navigate IGV browser to the specified gene region."""
-                                                if gene_name in gene_regions_by_name:
-                                                    region = gene_regions_by_name[gene_name]
-                                                    # Escape region string for JavaScript
-                                                    escaped_region = region.replace('"', '\\"').replace("'", "\\'")
-                                                    js_navigate = f"""
-                                                        (function() {{
-                                                            try {{
-                                                                if (window.lj_igv && window.lj_igv_browser_ready) {{
-                                                                    console.log('[IGV] Navigating to gene region: {escaped_region}');
-                                                                    window.lj_igv.search('{escaped_region}');
-                                                                }} else {{
-                                                                    console.warn('[IGV] Browser not ready yet, will navigate when ready');
-                                                                    setTimeout(function() {{
-                                                                        if (window.lj_igv && window.lj_igv_browser_ready) {{
-                                                                            window.lj_igv.search('{escaped_region}');
-                                                                        }}
-                                                                    }}, 500);
-                                                                }}
-                                                            }} catch (error) {{
-                                                                console.error('[IGV] Navigation error:', error);
-                                                            }}
-                                                        }})();
-                                                    """
-                                                    ui.run_javascript(js_navigate, timeout=5.0)
-                                            
-                                            # Store regions in window object for JavaScript access
-                                            js_init_gene_regions = f"""
-                                                window.geneRegionsMap = window.geneRegionsMap || {{}};
-                                                Object.assign(window.geneRegionsMap, {js_gene_regions_json});
-                                                console.log('[Gene] Loaded', Object.keys(window.geneRegionsMap).length, 'gene regions');
-                                            """
-                                            ui.run_javascript(js_init_gene_regions, timeout=5.0)
-                                            
-                                            # Add clickable action button column using slot that emits events to Python
-                                            try:
-                                                # Use Vue event emission which is more reliable than window functions
-                                                gene_table.add_slot(
-                                                    "body-cell-action",
-                                                    """
-<q-td key="action" :props="props">
-  <q-btn 
-    icon="visibility" 
-    size="sm" 
-    dense 
-    flat 
-    color="primary"
-    @click="$parent.$emit('gene-view-igv', props.row.name)"
-    title="View in IGV"
-  />
-</q-td>
-"""
-                                                )
-                                                
-                                                # Handle the event from the slot
-                                                def on_gene_view_igv(e):
-                                                    """Handle gene view IGV event from table button."""
-                                                    try:
-                                                        gene_name = e.args if isinstance(e.args, str) else getattr(e, 'args', None)
-                                                        if gene_name:
-                                                            logging.debug(f"[Gene] Button clicked for: {gene_name}")
-                                                            navigate_to_gene_region(gene_name)
-                                                    except Exception as ex:
-                                                        logging.warning(f"Error handling gene view IGV event: {ex}")
-                                                
-                                                gene_table.on("gene-view-igv", on_gene_view_igv)
-                                                logging.debug("Added action button column slot with event handler")
-                                            except Exception as slot_ex:
-                                                logging.warning(f"Could not add action column slot: {slot_ex}")
-                                                import traceback
-                                                logging.warning(traceback.format_exc())
-                                            
-                                            # Also add row click handlers as a fallback
-                                            try:
-                                                # Create JavaScript to handle row clicks
-                                                js_gene_table_handlers = f"""
-                                                    (function() {{
-                                                        // Store regions in window for JavaScript access
-                                                        window.geneRegionsMap = window.geneRegionsMap || {{}};
-                                                        Object.assign(window.geneRegionsMap, {js_gene_regions_json});
-                                                        
-                                                        function attachGeneTableHandlers() {{
-                                                            // Find tables with "Gene Name" header
-                                                            const tables = document.querySelectorAll('table');
-                                                            
-                                                            tables.forEach(function(table) {{
-                                                                const headers = table.querySelectorAll('thead th');
-                                                                let isGeneTable = false;
-                                                                
-                                                                for (let i = 0; i < headers.length; i++) {{
-                                                                    const headerText = (headers[i].textContent || '').toLowerCase();
-                                                                    if (headerText.includes('gene name') && headerText.includes('chromosome')) {{
-                                                                        isGeneTable = true;
-                                                                        break;
-                                                                    }}
-                                                                }}
-                                                                
-                                                                if (isGeneTable) {{
-                                                                    const tbody = table.querySelector('tbody');
-                                                                    if (tbody) {{
-                                                                        const rows = tbody.querySelectorAll('tr');
-                                                                        rows.forEach(function(row) {{
-                                                                            // Skip if clicking on the action button (let button handle it)
-                                                                            if (row.hasAttribute('data-gene-handled')) return;
-                                                                            row.setAttribute('data-gene-handled', 'true');
-                                                                            
-                                                                            // Make row clickable (but button takes precedence)
-                                                                            row.style.cursor = 'pointer';
-                                                                            
-                                                                            row.onclick = function(e) {{
-                                                                                // Don't handle if clicking on button
-                                                                                if (e.target.closest('button') || e.target.closest('.q-btn')) {{
-                                                                                    return;
-                                                                                }}
-                                                                                
-                                                                                e.preventDefault();
-                                                                                e.stopPropagation();
-                                                                                
-                                                                                const cells = row.querySelectorAll('td');
-                                                                                if (cells.length >= 5) {{
-                                                                                    const geneName = cells[0].textContent.trim();
-                                                                                    
-                                                                                    if (geneName && window.geneRegionsMap && window.geneRegionsMap[geneName]) {{
-                                                                                        const region = window.geneRegionsMap[geneName];
-                                                                                        console.log('[Gene] Row clicked, navigating to region:', region);
-                                                                                        
-                                                                                        // Visual feedback
-                                                                                        const origBg = row.style.backgroundColor;
-                                                                                        row.style.backgroundColor = '#e3f2fd';
-                                                                                        setTimeout(function() {{
-                                                                                            row.style.backgroundColor = origBg;
-                                                                                        }}, 400);
-                                                                                        
-                                                                                        // Navigate IGV
-                                                                                        function navIGV() {{
-                                                                                            if (window.lj_igv && window.lj_igv_browser_ready) {{
-                                                                                                try {{
-                                                                                                    window.lj_igv.search(region);
-                                                                                                    console.log('[Gene] IGV navigation successful');
-                                                                                                    return true;
-                                                                                                }} catch(err) {{
-                                                                                                    console.error('[Gene] IGV error:', err);
-                                                                                                    return false;
-                                                                                                }}
-                                                                                            }}
-                                                                                            return false;
-                                                                                        }}
-                                                                                        
-                                                                                        if (!navIGV()) {{
-                                                                                            setTimeout(function() {{ navIGV(); }}, 500);
-                                                                                            setTimeout(function() {{ navIGV(); }}, 1500);
-                                                                                        }}
-                                                                                    }}
-                                                                                }}
-                                                                            }};
-                                                                        }});
-                                                                    }}
-                                                                }}
-                                                            }});
-                                                        }}
-                                                        
-                                                        attachGeneTableHandlers();
-                                                        setTimeout(attachGeneTableHandlers, 300);
-                                                        setTimeout(attachGeneTableHandlers, 800);
-                                                        setTimeout(attachGeneTableHandlers, 1500);
-                                                    }})();
-                                                """
-                                                
-                                                ui.timer(0.5, lambda: ui.run_javascript(js_gene_table_handlers, timeout=10.0), once=True)
-                                                ui.timer(2.0, lambda: ui.run_javascript(js_gene_table_handlers, timeout=10.0), once=True)
-                                            except Exception as e:
-                                                logging.warning(f"Could not add gene table click handlers: {e}")
-                                            
-                                            # Add summary
-                                            total_genes = len(table_data)
-                                            ui.label(
-                                                f"Total target genes: {total_genes}"
-                                            ).classes("classification-insight-foot")
-                            except Exception as e:
-                                logging.warning(f"Could not load target gene table: {e}")
+                    if sample_dir and sample_dir.exists() and show_details_target_genes:
+                        from robin.gui.components.coverage import add_sample_details_target_genes
+
+                        with _sample_page_section_timer(
+                            "sample_details", sample_id, "target_genes"
+                        ):
+                            add_sample_details_target_genes(self, sample_dir)
+
+    def _render_minknow_not_configured_page(self) -> None:
+        """Explain that MinKNOW integration was not enabled for this workflow."""
+        with theme.frame(
+            "R.O.B.I.N - Sequencer (MinKNOW)",
+            smalltitle="Sequencer",
+            batphone=self.batman_mode,
+            center=self.center,
+            setup_notifications=self._setup_notification_system,
+        ):
+            with ui.column().classes("w-full max-w-2xl mx-auto p-4 md:p-6 gap-3"):
+                ui.label("MinKNOW not configured").classes(
+                    "classification-insight-heading text-headline-small"
+                )
+                ui.label(
+                    "This ROBIN workflow was not started with MinKNOW settings. "
+                    "Add a [minknow] section to your workflow TOML, set MINKNOW_HOST "
+                    "or MINKNOW_ENABLED, or point MINKNOW_PRESET at a preset file, "
+                    "then restart robin workflow."
+                ).classes("classification-insight-foot")
+                ui.button(
+                    "Back to samples",
+                    icon="arrow_back",
+                    on_click=lambda: ui.navigate.to("/live_data"),
+                ).props("color=primary no-caps outline")
+
+    def _render_minknow_unavailable_page(self) -> None:
+        """Explain that MinKNOW UI is unavailable without the optional API."""
+        with theme.frame(
+            "R.O.B.I.N - Sequencer (MinKNOW)",
+            smalltitle="Sequencer",
+            batphone=self.batman_mode,
+            center=self.center,
+            setup_notifications=self._setup_notification_system,
+        ):
+            with ui.column().classes("w-full max-w-2xl mx-auto p-4 md:p-6 gap-3"):
+                ui.label("MinKNOW API not installed").classes(
+                    "classification-insight-heading text-headline-small"
+                )
+                ui.label(
+                    "This ROBIN installation does not include the optional MinKNOW "
+                    "API, so sequencer control is unavailable. Install ROBIN with "
+                    "`pip install 'robin[minknow]'` and restart the workflow GUI."
+                ).classes("classification-insight-foot")
+                ui.button(
+                    "Back to samples",
+                    icon="arrow_back",
+                    on_click=lambda: ui.navigate.to("/live_data"),
+                ).props("color=primary no-caps outline")
+
+    def _create_minknow_page(self) -> None:
+        """Dedicated MinKNOW sequencer monitoring and run-control page."""
+        from robin.gui.components.minknow import add_minknow_sequencer_section
+
+        config = self.minknow_workflow_config
+        with theme.frame(
+            "R.O.B.I.N - Sequencer (MinKNOW)",
+            smalltitle="Sequencer",
+            batphone=self.batman_mode,
+            center=self.center,
+            setup_notifications=self._setup_notification_system,
+        ):
+            with ui.column().classes("w-full min-h-[70vh] p-3 md:p-6 gap-4"):
+                with ui.card().classes("w-full max-w-7xl mx-auto overflow-hidden"):
+                    with ui.column().classes(
+                        "w-full min-w-0 p-4 md:p-6 gap-3 bg-gradient-to-b from-slate-50 to-white "
+                        "dark:from-slate-900/80 dark:to-[var(--md-surface)]"
+                    ):
+                        ui.label("Sequencer control").classes(
+                            "text-display-small text-slate-900 dark:text-slate-50"
+                        )
+                        ui.label(
+                            "Monitor Oxford Nanopore flow cells, start ROBIN-compliant "
+                            "sequencing runs, watch BAM output directories, and stop "
+                            "active protocols."
+                        ).classes(
+                            "text-body-large text-slate-600 dark:text-slate-400 max-w-3xl"
+                        )
+
+                with ui.column().classes("w-full max-w-7xl mx-auto gap-3"):
+                    add_minknow_sequencer_section(
+                        compact=False,
+                        initial_settings=config.settings if config else None,
+                        workflow_runner=self.workflow_runner,
+                        workflow_toml=self.workflow_toml_path,
+                        work_directory=self.monitored_directory or "",
+                    )
 
     def _create_workflow_monitor(self):
         """Create the main workflow monitoring page."""
         with theme.frame(
             "R.O.B.I.N - Workflow Monitor",
             smalltitle="Samples",
-            batphone=False,
+            batphone=self.batman_mode,
             center=self.center,
             setup_notifications=self._setup_notification_system,
         ):
@@ -6185,9 +7033,31 @@ class GUILauncher:
                                     ui.label("Total").classes(
                                         "text-xs workflow-monitor-meta"
                                     )
-                                    self.total_count = ui.label("0").classes(
-                                        "text-xs font-semibold workflow-monitor-num"
+                            self.total_count = ui.label("0").classes(
+                                "text-xs font-semibold workflow-monitor-num"
+                            )
+
+                    if self.minknow_gui_accessible():
+                        with ui.element("div").classes(
+                            "classification-insight-card w-full min-w-0"
+                        ):
+                            with ui.row().classes(
+                                "w-full min-w-0 gap-3 p-2 md:p-3 items-center flex-wrap"
+                            ):
+                                ui.icon("biotech").classes("classification-insight-icon")
+                                with ui.column().classes("flex-1 min-w-0 gap-1"):
+                                    ui.label("Sequencer (MinKNOW)").classes(
+                                        "classification-insight-model"
                                     )
+                                    ui.label(
+                                        "Start runs, monitor flow cells, and watch BAM output "
+                                        "on the dedicated sequencer page."
+                                    ).classes("classification-insight-foot")
+                                ui.button(
+                                    "Open sequencer",
+                                    icon="open_in_new",
+                                    on_click=lambda: ui.navigate.to("/minknow"),
+                                ).props("color=primary no-caps outline")
 
                     # File processing progress (per run)
                     with ui.element("div").classes(
@@ -6595,6 +7465,8 @@ class GUILauncher:
     def _export_logs(self):
         """Export logs to a file."""
         try:
+            if not self._require_export_or_notify():
+                return
             # Simple log export functionality
             log_content = "".join(self._log_buffer)
             if log_content:
@@ -6698,7 +7570,7 @@ class GUILauncher:
         return True, ""
 
     def _list_samples_needing_snp_calling(self) -> List[str]:
-        """Samples under work dir that are ready for SNP but lack Clair3 outputs."""
+        """Samples lacking SNP outputs that can run SNP now or via finalize-first."""
         logging.info(
             "[missing_snp_scan] thread=%s",
             threading.current_thread().name,
@@ -6716,18 +7588,66 @@ class GUILauncher:
                 sid = d.name
                 if self._sample_has_snp_calling_outputs(sid):
                     continue
-                ok, _ = self._sample_snp_prerequisites_met(d)
-                if ok:
+                # Need a non-empty targets BED either way.
+                targets_bed = d / "targets_exceeding_threshold.bed"
+                if not targets_bed.is_file():
+                    continue
+                try:
+                    if not targets_bed.read_text(encoding="utf-8", errors="replace").strip():
+                        continue
+                except OSError:
+                    continue
+
+                # Eligible if SNP can start now (target.bam exists) or if we can
+                # likely finalize first (leftover batches or pending staging).
+                target_bam = d / "target.bam"
+                can_finalize_first = False
+                if not target_bam.is_file():
+                    try:
+                        from robin.analysis.target_analysis import (
+                            sample_needs_target_bam_finalize,
+                        )
+
+                        can_finalize_first = sample_needs_target_bam_finalize(str(d))
+                    except Exception:
+                        can_finalize_first = False
+                if target_bam.is_file() or can_finalize_first:
                     need.append(sid)
         except Exception as e:
             logging.debug(f"List samples needing SNP: {e}")
         return need
 
+    def _wait_for_snp_outputs_or_terminal_status(
+        self,
+        sample_id: str,
+        *,
+        poll_s: float = 5.0,
+        max_wait_s: float = 86400.0,
+    ) -> bool:
+        """Wait for SNP outputs, but exit early on terminal failure/skip statuses."""
+        terminal_phases = {
+            "Finalize failed",
+            "Finalize timeout",
+            "SNP skipped",
+            "SNP submit failed",
+            "SNP failed",
+            "Finalize/SNP failed",
+        }
+        deadline = time.time() + max_wait_s
+        while time.time() < deadline:
+            if self._sample_has_snp_calling_outputs(sample_id):
+                return True
+            phase = str(self._sample_pipeline_status.get(sample_id, {}).get("phase", "") or "")
+            if phase in terminal_phases:
+                return False
+            time.sleep(poll_s)
+        return False
+
     def _is_mnpflex_enabled_for_gui(self) -> bool:
-        """True when MNP-Flex credentials exist in the server environment."""
-        username = os.getenv("MNPFLEX_USERNAME") or os.getenv("EPIGNOSTIX_USERNAME")
-        password = os.getenv("MNPFLEX_PASSWORD") or os.getenv("EPIGNOSTIX_PASSWORD")
-        return bool(username and password)
+        """True when MNP-Flex analysis is configured (Docker or API)."""
+        from robin.analysis.mnpflex_config import is_mnpflex_enabled
+
+        return is_mnpflex_enabled()
 
     def _mnpflex_results_dir_for_sample(
         self, sample_dir: Path, sample_id: str
@@ -6752,13 +7672,9 @@ class GUILauncher:
     def _mnpflex_parquet_path_for_sample(
         self, sample_dir: Path, sample_id: str
     ) -> Optional[Path]:
-        """Preferred parquet is `<sample_id>.parquet`, else any `*.parquet`."""
-        preferred = sample_dir / f"{sample_id}.parquet"
-        if preferred.exists():
-            return preferred
+        """Preferred parquet is a methylation `<sample_id>.parquet`."""
         try:
-            matches = list(sample_dir.glob("*.parquet"))
-            return matches[0] if matches else None
+            return find_parquet_file(sample_dir, sample_id)
         except Exception:
             return None
 
@@ -6807,22 +7723,7 @@ class GUILauncher:
                 ):
                     continue
 
-                try:
-                    total_jobs = int(r.get("total_jobs") or 0)
-                    completed_jobs = int(r.get("completed_jobs") or 0)
-                    active_jobs = int(r.get("active_jobs") or 0)
-                    pending_jobs = int(r.get("pending_jobs") or 0)
-                except Exception:
-                    continue
-
-                # Only run once the sample workflow is fully complete/inactive.
-                if total_jobs <= 0:
-                    continue
-                if not (
-                    active_jobs == 0
-                    and pending_jobs == 0
-                    and completed_jobs >= total_jobs
-                ):
+                if not sample_ready_for_mnpflex_auto_run(r):
                     continue
 
                 if self._mnpflex_parquet_path_for_sample(sample_dir, sid) is None:
@@ -6878,6 +7779,566 @@ class GUILauncher:
             return zpath
         except Exception as e:
             logging.error(f"Could not zip export files: {e}")
+            return None
+
+    def _build_sample_tracking_tsv_export(
+        self,
+        sample_ids: List[str],
+        *,
+        generated_by: Optional[str] = None,
+        generated_at: Optional[str] = None,
+        robin_commit: Optional[str] = None,
+    ) -> Optional[str]:
+        """Build TSV export with tracked-table fields and summary data."""
+        try:
+            if not sample_ids or not self.monitored_directory:
+                return None
+
+            table_fields: List[str] = []
+            table = getattr(self, "samples_table", None)
+            for col in (getattr(table, "columns", None) or []):
+                field = str(col.get("field", "") or "").strip()
+                if field and field not in ("actions", "export") and field not in table_fields:
+                    table_fields.append(field)
+            if not table_fields:
+                table_fields = [
+                    "sample_id",
+                    "test_id",
+                    "origin",
+                    "run_start",
+                    "device",
+                    "flowcell",
+                    "file_progress",
+                    "pipeline_progress",
+                    "active_jobs",
+                    "pending_jobs",
+                    "total_jobs",
+                    "completed_jobs",
+                    "failed_jobs",
+                    "job_types",
+                    "last_seen",
+                ]
+
+            run_info_fields = [
+                "run_time",
+                "model",
+                "device",
+                "flow_cell",
+                "panel",
+                "bam_passed",
+                "bam_failed",
+                "total_bases",
+                "mapped_reads",
+                "unmapped_reads",
+                "mapped_bases",
+                "unmapped_bases",
+                "bam_batches",
+            ]
+            classification_models = [
+                "sturgeon",
+                "nanodx",
+                "pannanodx",
+                "random_forest",
+                "marlin",
+                "lamprey",
+                "tucan",
+            ]
+            analysis_fields = {
+                "coverage": [
+                    "quality",
+                    "global_coverage",
+                    "target_coverage",
+                    "enrichment",
+                    "on_target_reads",
+                    "off_target_reads",
+                    "on_target_bases",
+                    "off_target_bases",
+                    "on_target_read_percent",
+                    "on_target_base_percent",
+                    "mean_on_target_length",
+                    "mean_off_target_length",
+                    "median_on_target_length",
+                    "median_off_target_length",
+                ],
+                "cnv": [
+                    "genetic_sex",
+                    "bin_width",
+                    "variance",
+                    "whole_chromosome_summary",
+                    "arm_summary",
+                    "whole_chromosome_count",
+                    "arm_count",
+                ],
+                "cnv_broad": [
+                    "status",
+                    "whole_chromosome_events",
+                    "arm_events",
+                    "broad_gain_events",
+                    "broad_loss_events",
+                ],
+                "mgmt": [
+                    "status",
+                    "methylation_percent",
+                    "average_methylation",
+                    "prediction_score",
+                    "cpg_sites",
+                ],
+                "fusion": [
+                    "target_fusions",
+                    "genome_fusions",
+                    "target_pairs",
+                    "target_groups",
+                    "genome_pairs",
+                    "genome_groups",
+                    "target_pair_list",
+                    "genome_pair_list",
+                ],
+                "itd": [
+                    "status",
+                    "event_count",
+                    "called_genes",
+                    "genes",
+                    "event_list",
+                    "read_qc_available",
+                ],
+                "mnpflex": [
+                    "qc_status",
+                    "qc_avg_coverage",
+                    "qc_missing_site_count",
+                    "mgmt_status",
+                    "mgmt_average",
+                    "mgmt_site_count",
+                    "classifier_name",
+                    "classifier_version",
+                    "classifier_type",
+                    "has_hierarchical_summary",
+                    "top_path",
+                    "top_path_score",
+                ],
+                "variants": [
+                    "snp_total_variants",
+                    "snp_pathogenic_variants",
+                    "snp_pathogenic_list",
+                    "indel_total_variants",
+                    "indel_pathogenic_variants",
+                    "indel_pathogenic_list",
+                ],
+            }
+
+            unit_headers = {
+                ("coverage", "global_coverage"): "global_coverage_x",
+                ("coverage", "target_coverage"): "target_coverage_x",
+                ("coverage", "enrichment"): "enrichment_x",
+                ("mgmt", "methylation_percent"): "methylation_percent",
+                ("mgmt", "average_methylation"): "average_methylation_percent",
+                ("mgmt", "prediction_score"): "prediction_score_percent",
+            }
+
+            def _analysis_tsv_header(section: str, key: str) -> str:
+                return f"analysis_{section}_{unit_headers.get((section, key), key)}"
+
+            def _analysis_tsv_value(section: str, key: str, value: Any) -> Any:
+                """Return machine-readable values while retaining clear units in headers."""
+                if value is None or value == "":
+                    return value
+                if (section, key) not in unit_headers:
+                    return value
+                text = str(value).strip()
+                if text in {"Not available", "Classifier not used"}:
+                    return text
+                suffix = "x" if section == "coverage" else "%"
+                if text.endswith(suffix):
+                    text = text[: -len(suffix)].strip()
+                try:
+                    return float(text)
+                except (TypeError, ValueError):
+                    return value
+
+            headers = list(table_fields)
+            headers.extend([f"run_summary_{k}" for k in run_info_fields])
+            for model_name in classification_models:
+                headers.extend(
+                    [
+                        f"classification_{model_name}_class",
+                        f"classification_{model_name}_confidence",
+                        f"classification_{model_name}_confidence_level",
+                        f"classification_{model_name}_features",
+                    ]
+                )
+            for section, keys in analysis_fields.items():
+                headers.extend([_analysis_tsv_header(section, k) for k in keys])
+
+            rows_by_id = {
+                str(r.get("sample_id")): r
+                for r in (self._last_samples_rows or [])
+                if r.get("sample_id")
+            }
+            from robin.gui.components.summary import _refresh_summary_cache_sync
+
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            out_path = os.path.join(tempfile.gettempdir(), f"robin_sample_tracking_{timestamp}.tsv")
+            if os.path.exists(out_path):
+                i = 2
+                while os.path.exists(out_path):
+                    out_path = os.path.join(
+                        tempfile.gettempdir(), f"robin_sample_tracking_{timestamp}_{i}.tsv"
+                    )
+                    i += 1
+
+            def _clean_tsv_value(value: Any) -> Any:
+                if value is None:
+                    return ""
+                if isinstance(value, (int, float, bool)):
+                    return value
+                text = str(value)
+                return text.replace("\t", " ").replace("\r", " ").replace("\n", " ")
+
+            with open(out_path, "w", newline="", encoding="utf-8") as fh:
+                if generated_at:
+                    fh.write(f"# Generated: {generated_at}\n")
+                if generated_by:
+                    fh.write(f"# Generated by: {generated_by}\n")
+                if robin_commit:
+                    fh.write(f"# ROBIN commit: {robin_commit}\n")
+                if generated_at or generated_by or robin_commit:
+                    fh.write("#\n")
+                writer = csv.DictWriter(fh, fieldnames=headers, delimiter="\t")
+                writer.writeheader()
+                for sample_id in [str(s) for s in sample_ids]:
+                    sample_dir = Path(self.monitored_directory) / sample_id
+                    row_data = dict(rows_by_id.get(sample_id, {}))
+                    summary = (
+                        _refresh_summary_cache_sync(sample_dir, sample_id, self)
+                        if sample_dir.exists()
+                        else {}
+                    )
+                    run_info = summary.get("run_info", {}) or {}
+                    classification = summary.get("classification_data", {}) or {}
+                    analysis = summary.get("analysis_data", {}) or {}
+                    mnpflex_data: Dict[str, Any] = {}
+                    variant_data: Dict[str, Any] = {}
+                    cnv_broad_data: Dict[str, Any] = {}
+
+                    # Variant/SNP summary extraction (when available)
+                    try:
+                        def _format_pathogenic_rows(rows: Any) -> str:
+                            if not isinstance(rows, list):
+                                return ""
+                            formatted: List[str] = []
+                            for row in rows:
+                                if not isinstance(row, dict):
+                                    continue
+                                chrom = str(row.get("CHROM", "") or "").strip()
+                                pos = str(row.get("POS", "") or "").strip()
+                                ref = str(row.get("REF", "") or "").strip()
+                                alt = str(row.get("ALT", "") or "").strip()
+                                gene = str(
+                                    row.get("Gene_Name", "")
+                                    or row.get("SYMBOL", "")
+                                    or row.get("GENE", "")
+                                    or row.get("GENEINFO", "")
+                                    or ""
+                                ).strip()
+                                clnsig = str(row.get("CLNSIG", "") or "").strip()
+                                onc = str(row.get("ONC", "") or "").strip()
+                                sci = str(row.get("SCI", "") or "").strip()
+                                significance = clnsig or onc or sci
+                                locus = f"{chrom}:{pos}" if chrom and pos else ""
+                                allele = f"{ref}>{alt}" if ref and alt else ""
+                                item_parts = [p for p in [locus, allele, gene, significance] if p]
+                                if item_parts:
+                                    formatted.append("|".join(item_parts))
+                            # Keep deterministic + compact while still "listing" all hits.
+                            return "; ".join(formatted)
+
+                        from robin.analysis.snp_processing import VariantDisplayStore
+                        from robin.analysis.variant_classification import (
+                            is_clinvar_significant_from_info,
+                        )
+
+                        clair_dir = sample_dir / "clair3"
+                        snp_store = VariantDisplayStore.open_snp(clair_dir)
+                        if snp_store is not None:
+                            summary_dict = snp_store.summary or {}
+                            rows_significant = snp_store.significant_rows()
+                            variant_data["snp_total_variants"] = summary_dict.get(
+                                "total_variants", snp_store.total_variants
+                            )
+                            variant_data["snp_pathogenic_variants"] = summary_dict.get(
+                                "clinvar_significant_variants",
+                                summary_dict.get(
+                                    "pathogenic_variants", len(rows_significant)
+                                ),
+                            )
+                            variant_data["snp_pathogenic_list"] = _format_pathogenic_rows(
+                                rows_significant
+                            )
+
+                        # INDEL summary (from ClinVar-annotated display if available)
+                        indel_store = VariantDisplayStore.open_indel(
+                            clair_dir, vcf_fallback=False
+                        )
+                        if indel_store is not None:
+                            indel_summary = indel_store.summary or {}
+                            indel_rows_significant = indel_store.significant_rows()
+                            variant_data["indel_total_variants"] = indel_summary.get(
+                                "total_variants", indel_store.total_variants
+                            )
+                            variant_data["indel_pathogenic_variants"] = indel_summary.get(
+                                "clinvar_significant_variants",
+                                indel_summary.get(
+                                    "pathogenic_variants", len(indel_rows_significant)
+                                ),
+                            )
+                            variant_data["indel_pathogenic_list"] = _format_pathogenic_rows(
+                                indel_rows_significant
+                            )
+                        else:
+                            # Fallback: count records from annotated INDEL VCF if present
+                            indel_vcf = clair_dir / "snpsift_indel_output.vcf"
+                            if indel_vcf.exists():
+                                total_indel = 0
+                                pathogenic_indel = 0
+                                pathogenic_indel_items: List[str] = []
+                                with open(indel_vcf, "r", encoding="utf-8", errors="ignore") as f:
+                                    for line in f:
+                                        if not line or line.startswith("#"):
+                                            continue
+                                        total_indel += 1
+                                        fields = line.strip().split("\t")
+                                        info_str = fields[7] if len(fields) > 7 else ""
+                                        if is_clinvar_significant_from_info(info_str):
+                                            pathogenic_indel += 1
+                                            if len(fields) >= 5:
+                                                chrom, pos, _vid, ref, alt = fields[:5]
+                                                pathogenic_indel_items.append(
+                                                    f"{chrom}:{pos}|{ref}>{alt}"
+                                                )
+                                variant_data["indel_total_variants"] = total_indel
+                                variant_data["indel_pathogenic_variants"] = pathogenic_indel
+                                variant_data["indel_pathogenic_list"] = "; ".join(
+                                    pathogenic_indel_items
+                                )
+                    except Exception as ex:
+                        logging.debug(
+                            "Could not extract variant/SNP TSV fields for %s: %s",
+                            sample_id,
+                            ex,
+                        )
+
+                    # Broad CNV events are derived from the canonical CNV.npy
+                    # outputs, matching the GUI summary. cnv_results.csv is a
+                    # legacy/optional artifact and is retained only as a
+                    # fallback for older result directories.
+                    try:
+                        cnv_inputs_present = all(
+                            (sample_dir / filename).exists()
+                            for filename in ("CNV.npy", "CNV_dict.npy")
+                        )
+                        if cnv_inputs_present:
+                            from robin.analysis.cnv_classification import (
+                                detect_cnv_events_for_sample,
+                            )
+
+                            events = detect_cnv_events_for_sample(sample_dir)
+                            event_types = [str(event.event_type).upper() for event in events]
+                            cnv_broad_data = {
+                                "status": "analysed",
+                                "whole_chromosome_events": sum(
+                                    event_type.startswith("WHOLE_CHR_")
+                                    for event_type in event_types
+                                ),
+                                "arm_events": sum(
+                                    not event_type.startswith("WHOLE_CHR_")
+                                    for event_type in event_types
+                                ),
+                                "broad_gain_events": sum(
+                                    "GAIN" in event_type for event_type in event_types
+                                ),
+                                "broad_loss_events": sum(
+                                    "LOSS" in event_type for event_type in event_types
+                                ),
+                            }
+                        else:
+                            cnv_results_csv = sample_dir / "cnv_results.csv"
+                            if cnv_results_csv.exists():
+                                whole_chr_events = 0
+                                arm_events = 0
+                                broad_gain_events = 0
+                                broad_loss_events = 0
+                                with open(
+                                    cnv_results_csv,
+                                    "r",
+                                    newline="",
+                                    encoding="utf-8",
+                                    errors="ignore",
+                                ) as f:
+                                    reader = csv.DictReader(f)
+                                    for event_row in reader:
+                                        region = str(
+                                            event_row.get("Region")
+                                            or event_row.get("region")
+                                            or ""
+                                        ).lower()
+                                        state = str(
+                                            event_row.get("State")
+                                            or event_row.get("state")
+                                            or event_row.get("event_type")
+                                            or ""
+                                        ).upper()
+                                        if "whole chromosome" in region:
+                                            whole_chr_events += 1
+                                        if "arm" in region:
+                                            arm_events += 1
+                                        if "GAIN" in state:
+                                            broad_gain_events += 1
+                                        if "LOSS" in state:
+                                            broad_loss_events += 1
+                                cnv_broad_data = {
+                                    "status": "analysed",
+                                    "whole_chromosome_events": whole_chr_events,
+                                    "arm_events": arm_events,
+                                    "broad_gain_events": broad_gain_events,
+                                    "broad_loss_events": broad_loss_events,
+                                }
+                            else:
+                                cnv_broad_data = {"status": "not_analyzed"}
+                    except Exception as ex:
+                        logging.debug(
+                            "Could not extract broad CNV TSV fields for %s: %s",
+                            sample_id,
+                            ex,
+                        )
+                        cnv_broad_data = {"status": "analysis_failed"}
+
+                    try:
+                        results_dir = self._mnpflex_results_dir_for_sample(sample_dir, sample_id)
+                        if results_dir:
+                            bundle_path = results_dir / "bundle_summary.json"
+                            if bundle_path.exists():
+                                with open(bundle_path, "r", encoding="utf-8") as f:
+                                    bundle = json.load(f)
+                                qc = bundle.get("qc", {}) or {}
+                                mgmt = bundle.get("mgmt", {}) or {}
+                                classifier_summary = bundle.get("classifier_summary", {}) or {}
+                                classifier = classifier_summary.get("classifier", {}) or {}
+                                hierarchy = classifier_summary.get("summary_hierarchical", []) or []
+                                scores = classifier_summary.get("scores") or []
+                                top_path = ""
+                                top_path_score = ""
+                                try:
+                                    if hierarchy:
+                                        def _flatten(nodes: List[Dict[str, Any]], path: Optional[List[str]] = None):
+                                            current_path = path or []
+                                            flat_rows = []
+                                            for node in nodes or []:
+                                                group = node.get("group", "Unknown")
+                                                score = node.get("score")
+                                                next_path = current_path + [group]
+                                                members = node.get("members") or []
+                                                if members:
+                                                    flat_rows.extend(_flatten(members, next_path))
+                                                else:
+                                                    flat_rows.append((score, next_path))
+                                            return flat_rows
+
+                                        flat = _flatten(hierarchy)
+                                        if flat:
+                                            best_score, best_path = max(flat, key=lambda x: x[0] or 0)
+                                            top_path = " > ".join(best_path)
+                                            top_path_score = best_score
+                                    elif scores:
+                                        top = sorted(
+                                            scores,
+                                            key=lambda item: float(item.get("score", 0) or 0),
+                                            reverse=True,
+                                        )[:1]
+                                        if top:
+                                            top_ref = top[0].get("reference_group") or {}
+                                            top_path = (
+                                                top_ref.get("molecular_subclass")
+                                                or top_ref.get("name")
+                                                or ""
+                                            )
+                                            top_path_score = top[0].get("score", "")
+                                except Exception:
+                                    pass
+                                mnpflex_data = {
+                                    "qc_status": qc.get("status", ""),
+                                    "qc_avg_coverage": qc.get("avg_coverage", ""),
+                                    "qc_missing_site_count": qc.get("missing_site_count", ""),
+                                    "mgmt_status": mgmt.get("status", ""),
+                                    "mgmt_average": mgmt.get("average", ""),
+                                    "mgmt_site_count": mgmt.get("site_count", ""),
+                                    "classifier_name": classifier.get("name", ""),
+                                    "classifier_version": classifier.get("version", ""),
+                                    "classifier_type": classifier.get("classifier_type", ""),
+                                    "has_hierarchical_summary": bool(hierarchy),
+                                    "top_path": top_path,
+                                    "top_path_score": top_path_score,
+                                }
+                    except Exception as ex:
+                        logging.debug("Could not extract MNP-Flex TSV fields for %s: %s", sample_id, ex)
+                    if mnpflex_data:
+                        analysis["mnpflex"] = mnpflex_data
+                    if variant_data:
+                        analysis["variants"] = variant_data
+                    if cnv_broad_data:
+                        analysis["cnv_broad"] = cnv_broad_data
+
+                    try:
+                        from robin.analysis.bam_preprocessor import (
+                            load_on_off_target_length_stats,
+                        )
+                        from robin.gui.coverage_metrics import (
+                            coverage_read_length_export_fields,
+                        )
+
+                        coverage_section = analysis.setdefault("coverage", {})
+                        coverage_section.update(
+                            coverage_read_length_export_fields(
+                                load_on_off_target_length_stats(sample_dir)
+                            )
+                        )
+                    except Exception as ex:
+                        logging.debug(
+                            "Could not extract read-length TSV fields for %s: %s",
+                            sample_id,
+                            ex,
+                        )
+
+                    try:
+                        from robin.gui.components.fusion import fusion_pair_lists_for_sample
+
+                        fusion_section = analysis.setdefault("fusion", {})
+                        fusion_section.update(fusion_pair_lists_for_sample(sample_dir))
+                    except Exception as ex:
+                        logging.debug(
+                            "Could not extract fusion pair lists for %s: %s",
+                            sample_id,
+                            ex,
+                        )
+
+                    export_row: Dict[str, Any] = {k: row_data.get(k, "") for k in table_fields}
+                    for key in run_info_fields:
+                        export_row[f"run_summary_{key}"] = run_info.get(key, "")
+                    for model_name in classification_models:
+                        model_data = classification.get(model_name, {}) or {}
+                        export_row[f"classification_{model_name}_class"] = model_data.get("classification", "")
+                        export_row[f"classification_{model_name}_confidence"] = model_data.get("confidence", "")
+                        export_row[f"classification_{model_name}_confidence_level"] = model_data.get("confidence_level", "")
+                        export_row[f"classification_{model_name}_features"] = model_data.get("features", "")
+                    for section, keys in analysis_fields.items():
+                        section_data = analysis.get(section, {}) or {}
+                        for key in keys:
+                            export_row[_analysis_tsv_header(section, key)] = _analysis_tsv_value(
+                                section, key, section_data.get(key, "")
+                            )
+                    writer.writerow({k: _clean_tsv_value(v) for k, v in export_row.items()})
+
+            return out_path
+        except Exception as e:
+            logging.error("Failed to build sample tracking TSV export: %s", e, exc_info=True)
             return None
 
     def _wait_for_snp_outputs_or_timeout(
@@ -6939,26 +8400,25 @@ class GUILauncher:
     def _resolve_submission_result(self, maybe_result: Any, operation: str) -> bool:
         """Normalize workflow submission return (sync bool or async coroutine)."""
         try:
-            print(
-                f"[DEBUG submit] operation={operation} type={type(maybe_result).__name__}",
-                flush=True,
+            logging.debug(
+                "workflow submit: %s return_type=%s",
+                operation,
+                type(maybe_result).__name__,
             )
             if asyncio.iscoroutine(maybe_result):
-                print(
-                    f"[DEBUG submit] operation={operation} detected coroutine; running asyncio.run",
-                    flush=True,
+                logging.debug(
+                    "workflow submit: %s running asyncio.run on coroutine", operation
                 )
                 result = bool(asyncio.run(maybe_result))
-                print(
-                    f"[DEBUG submit] operation={operation} coroutine result={result}",
-                    flush=True,
+                logging.debug(
+                    "workflow submit: %s coroutine result=%s", operation, result
                 )
                 return result
             result = bool(maybe_result)
-            print(f"[DEBUG submit] operation={operation} sync result={result}", flush=True)
+            logging.debug("workflow submit: %s sync result=%s", operation, result)
             return result
         except Exception as e:
-            print(f"[DEBUG submit] operation={operation} exception={e}", flush=True)
+            logging.debug("workflow submit: %s exception: %s", operation, e)
             logging.error(f"{operation} failed: {e}", exc_info=True)
             return False
 
@@ -7015,6 +8475,52 @@ class GUILauncher:
                 sample_dir = Path(self.monitored_directory) / sid
                 ok, reason = self._sample_snp_prerequisites_met(sample_dir)
                 if not ok:
+                    if str(reason) == "missing target.bam":
+                        self._set_pipeline_status(
+                            sid,
+                            phase="Finalize requested",
+                            progress=0.1,
+                            detail="Bulk SNP triggering finalize-first path",
+                        )
+                        self._trigger_target_bam_finalization(sid, trigger_snp=True)
+                        finished = self._wait_for_snp_outputs_or_terminal_status(
+                            sid, poll_s=5.0, max_wait_s=86400.0
+                        )
+                        if finished:
+                            self._set_pipeline_status(
+                                sid,
+                                phase="SNP complete",
+                                progress=1.0,
+                                detail="SNP outputs detected",
+                            )
+                            logging.info("Bulk SNP: completed via finalize-first %s", sid)
+                        else:
+                            phase = str(
+                                self._sample_pipeline_status
+                                .get(sid, {})
+                                .get("phase", "SNP still running")
+                            )
+                            if phase not in {
+                                "SNP skipped",
+                                "SNP submit failed",
+                                "SNP failed",
+                                "Finalize failed",
+                                "Finalize timeout",
+                                "Finalize/SNP failed",
+                            }:
+                                self._set_pipeline_status(
+                                    sid,
+                                    phase="SNP still running",
+                                    progress=0.9,
+                                    detail="Timed out waiting for outputs",
+                                    level="warning",
+                                )
+                            logging.warning(
+                                "Bulk SNP: finalize-first path incomplete/terminal for %s (phase=%s)",
+                                sid,
+                                phase,
+                            )
+                        continue
                     self._set_pipeline_status(
                         sid,
                         phase="SNP skipped",
@@ -7062,6 +8568,15 @@ class GUILauncher:
                         operation=f"Bulk SNP submission for {sid}",
                     )
                     if not submitted:
+                        self._audit_log(
+                            event_type="run.started",
+                            result="failure",
+                            user_id=self._get_current_user_id(),
+                            target_type="sample",
+                            target_id=sid,
+                            details={"run_type": "snp_bulk"},
+                            error_code="submit_failed",
+                        )
                         self._set_pipeline_status(
                             sid,
                             phase="SNP submit failed",
@@ -7071,13 +8586,20 @@ class GUILauncher:
                         )
                         logging.warning("Bulk SNP: submit failed for %s", sid)
                         continue
+                    self._audit_log(
+                        event_type="run.started",
+                        user_id=self._get_current_user_id(),
+                        target_type="sample",
+                        target_id=sid,
+                        details={"run_type": "snp_bulk"},
+                    )
                     self._set_pipeline_status(
                         sid,
                         phase="SNP queued",
                         progress=0.85,
                         detail="Queued in slow worker",
                     )
-                    finished = self._wait_for_snp_outputs_or_timeout(
+                    finished = self._wait_for_snp_outputs_or_terminal_status(
                         sid, poll_s=5.0, max_wait_s=86400.0
                     )
                     if finished:
@@ -7140,44 +8662,35 @@ class GUILauncher:
                     UpdateType.WARNING_NOTIFICATION,
                     {
                         "title": "MNP-Flex batch skipped",
-                        "message": "Missing MNP-Flex credentials in the server environment.",
+                        "message": (
+                            "MNP-Flex is not configured. Set MNPFLEX_BACKEND and the "
+                            "required Docker or API settings."
+                        ),
                         "level": "warning",
                     },
                     priority=6,
                 )
                 return
 
-            username = os.getenv("MNPFLEX_USERNAME") or os.getenv("EPIGNOSTIX_USERNAME")
-            password = os.getenv("MNPFLEX_PASSWORD") or os.getenv("EPIGNOSTIX_PASSWORD")
-            base_url = os.getenv("MNPFLEX_BASE_URL", "https://app.epignostix.com")
-            workflow_id_env = os.getenv("MNPFLEX_WORKFLOW_ID", "18")
-            try:
-                workflow_id = int(workflow_id_env)
-            except ValueError:
-                workflow_id = 18
-                logging.warning(
-                    "MNPFLEX_WORKFLOW_ID invalid (%s); defaulting to %s",
-                    workflow_id_env,
-                    workflow_id,
+            from robin.analysis.mnpflex_config import load_mnpflex_config
+            from robin.analysis.mnpflex_runner import (
+                preflight_mnpflex_runtime,
+                run_mnpflex_analysis,
+            )
+
+            mnpflex_config = load_mnpflex_config()
+            preflight_err = preflight_mnpflex_runtime(mnpflex_config)
+            if preflight_err:
+                self.send_update(
+                    UpdateType.WARNING_NOTIFICATION,
+                    {
+                        "title": "MNP-Flex unavailable",
+                        "message": preflight_err,
+                        "level": "negative",
+                    },
+                    priority=6,
                 )
-            client_id = os.getenv("MNPFLEX_CLIENT_ID", "ROBIN")
-            client_secret = os.getenv("MNPFLEX_CLIENT_SECRET", "SECRET")
-            scope = os.getenv("MNPFLEX_SCOPE", "")
-
-            from robin import resources as robin_resources
-            from robin.analysis.utilities.matkit import (
-                reconstruct_full_bedmethyl_for_mnpflex,
-            )
-            from robin.analysis.utilities.mnp_flex import APIClient as MnpFlexApiClient
-            from robin.utils.mnpflex_client_standalone import MNPFlexClient
-
-            reference_bed = os.path.join(
-                os.path.dirname(os.path.abspath(robin_resources.__file__)),
-                "mnp_flex_sample_clean.bed",
-            )
-
-            # Reuse streaming API client across samples.
-            api_client = MnpFlexApiClient(base_url="https://mnp-flex.org", verify_ssl=False)
+                return
 
             total = len(sample_ids)
             processed = 0
@@ -7205,57 +8718,49 @@ class GUILauncher:
                     logging.warning("Bulk MNP-Flex skip %s: no parquet file", sid)
                     continue
 
+                if not sample_ready_for_mnpflex_auto_run_from_dir(sample_dir):
+                    skipped += 1
+                    logging.info(
+                        "Bulk MNP-Flex skip %s: workflow not finished or data still arriving",
+                        sid,
+                    )
+                    continue
+
                 try:
                     logging.info(
                         "Bulk MNP-Flex (%d/%d): running %s", idx, total, sid
                     )
+                    self._audit_log(
+                        event_type="run.started",
+                        user_id=self._get_current_user_id(),
+                        target_type="sample",
+                        target_id=sid,
+                        details={"run_type": "mnpflex", "trigger": "bulk"},
+                    )
 
                     output_dir = sample_dir / f"mnpflex_results_{sid}"
-                    output_dir.mkdir(parents=True, exist_ok=True)
-
-                    # Build full bedmethyl BED from the parquet, then create the MNP-Flex subset BED.
-                    bed_path = sample_dir / f"{sid}.mnpflex.bed"
-                    bed_df = reconstruct_full_bedmethyl_for_mnpflex(str(parquet_path))
-                    bed_df.to_csv(bed_path, sep="\t", index=False, header=False)
-
-                    subset_path = sample_dir / f"{sid}.MNPFlex.subset.bed"
-                    api_client.process_streaming(
-                        reference_bed, str(bed_path), str(subset_path)
-                    )
-
-                    client = MNPFlexClient(
-                        base_url=base_url,
-                        username=username,
-                        password=password,
-                        verify_ssl=False,
-                        client_id=client_id,
-                        client_secret=client_secret,
-                        scope=scope,
-                    )
-                    client.authenticate(
-                        username=username,
-                        password=password,
-                        client_id=client_id,
-                        client_secret=client_secret,
-                    )
-                    logging.info(
-                        "Bulk MNP-Flex (%d/%d): submitting sample=%s workflow_id=%s subset_bed=%s output_dir=%s",
-                        idx,
-                        total,
-                        sid,
-                        workflow_id,
-                        str(subset_path),
-                        str(output_dir),
-                    )
-                    client.upload_retrieve_cleanup(
-                        bed_file_path=str(subset_path),
-                        sample_identifier=sid,
-                        workflow_id=workflow_id,
-                        output_dir=str(output_dir),
+                    run_mnpflex_analysis(
+                        sample_dir=sample_dir,
+                        sample_id=sid,
+                        output_dir=output_dir,
+                        config=mnpflex_config,
                     )
                     processed += 1
                 except Exception as exc:
                     errors += 1
+                    self._audit_log(
+                        event_type="run.started",
+                        result="failure",
+                        user_id=self._get_current_user_id(),
+                        target_type="sample",
+                        target_id=sid,
+                        details={
+                            "run_type": "mnpflex",
+                            "trigger": "bulk",
+                            "error": str(exc)[:500],
+                        },
+                        error_code="mnpflex_failed",
+                    )
                     logging.error(
                         "Bulk MNP-Flex error for %s: %s", sid, exc, exc_info=True
                     )
@@ -7288,15 +8793,17 @@ class GUILauncher:
 
     def _samples_select_all_visible_for_export(self) -> None:
         """Select every sample_id in the current (filtered) table rows for report export."""
+        if getattr(self, "export_reports_button", None) is None:
+            return
         try:
             rows = getattr(self.samples_table, "rows", None) or []
             visible_ids = {str(r.get("sample_id")) for r in rows if r.get("sample_id")}
-            self._selected_sample_ids = set(visible_ids)
+            selected_ids = self._set_selected_sample_ids(set(visible_ids))
             for r in self._last_samples_rows or []:
                 sid = r.get("sample_id")
                 if sid:
-                    r["export"] = str(sid) in self._selected_sample_ids
-            if self._selected_sample_ids:
+                    r["export"] = str(sid) in selected_ids
+            if selected_ids:
                 self.export_reports_button.enable()
             else:
                 self.export_reports_button.disable()
@@ -7304,7 +8811,7 @@ class GUILauncher:
             logging.info(
                 "[samples_overview] Select all (toolbar): %d sample(s) "
                 "(visible filtered rows=%d)",
-                len(self._selected_sample_ids),
+                len(selected_ids),
                 len(rows),
             )
         except Exception as e:
@@ -7313,8 +8820,10 @@ class GUILauncher:
             )
 
     def _samples_clear_export_selection(self) -> None:
+        if getattr(self, "export_reports_button", None) is None:
+            return
         try:
-            self._selected_sample_ids.clear()
+            self._set_selected_sample_ids(set())
             for r in self._last_samples_rows or []:
                 r["export"] = False
             self.export_reports_button.disable()
@@ -7336,9 +8845,8 @@ class GUILauncher:
 
     def _trigger_target_bam_finalization(self, sample_id: str, *, trigger_snp: bool = False) -> None:
         """Trigger target.bam finalization for a sample. Optionally start SNP analysis afterwards."""
-        print(
-            f"[DEBUG finalize] _trigger_target_bam_finalization start sample_id={sample_id} trigger_snp={trigger_snp}",
-            flush=True,
+        logging.debug(
+            "target_bam_finalize: start sample_id=%s trigger_snp=%s", sample_id, trigger_snp
         )
         self._set_pipeline_status(
             sample_id,
@@ -7347,7 +8855,7 @@ class GUILauncher:
             detail="Preparing finalization job",
         )
         if not self.monitored_directory:
-            print("[DEBUG finalize] monitored_directory missing, return", flush=True)
+            logging.debug("target_bam_finalize: no monitored_directory")
             self._set_pipeline_status(
                 sample_id,
                 phase="Finalize failed",
@@ -7359,7 +8867,9 @@ class GUILauncher:
 
         if self._is_target_bam_finalize_redundant(sample_id):
             self._finalized_samples.add(sample_id)
-            print(f"[DEBUG finalize] redundant finalize for sample_id={sample_id}, return", flush=True)
+            logging.debug(
+                "target_bam_finalize: redundant (target.bam already) sample_id=%s", sample_id
+            )
             self._set_pipeline_status(
                 sample_id,
                 phase="Finalize already complete",
@@ -7372,25 +8882,25 @@ class GUILauncher:
             )
             if not trigger_snp:
                 return
-            print(
-                f"[DEBUG finalize] redundant finalize but trigger_snp=True; continuing to SNP path for sample_id={sample_id}",
-                flush=True,
+            logging.debug(
+                "target_bam_finalize: redundant but trigger_snp=True, SNP path sample_id=%s",
+                sample_id,
             )
-        
+
         try:
-            from robin.analysis.target_analysis import finalize_accumulation_for_sample
             import csv
-            
+
             # Read target_panel from master.csv
             sample_dir = Path(self.monitored_directory) / sample_id
             master_csv = sample_dir / "master.csv"
             target_panel = "rCNS2"  # Default
             reference_path_for_finalize = self._locate_reference_for_sample(sample_dir)
-            print(
-                f"[DEBUG finalize] resolved reference for finalize sample_id={sample_id}: {reference_path_for_finalize}",
-                flush=True,
+            logging.debug(
+                "target_bam_finalize: reference sample_id=%s path=%s",
+                sample_id,
+                reference_path_for_finalize,
             )
-            
+
             if master_csv.exists():
                 try:
                     with master_csv.open("r", newline="") as fh:
@@ -7402,16 +8912,19 @@ class GUILauncher:
                                 target_panel = panel
                 except Exception:
                     pass  # Use default
-            
+
             already_finalized = sample_id in self._finalized_samples
 
             # Trigger finalization (and optional SNP analysis) in background thread to avoid blocking GUI
             import threading
             def finalize_in_background():
                 try:
-                    print(
-                        f"[DEBUG finalize] background thread entered sample_id={sample_id} trigger_snp={trigger_snp} already_finalized={already_finalized}",
-                        flush=True,
+                    logging.debug(
+                        "target_bam_finalize: worker start sample_id=%s trigger_snp=%s "
+                        "already_finalized=%s",
+                        sample_id,
+                        trigger_snp,
+                        already_finalized,
                     )
                     self._set_pipeline_status(
                         sample_id,
@@ -7422,10 +8935,11 @@ class GUILauncher:
                     finalization_succeeded = True
 
                     if already_finalized:
-                        print(f"[DEBUG finalize] sample already finalized: {sample_id}", flush=True)
                         logging.info(f"Sample {sample_id} already finalized; skipping target.bam merge")
                     else:
-                        print(f"[DEBUG finalize] processing finalization path sample_id={sample_id}", flush=True)
+                        logging.debug(
+                            "target_bam_finalize: merge path sample_id=%s", sample_id
+                        )
                         logging.info(
                             f"Triggering target.bam finalization for sample {sample_id} (status: Complete)"
                         )
@@ -7433,9 +8947,10 @@ class GUILauncher:
                         if workflow_runner and hasattr(
                             workflow_runner, "submit_target_bam_finalize_job"
                         ):
-                            print(
-                                f"[DEBUG finalize] attempting submit_target_bam_finalize_job sample_id={sample_id}",
-                                flush=True,
+                            logging.debug(
+                                "target_bam_finalize: submit_target_bam_finalize_job "
+                                "sample_id=%s",
+                                sample_id,
                             )
                             submitted = self._resolve_submission_result(
                                 workflow_runner.submit_target_bam_finalize_job(
@@ -7446,11 +8961,18 @@ class GUILauncher:
                                 ),
                                 operation=f"Target BAM finalize submission for {sample_id}",
                             )
-                            print(
-                                f"[DEBUG finalize] submit_target_bam_finalize_job returned {submitted!r} type={type(submitted).__name__}",
-                                flush=True,
+                            logging.debug(
+                                "target_bam_finalize: submit finalize returned %s",
+                                submitted,
                             )
                             if submitted:
+                                self._audit_log(
+                                    event_type="run.started",
+                                    user_id=self._get_current_user_id(),
+                                    target_type="sample",
+                                    target_id=sample_id,
+                                    details={"run_type": "target_bam_finalize"},
+                                )
                                 self._set_pipeline_status(
                                     sample_id,
                                     phase="Finalize queued",
@@ -7476,9 +8998,11 @@ class GUILauncher:
                                     ready = self._wait_for_target_bam_or_timeout(
                                         sample_id, poll_s=2.0, max_wait_s=3600.0
                                     )
-                                    print(
-                                        f"[DEBUG finalize] wait_for_target_bam sample_id={sample_id} ready={ready}",
-                                        flush=True,
+                                    logging.debug(
+                                        "target_bam_finalize: wait target.bam sample_id=%s "
+                                        "ready=%s",
+                                        sample_id,
+                                        ready,
                                     )
                                     if not ready:
                                         finalization_succeeded = False
@@ -7504,13 +9028,23 @@ class GUILauncher:
                                     f"Target BAM finalization job submission failed for {sample_id}; running inline"
                                 )
                         if finalization_succeeded:
-                            print(f"[DEBUG finalize] running finalize_accumulation_for_sample sample_id={sample_id}", flush=True)
+                            from robin.analysis.target_analysis import (
+                                finalize_accumulation_for_sample,
+                            )
+
+                            logging.debug(
+                                "target_bam_finalize: finalize_accumulation_for_sample "
+                                "sample_id=%s",
+                                sample_id,
+                            )
                             result = finalize_accumulation_for_sample(
                                 sample_id=sample_id,
                                 work_dir=str(self.monitored_directory),
                                 target_panel=target_panel,
                             )
-                            print(f"[DEBUG finalize] finalize_accumulation result={result!r}", flush=True)
+                            logging.debug(
+                                "target_bam_finalize: accumulation result=%s", result
+                            )
                             if result.get("status") != "error":
                                 self._finalized_samples.add(sample_id)
                                 self._set_pipeline_status(
@@ -7542,7 +9076,10 @@ class GUILauncher:
                             progress=0.7,
                             detail="Checking prerequisites",
                         )
-                        print(f"[DEBUG finalize] entering SNP submission path sample_id={sample_id}", flush=True)
+                        logging.debug(
+                            "target_bam_finalize: SNP submission path sample_id=%s",
+                            sample_id,
+                        )
                         # Ensure only one SNP analysis submission runs at a time
                         with self._snp_analysis_lock:
                             running_sample = self._snp_analysis_running_sample
@@ -7568,12 +9105,17 @@ class GUILauncher:
                                 return
 
                             self._snp_analysis_running_sample = sample_id
-                            print(f"[DEBUG finalize] snp lock set for sample_id={sample_id}", flush=True)
+                            logging.debug(
+                                "target_bam_finalize: snp lock set sample_id=%s", sample_id
+                            )
 
                         try:
                             reference_path = self._locate_reference_for_sample(sample_dir)
                             if not reference_path:
-                                print(f"[DEBUG finalize] no reference for sample_id={sample_id}", flush=True)
+                                logging.debug(
+                                    "target_bam_finalize: no reference sample_id=%s",
+                                    sample_id,
+                                )
                                 self._set_pipeline_status(
                                     sample_id,
                                     phase="SNP skipped",
@@ -7600,7 +9142,10 @@ class GUILauncher:
 
                             target_bam = sample_dir / "target.bam"
                             if not target_bam.exists():
-                                print(f"[DEBUG finalize] target.bam missing for sample_id={sample_id}", flush=True)
+                                logging.debug(
+                                    "target_bam_finalize: target.bam missing sample_id=%s",
+                                    sample_id,
+                                )
                                 self._set_pipeline_status(
                                     sample_id,
                                     phase="SNP skipped",
@@ -7625,7 +9170,11 @@ class GUILauncher:
                             from robin.analysis.target_analysis import is_docker_available_for_snp_analysis
                             docker_ok, docker_error = is_docker_available_for_snp_analysis()
                             if not docker_ok:
-                                print(f"[DEBUG finalize] docker unavailable in SNP path sample_id={sample_id}: {docker_error}", flush=True)
+                                logging.debug(
+                                    "target_bam_finalize: docker unavailable sample_id=%s: %s",
+                                    sample_id,
+                                    docker_error,
+                                )
                                 self._set_pipeline_status(
                                     sample_id,
                                     phase="SNP skipped",
@@ -7654,7 +9203,11 @@ class GUILauncher:
                             if workflow_runner and hasattr(
                                 workflow_runner, "submit_snp_analysis_job"
                             ):
-                                print(f"[DEBUG finalize] attempting submit_snp_analysis_job sample_id={sample_id}", flush=True)
+                                logging.debug(
+                                    "target_bam_finalize: submit_snp_analysis_job "
+                                    "sample_id=%s",
+                                    sample_id,
+                                )
                                 submitted = self._resolve_submission_result(
                                     workflow_runner.submit_snp_analysis_job(
                                         sample_dir=str(sample_dir),
@@ -7665,14 +9218,20 @@ class GUILauncher:
                                     ),
                                     operation=f"SNP submission for {sample_id}",
                                 )
-                                print(
-                                    f"[DEBUG finalize] submit_snp_analysis_job returned {submitted!r} type={type(submitted).__name__}",
-                                    flush=True,
+                                logging.debug(
+                                    "target_bam_finalize: submit_snp_analysis_job "
+                                    "sample_id=%s submitted=%s",
+                                    sample_id,
+                                    submitted,
                                 )
                             elif workflow_runner and hasattr(
                                 workflow_runner, "submit_sample_job"
                             ):
-                                print(f"[DEBUG finalize] attempting fallback submit_sample_job(snp_analysis) sample_id={sample_id}", flush=True)
+                                logging.debug(
+                                    "target_bam_finalize: fallback submit_sample_job "
+                                    "(snp_analysis) sample_id=%s",
+                                    sample_id,
+                                )
                                 submitted = self._resolve_submission_result(
                                     workflow_runner.submit_sample_job(
                                         sample_dir=str(sample_dir),
@@ -7681,14 +9240,23 @@ class GUILauncher:
                                     ),
                                     operation=f"SNP fallback submission for {sample_id}",
                                 )
-                                print(
-                                    f"[DEBUG finalize] fallback submit_sample_job returned {submitted!r} type={type(submitted).__name__}",
-                                    flush=True,
+                                logging.debug(
+                                    "target_bam_finalize: fallback submit sample_id=%s "
+                                    "submitted=%s",
+                                    sample_id,
+                                    submitted,
                                 )
                             else:
                                 submitted = False
 
                             if submitted:
+                                self._audit_log(
+                                    event_type="run.started",
+                                    user_id=self._get_current_user_id(),
+                                    target_type="sample",
+                                    target_id=sample_id,
+                                    details={"run_type": "snp_analysis"},
+                                )
                                 self._set_pipeline_status(
                                     sample_id,
                                     phase="SNP queued",
@@ -7734,6 +9302,15 @@ class GUILauncher:
                                     priority=6,
                                 )
                             else:
+                                self._audit_log(
+                                    event_type="run.started",
+                                    result="failure",
+                                    user_id=self._get_current_user_id(),
+                                    target_type="sample",
+                                    target_id=sample_id,
+                                    details={"run_type": "snp_analysis"},
+                                    error_code="runner_unavailable",
+                                )
                                 self._set_pipeline_status(
                                     sample_id,
                                     phase="SNP submit failed",
@@ -7779,9 +9356,16 @@ class GUILauncher:
                         finally:
                             with self._snp_analysis_lock:
                                 self._snp_analysis_running_sample = None
-                            print(f"[DEBUG finalize] snp lock cleared sample_id={sample_id}", flush=True)
+                            logging.debug(
+                                "target_bam_finalize: snp lock cleared sample_id=%s",
+                                sample_id,
+                            )
                 except Exception as e:
-                    print(f"[DEBUG finalize] background exception sample_id={sample_id}: {e}", flush=True)
+                    logging.debug(
+                        "target_bam_finalize: worker exception sample_id=%s: %s",
+                        sample_id,
+                        e,
+                    )
                     self._set_pipeline_status(
                         sample_id,
                         phase="Finalize/SNP failed",
@@ -7790,173 +9374,18 @@ class GUILauncher:
                         level="negative",
                     )
                     logging.error(f"Error finalizing target.bam for {sample_id}: {e}")
-            
-            thread = threading.Thread(target=finalize_in_background, daemon=True)
-            print(f"[DEBUG finalize] starting thread name={thread.name} sample_id={sample_id}", flush=True)
-            thread.start()
-            print(f"[DEBUG finalize] thread started sample_id={sample_id}", flush=True)
-            
-        except Exception as e:
-            print(f"[DEBUG finalize] outer exception sample_id={sample_id}: {e}", flush=True)
-            logging.error(f"Failed to trigger target.bam finalization for {sample_id}: {e}")
-    
-    def _scan_and_seed_samples(self, preexisting: bool = False) -> None:
-        """Synchronous version - kept for backward compatibility and io_bound calls"""
-        try:
-            base = Path(self.monitored_directory) if self.monitored_directory else None
-            if not base or not base.exists():
-                return
-            rows: List[Dict[str, Any]] = []
-            for sample_dir in base.iterdir():
-                if not sample_dir.is_dir():
-                    continue
-                master = sample_dir / "master.csv"
-                if master.exists():
-                    sid = sample_dir.name
-                    if preexisting:
-                        self._preexisting_sample_ids.add(sid)
-                    # Determine last_seen from file mtime
-                    last_seen = master.stat().st_mtime
-                    # Try to load persisted overview and run info
-                    run_start = ""
-                    device = ""
-                    flowcell = ""
-                    ov_active = 0
-                    ov_pending = 0
-                    ov_total = 0
-                    ov_completed = 0
-                    ov_failed = 0
-                    ov_job_types = ""
-                    try:
-                        with master.open("r", newline="") as fh:
-                            reader = csv.DictReader(fh)
-                            first_row = next(reader, None)
-                        if first_row:
-                            run_start = first_row.get("run_info_run_time", "")
-                            device = first_row.get("run_info_device", "")
-                            flowcell = first_row.get("run_info_flow_cell", "")
-                            # Use saved last_seen if present
-                            try:
-                                saved_last = float(
-                                    first_row.get("samples_overview_last_seen", 0.0)
-                                )
-                                if saved_last:
-                                    last_seen = saved_last
-                            except Exception:
-                                pass
-                            ov_active = int(
-                                first_row.get("samples_overview_active_jobs", 0) or 0
-                            )
-                            ov_pending = int(
-                                first_row.get("samples_overview_pending_jobs", 0) or 0
-                            )
-                            ov_total = int(
-                                first_row.get("samples_overview_total_jobs", 0) or 0
-                            )
-                            ov_completed = int(
-                                first_row.get("samples_overview_completed_jobs", 0) or 0
-                            )
-                            ov_failed = int(
-                                first_row.get("samples_overview_failed_jobs", 0) or 0
-                            )
-                            ov_job_types = str(
-                                first_row.get("samples_overview_job_types", "") or ""
-                            )
-                    except Exception:
-                        pass
-                    origin_value = (
-                        "Pre-existing"
-                        if sid in self._preexisting_sample_ids and (time.time() - last_seen) >= self.completion_timeout_seconds
-                        else "Live"
-                    )
-                    if origin_value == "Live" and (time.time() - last_seen) >= self.completion_timeout_seconds:
-                        if ov_active == 0 and ov_pending == 0:
-                            expected = self._get_expected_completion_job_types()
-                            if expected:
-                                complete_on_disk = self._expected_jobs_completed(
-                                    sample_dir, expected
-                                )
-                            else:
-                                complete_on_disk = self._is_target_bam_finalize_redundant(
-                                    sid
-                                )
-                            if not complete_on_disk:
-                                complete_on_disk = self._is_target_bam_finalize_redundant(
-                                    sid
-                                )
-                            if complete_on_disk:
-                                origin_value = "Complete"
-                    try:
-                        # Only mark as Complete if timeout passed AND no active jobs
-                        if origin_value == "Live" and (time.time() - last_seen) >= self.completion_timeout_seconds:
-                            if ov_active == 0 and ov_pending == 0:
-                                origin_value = "Complete"
-                                # Check if this is a transition from Live to Complete
-                                existing = self._last_samples_rows or []
-                                prev_origin = None
-                                for prev_row in existing:
-                                    if prev_row.get("sample_id") == sid:
-                                        prev_origin = prev_row.get("origin")
-                                        break
-                                # Trigger finalization only on a real Live→Complete transition
-                                if prev_origin == "Live":
-                                    self._trigger_target_bam_finalization(sid)
-                            # If there are active jobs, keep as Live even if timeout passed
-                    except Exception:
-                        pass
-                    rows.append(
-                        {
-                            "sample_id": sid,
-                            "origin": origin_value,
-                            "run_start": self._format_timestamp_for_display(run_start),
-                            "device": device,
-                            "flowcell": flowcell,
-                            "active_jobs": ov_active,
-                            "pending_jobs": ov_pending,
-                            "total_jobs": ov_total,
-                            "completed_jobs": ov_completed,
-                            "failed_jobs": ov_failed,
-                            "job_types": ov_job_types,
-                            "last_seen": time.strftime(
-                                "%Y-%m-%d %H:%M:%S", time.localtime(last_seen)
-                            ),
-                            "_last_seen_raw": last_seen,
-                        }
-                    )
-            if rows:
-                # Merge with any current rows and update table
-                existing = {r["sample_id"]: r for r in (self._last_samples_rows or [])}
-                for r in rows:
-                    existing[r["sample_id"]] = r
-                merged = list(existing.values())
-                # Sort rows by last activity in reverse chronological order (newest first)
-                try:
-                    merged.sort(key=lambda r: float(r.get("_last_seen_raw", 0)), reverse=True)
-                except Exception:
-                    # Fallback to sorting by last_seen string if _last_seen_raw is not available
-                    try:
-                        merged.sort(key=lambda r: r.get("last_seen", ""), reverse=True)
-                    except Exception:
-                        pass
-                
-                if hasattr(self, "samples_table"):
-                    try:
-                        self.samples_table.rows = merged
-                        self.samples_table.update()
-                    except Exception:
-                        pass
-                self._last_samples_rows = merged
-                self._known_sample_ids = {r["sample_id"] for r in merged}
-            if preexisting:
-                self._preexisting_scanned = True
-        except Exception:
-            pass
 
-    def _get_cached_samples(self) -> Optional[List[Dict[str, Any]]]:
-        """Return cached sample data if available and recent"""
-        if self._last_samples_rows and time.time() - self._last_cache_time < self._cache_duration:
-            return self._last_samples_rows
-        return None
+            thread = threading.Thread(target=finalize_in_background, daemon=True)
+            logging.debug(
+                "target_bam_finalize: starting worker thread sample_id=%s", sample_id
+            )
+            thread.start()
+
+        except Exception as e:
+            logging.debug(
+                "target_bam_finalize: outer exception sample_id=%s: %s", sample_id, e
+            )
+            logging.error(f"Failed to trigger target.bam finalization for {sample_id}: {e}")
 
     def _get_expected_completion_job_types(self) -> Set[str]:
         """Get the set of job types expected to complete for this workflow."""
@@ -7991,12 +9420,12 @@ class GUILauncher:
             completed_jobs = 0
             failed_jobs = 0
             job_types = set()
-            
+
             job_patterns = COMPLETION_JOB_PATTERNS
             job_types_to_check = (
                 expected_job_types if expected_job_types else set(job_patterns.keys())
             )
-            
+
             # Check for each job type
             for job_type in job_types_to_check:
                 patterns = job_patterns.get(job_type, [])
@@ -8013,7 +9442,7 @@ class GUILauncher:
                         if (sample_dir / pattern).exists():
                             job_found = True
                             break
-                
+
                 if job_found:
                     total_jobs += 1
                     completed_jobs += 1  # Assume completed if files exist
@@ -8021,14 +9450,14 @@ class GUILauncher:
 
             if expected_job_types:
                 total_jobs = len(expected_job_types)
-            
+
             return {
                 "total_jobs": total_jobs,
                 "completed_jobs": completed_jobs,
                 "failed_jobs": failed_jobs,
                 "job_types": ", ".join(sorted(job_types)) if job_types else ""
             }
-            
+
         except Exception as e:
             logging.warning(f"Error calculating job counts from files for {sample_dir}: {e}")
             return {
@@ -8037,414 +9466,6 @@ class GUILauncher:
                 "failed_jobs": 0,
                 "job_types": ""
             }
-
-    async def _load_samples_progressively(self, sample_dirs: List[Path], batch_size: int = 10) -> None:
-        """Load samples in small batches to avoid blocking the UI"""
-        try:
-            total_dirs = len(sample_dirs)
-            processed = 0
-            
-            # Show progress
-            if hasattr(self, "samples_loading_container"):
-                self.samples_loading_container.clear()
-                with self.samples_loading_container:
-                    ui.spinner(size="lg", color="primary")
-                    ui.label("Loading samples...").classes("ml-2 text-lg")
-                    progress_label = ui.label(f"Processing {processed}/{total_dirs} samples").classes("text-sm text-gray-500 mt-2")
-            
-            rows: List[Dict[str, Any]] = []
-            
-            for i in range(0, total_dirs, batch_size):
-                batch = sample_dirs[i:i + batch_size]
-                
-                # Process batch asynchronously in background thread
-                import asyncio
-                batch_rows = await asyncio.to_thread(self._process_sample_batch, batch)
-                rows.extend(batch_rows)
-                
-                processed += len(batch)
-                
-                # Update progress
-                if hasattr(self, "samples_loading_container") and 'progress_label' in locals():
-                    progress_label.set_text(f"Processing {processed}/{total_dirs} samples")
-                
-                # Small delay to keep UI responsive
-                await asyncio.sleep(0.1)
-            
-            # Update table with all rows
-            if rows:
-                self._last_samples_rows = rows
-                self._last_cache_time = time.time()
-                
-                if hasattr(self, "samples_table"):
-                    try:
-                        self.samples_table.rows = rows
-                        self.samples_table.update()
-                    except Exception:
-                        pass
-            
-            # Hide loading container
-            if hasattr(self, "samples_loading_container"):
-                self.samples_loading_container.set_visibility(False)
-                
-        except Exception as e:
-            logging.error(f"Error in progressive loading: {e}")
-            if hasattr(self, "samples_loading_container"):
-                self.samples_loading_container.set_visibility(False)
-
-    def _process_sample_batch(self, sample_dirs: List[Path]) -> List[Dict[str, Any]]:
-        """Process a batch of sample directories synchronously"""
-        rows: List[Dict[str, Any]] = []
-        expected_job_types = self._get_expected_completion_job_types()
-        
-        for sample_dir in sample_dirs:
-            if not sample_dir.is_dir():
-                continue
-                
-            master = sample_dir / "master.csv"
-            if master.exists():
-                sid = sample_dir.name
-                
-                # Determine last_seen from file mtime
-                last_seen = master.stat().st_mtime
-                
-                # Try to load persisted overview and run info
-                run_start = ""
-                device = ""
-                flowcell = ""
-                ov_active = 0
-                ov_pending = 0
-                ov_total = 0
-                ov_completed = 0
-                ov_failed = 0
-                ov_job_types = ""
-                
-                try:
-                    with master.open("r", newline="") as fh:
-                        reader = csv.DictReader(fh)
-                        first_row = next(reader, None)
-                    if first_row:
-                        run_start = first_row.get("run_info_run_time", "")
-                        device = first_row.get("run_info_device", "")
-                        flowcell = first_row.get("run_info_flow_cell", "")
-                        
-                        # Use saved last_seen if present
-                        try:
-                            saved_last = float(
-                                first_row.get("samples_overview_last_seen", 0.0)
-                            )
-                            if saved_last:
-                                last_seen = saved_last
-                        except Exception:
-                            pass
-                            
-                        # Try to get overview data from master.csv first
-                        ov_active = int(
-                            first_row.get("samples_overview_active_jobs", 0) or 0
-                        )
-                        ov_pending = int(
-                            first_row.get("samples_overview_pending_jobs", 0) or 0
-                        )
-                        ov_total = int(
-                            first_row.get("samples_overview_total_jobs", 0) or 0
-                        )
-                        ov_completed = int(
-                            first_row.get("samples_overview_completed_jobs", 0) or 0
-                        )
-                        ov_failed = int(
-                            first_row.get("samples_overview_failed_jobs", 0) or 0
-                        )
-                        ov_job_types = str(
-                            first_row.get("samples_overview_job_types", "") or ""
-                        )
-                        
-                        # If overview data is not available (0 values), calculate from actual analysis files
-                        if ov_total == 0 and ov_completed == 0:
-                            calculated_counts = self._calculate_job_counts_from_files(
-                                sample_dir,
-                                expected_job_types=expected_job_types or None,
-                            )
-                            ov_total = calculated_counts["total_jobs"]
-                            ov_completed = calculated_counts["completed_jobs"]
-                            ov_failed = calculated_counts["failed_jobs"]
-                            ov_job_types = calculated_counts["job_types"]
-                except Exception:
-                    pass
-                    
-                origin_value = (
-                    "Pre-existing"
-                    if sid in self._preexisting_sample_ids and (time.time() - last_seen) >= self.completion_timeout_seconds
-                    else "Live"
-                )
-                try:
-                    # Only mark as Complete if timeout passed AND no active jobs
-                    if origin_value == "Live" and (time.time() - last_seen) >= self.completion_timeout_seconds:
-                        if ov_active == 0:
-                            should_complete = True
-                            if expected_job_types:
-                                should_complete = self._expected_jobs_completed(
-                                    sample_dir, expected_job_types
-                                )
-                            if should_complete:
-                                origin_value = "Complete"
-                        # If there are active jobs, keep as Live even if timeout passed
-                except Exception:
-                    pass
-                    
-                # File progress - use the same job counts that drive other columns
-                # This ensures consistency with the Active, Total, Completed columns
-                files_seen = ov_total  # Use total_jobs as files_seen
-                files_processed = ov_completed  # Use completed_jobs as files_processed
-                file_progress = files_processed / files_seen if files_seen > 0 else 0.0
-                
-                row_data = {
-                    "sample_id": sid,
-                    "origin": origin_value,
-                    "run_start": self._format_timestamp_for_display(run_start),
-                    "device": device,
-                    "flowcell": flowcell,
-                    "active_jobs": ov_active,
-                    "pending_jobs": ov_pending,
-                    "total_jobs": ov_total,
-                    "completed_jobs": ov_completed,
-                    "failed_jobs": ov_failed,
-                    "job_types": ov_job_types,
-                    "files_seen": files_seen,
-                    "files_processed": files_processed,
-                    "file_progress": file_progress,
-                    "last_seen": time.strftime(
-                        "%Y-%m-%d %H:%M:%S", time.localtime(last_seen)
-                    ),
-                    "_last_seen_raw": last_seen,
-                }
-                
-                rows.append(row_data)
-        
-        return rows
-
-    async def _scan_and_seed_samples_async(self, preexisting: bool = False) -> None:
-        """Asynchronous version that runs file operations in background thread"""
-        try:
-            # Check if we have recent cached data
-            cached_data = self._get_cached_samples()
-            if cached_data and not preexisting:
-                # Use cached data and update UI immediately
-                if hasattr(self, "samples_table"):
-                    try:
-                        self.samples_table.rows = cached_data
-                        self.samples_table.update()
-                        # Hide loading indicator
-                        if hasattr(self, "samples_loading_container"):
-                            self.samples_loading_container.set_visibility(False)
-                    except Exception:
-                        pass
-                return
-            
-            # Check if we need progressive loading for large directories
-            base = Path(self.monitored_directory) if self.monitored_directory else None
-            if base and base.exists():
-                sample_dirs = [d for d in base.iterdir() if d.is_dir()]
-                
-                # Use progressive loading for directories with many samples
-                if len(sample_dirs) > 20:
-                    await self._load_samples_progressively(sample_dirs)
-                    return
-            
-            # Show loading indicator
-            if hasattr(self, "samples_loading_indicator"):
-                self.samples_loading_indicator.set_visibility(True)
-            
-            # Run the synchronous file operations in a background thread using asyncio.to_thread
-            # This prevents blocking the main thread and GUI updates
-            import asyncio
-            result = await asyncio.to_thread(self._scan_and_seed_samples, preexisting)
-            
-            # Update cache timestamp
-            self._last_cache_time = time.time()
-            
-            # Hide loading indicator
-            if hasattr(self, "samples_loading_indicator"):
-                self.samples_loading_indicator.set_visibility(False)
-            if hasattr(self, "samples_loading_container"):
-                self.samples_loading_container.set_visibility(False)
-            
-        except Exception as e:
-            logging.error(f"Error in async sample scanning: {e}")
-            
-            # Hide loading indicators on error
-            if hasattr(self, "samples_loading_indicator"):
-                self.samples_loading_indicator.set_visibility(False)
-            if hasattr(self, "samples_loading_container"):
-                self.samples_loading_container.set_visibility(False)
-
-    async def _scan_for_new_samples_async(self) -> None:
-        """Asynchronous version of new samples scanning"""
-        try:
-            # Always scan for new samples to ensure we get updates
-            # The cache will be updated by _scan_for_new_samples if there are changes
-            self._scan_for_new_samples()
-        except Exception as e:
-            logging.error(f"Error in async new samples scanning: {e}")
-
-    def _scan_for_new_samples(self) -> None:
-        try:
-            base = Path(self.monitored_directory) if self.monitored_directory else None
-            if not base or not base.exists():
-                return
-            # Prepare mappings for efficient lookups and updates
-            new_rows: List[Dict[str, Any]] = []
-            updated_rows: List[Dict[str, Any]] = []
-            existing_by_id: Dict[str, Dict[str, Any]] = {
-                r.get("sample_id"): r
-                for r in (self._last_samples_rows or [])
-                if r.get("sample_id")
-            }
-            for sample_dir in base.iterdir():
-                if not sample_dir.is_dir():
-                    continue
-                sid = sample_dir.name
-                master = sample_dir / "master.csv"
-                if master.exists():
-                    try:
-                        last_seen = master.stat().st_mtime
-                        # Load persisted overview and run info
-                        run_start = ""
-                        device = ""
-                        flowcell = ""
-                        ov_active = 0
-                        ov_pending = 0
-                        ov_total = 0
-                        ov_completed = 0
-                        ov_failed = 0
-                        ov_job_types = ""
-                        with master.open("r", newline="") as fh:
-                            reader = csv.DictReader(fh)
-                            first_row = next(reader, None)
-                        if first_row:
-                            run_start = first_row.get("run_info_run_time", "")
-                            device = first_row.get("run_info_device", "")
-                            flowcell = first_row.get("run_info_flow_cell", "")
-                            try:
-                                saved_last = float(
-                                    first_row.get("samples_overview_last_seen", 0.0)
-                                )
-                                if saved_last:
-                                    last_seen = saved_last
-                            except Exception:
-                                pass
-                            ov_active = int(
-                                first_row.get("samples_overview_active_jobs", 0) or 0
-                            )
-                            ov_pending = int(
-                                first_row.get("samples_overview_pending_jobs", 0) or 0
-                            )
-                            ov_total = int(
-                                first_row.get("samples_overview_total_jobs", 0) or 0
-                            )
-                            ov_completed = int(
-                                first_row.get("samples_overview_completed_jobs", 0) or 0
-                            )
-                            ov_failed = int(
-                                first_row.get("samples_overview_failed_jobs", 0) or 0
-                            )
-                            ov_job_types = str(
-                                first_row.get("samples_overview_job_types", "") or ""
-                            )
-                    except Exception:
-                        last_seen = None
-                    if last_seen is None:
-                        continue
-
-                    existing_row = existing_by_id.get(sid)
-                    if existing_row is None:
-                        # New sample discovered → mark as Live
-                        new_rows.append(
-                            {
-                                "sample_id": sid,
-                                "origin": "Live",
-                                "run_start": run_start,
-                                "device": device,
-                                "flowcell": flowcell,
-                                "active_jobs": ov_active,
-                                "total_jobs": ov_total,
-                                "completed_jobs": ov_completed,
-                                "failed_jobs": ov_failed,
-                                "job_types": ov_job_types,
-                                "last_seen": time.strftime(
-                                    "%H:%M:%S", time.localtime(last_seen)
-                                ),
-                                "_last_seen_raw": last_seen,
-                            }
-                        )
-                    else:
-                        # Existing sample: if master.csv has a newer mtime, update and flip to Live
-                        prev_seen = existing_row.get("_last_seen_raw") or 0
-                        if last_seen > prev_seen:
-                            updated = dict(existing_row)
-                            # Preserve or refresh run info/overview from persisted values
-                            formatted_run_start = (
-                                self._format_timestamp_for_display(run_start)
-                                if run_start
-                                else ""
-                            )
-                            updated["run_start"] = (
-                                formatted_run_start or existing_row.get("run_start", "")
-                            )
-                            updated["device"] = device or existing_row.get("device", "")
-                            updated["flowcell"] = flowcell or existing_row.get(
-                                "flowcell", ""
-                            )
-                            if ov_job_types:
-                                updated["job_types"] = ov_job_types
-                            updated["active_jobs"] = ov_active
-                            updated["pending_jobs"] = ov_pending
-                            updated["total_jobs"] = ov_total
-                            updated["completed_jobs"] = ov_completed
-                            updated["failed_jobs"] = ov_failed
-                            updated["last_seen"] = time.strftime(
-                                "%H:%M:%S", time.localtime(last_seen)
-                            )
-                            updated["_last_seen_raw"] = last_seen
-                            # Determine origin based on inactivity threshold AND active jobs status
-                            prev_origin = existing_row.get("origin")
-                            try:
-                                # Only mark as Complete if timeout passed AND no active jobs
-                                if (time.time() - last_seen) >= self.completion_timeout_seconds:
-                                    if ov_active == 0 and ov_pending == 0:
-                                        updated["origin"] = "Complete"
-                                        # Trigger finalization if transitioning from Live to Complete
-                                        if prev_origin == "Live":
-                                            self._trigger_target_bam_finalization(sid)
-                                    else:
-                                        # If there are active jobs, keep as Live even if timeout passed
-                                        updated["origin"] = "Live"
-                                else:
-                                    updated["origin"] = "Live"
-                            except Exception:
-                                updated["origin"] = "Live"
-                            updated_rows.append(updated)
-
-            if new_rows or updated_rows:
-                merged_map: Dict[str, Dict[str, Any]] = {
-                    r["sample_id"]: r for r in (self._last_samples_rows or [])
-                }
-                for r in new_rows:
-                    merged_map[r["sample_id"]] = r
-                for r in updated_rows:
-                    merged_map[r["sample_id"]] = r
-                merged = list(merged_map.values())
-                if hasattr(self, "samples_table"):
-                    try:
-                        self.samples_table.rows = merged
-                        self.samples_table.update()
-                    except Exception:
-                        pass
-                self._last_samples_rows = merged
-                self._known_sample_ids = {r["sample_id"] for r in merged}
-                # Update cache timestamp when we update the samples data
-                self._last_cache_time = time.time()
-        except Exception:
-            pass
 
     def _create_watched_folders_page(self):
         """Create the watched folders management page."""
@@ -8458,7 +9479,7 @@ class GUILauncher:
             with theme.frame(
                 "R.O.B.I.N - Watched Folders",
                 smalltitle="Watched Folders",
-                batphone=False,
+                batphone=self.batman_mode,
                 center=self.center,
                 setup_notifications=self._setup_notification_system,
             ):
@@ -8493,7 +9514,7 @@ class GUILauncher:
         with theme.frame(
             "R.O.B.I.N - Watched Folders",
             smalltitle="Watched Folders",
-            batphone=False,
+            batphone=self.batman_mode,
             center=self.center,
             setup_notifications=self._setup_notification_system,
         ):
@@ -8565,9 +9586,42 @@ class GUILauncher:
 
                                 ui.separator().classes("mgmt-detail-separator")
 
-                                ui.label("Add folder").classes(
+                                ui.label("Add folders").classes(
                                     "target-coverage-panel__meta-label mt-1 mb-1"
                                 )
+                                pending_paths: list[str] = []
+                                pending_paths_container = ui.column().classes(
+                                    "w-full gap-1"
+                                )
+
+                                def refresh_pending_paths():
+                                    if not self._safe_clear_container(
+                                        pending_paths_container
+                                    ):
+                                        return
+                                    with pending_paths_container:
+                                        for selected_path in pending_paths:
+                                            with ui.row().classes(
+                                                "w-full items-center gap-2 p-2 rounded "
+                                                "min-w-0 watched-folders-path-row"
+                                            ):
+                                                ui.icon("folder").classes("shrink-0")
+                                                ui.label(selected_path).classes(
+                                                    "text-xs flex-1 break-all font-mono"
+                                                )
+
+                                                def remove_pending(path=selected_path):
+                                                    if path in pending_paths:
+                                                        pending_paths.remove(path)
+                                                    refresh_pending_paths()
+
+                                                ui.button(
+                                                    icon="close",
+                                                    on_click=remove_pending,
+                                                ).props(
+                                                    "flat round dense aria-label=Remove"
+                                                )
+
                                 with ui.row().classes(
                                     "w-full gap-2 items-end flex-wrap"
                                 ):
@@ -8591,14 +9645,17 @@ class GUILauncher:
                                             )
                                         )
                                         picker = local_folder_picker(
-                                            start, upper_limit=None
+                                            start, upper_limit=None, multiple=True
                                         )
                                         result = await picker
-                                        if result and len(result) > 0:
-                                            path_input.value = result[0]
+                                        if result:
+                                            for selected_path in result:
+                                                if selected_path not in pending_paths:
+                                                    pending_paths.append(selected_path)
+                                            refresh_pending_paths()
 
                                     ui.button(
-                                        "Browse",
+                                        "Browse folders",
                                         on_click=pick_folder,
                                         icon="folder_open",
                                     ).props("flat no-caps outline")
@@ -8614,9 +9671,12 @@ class GUILauncher:
 
                                 async def do_add_folder():
                                     path_val = (path_input.value or "").strip()
-                                    if not path_val:
+                                    paths_to_add = list(pending_paths)
+                                    if path_val and path_val not in paths_to_add:
+                                        paths_to_add.append(path_val)
+                                    if not paths_to_add:
                                         ui.notify(
-                                            "Please enter a folder path",
+                                            "Please enter or select at least one folder",
                                             type="warning",
                                         )
                                         return
@@ -8630,24 +9690,31 @@ class GUILauncher:
                                                 "items-center gap-3 min-w-0"
                                             ):
                                                 ui.spinner(size="lg")
-                                                ui.label("Adding folder…").classes(
+                                                ui.label("Adding folders…").classes(
                                                     "classification-insight-model"
                                                 )
                                     add_dialog.open()
                                     # Close modal immediately before long-running add to avoid
                                     # "client has been deleted" when user navigates away during add
                                     add_dialog.close()
-                                    self._safe_notify("Adding folder...", "info")
-                                    await self._do_add_folder(
+                                    self._safe_notify(
+                                        f"Adding {len(paths_to_add)} folder"
+                                        f"{'s' if len(paths_to_add) != 1 else ''}...",
+                                        "info",
+                                    )
+                                    failed_paths = await self._do_add_folders(
+                                        paths=paths_to_add,
                                         path_input=path_input,
                                         add_watch_path=add_watch_path,
                                         watched_container=watched_container,
                                         get_watched_paths=get_watched_paths,
                                         remove_watch_path=remove_watch_path,
                                     )
+                                    pending_paths[:] = failed_paths
+                                    refresh_pending_paths()
 
                                 ui.button(
-                                    "Add folder",
+                                    "Add folders",
                                     on_click=do_add_folder,
                                     icon="add_circle_outline",
                                 ).props("color=primary no-caps").classes("w-full mt-2")
@@ -8655,60 +9722,120 @@ class GUILauncher:
     def _save_sample_identifier_manifest(
         self,
         sample_id: str,
-        test_id: str,
-        first_name: str,
-        last_name: str,
-        dob: str,
+        test_id: str = "",
+        first_name: str = "",
+        last_name: str = "",
+        dob: str = "",
         nhs_number: str = "",
+        notes: str = "",
+        *,
+        id_source: str = "md5",
+        derived_md5: str = "",
     ) -> tuple[bool, str]:
         """
         Create the sample output folder and write the identifier manifest.
-        test_id is stored in plain text; first_name, last_name, dob and hospital number (nhs_number)
-        are encrypted with a key derived from the date of birth.
-        Returns (success, message).
+
+        Registers ``sample_id`` under the work directory so a later run with the
+        same MinKNOW sample ID links to this folder. Optional PII/notes fields
+        require DOB and are stored encrypted under a DOB-derived key.
         """
-        if not (self.monitored_directory or "").strip():
-            return False, "No output directory configured (work directory not set)."
-        base = Path(self.monitored_directory)
-        try:
-            sample_dir = base / sample_id
-            sample_dir.mkdir(parents=True, exist_ok=True)
-        except OSError as e:
-            return False, f"Cannot create sample folder: {e}"
+        return save_sample_identifier_manifest(
+            self.monitored_directory,
+            sample_id,
+            test_id=test_id,
+            first_name=first_name,
+            last_name=last_name,
+            dob=dob,
+            nhs_number=nhs_number,
+            notes=notes,
+            id_source=id_source,
+            derived_md5=derived_md5,
+        )
 
-        try:
-            first_name_enc = _encrypt_identifier_manifest_field(first_name, dob)
-            last_name_enc = _encrypt_identifier_manifest_field(last_name, dob)
-            dob_enc = _encrypt_identifier_manifest_field(dob, dob)
-            nhs_number_enc = _encrypt_identifier_manifest_field(nhs_number, dob) if nhs_number else ""
-        except Exception as e:
-            return False, f"Encryption failed: {e}"
+    def _create_admin_page(self) -> None:
+        """Administration page for user management and audit review."""
+        from robin.gui.admin import create_admin_page
 
-        manifest: Dict[str, Any] = {
-            "sample_id": sample_id,
-            "test_id": test_id,
-            "first_name": first_name_enc,
-            "last_name": last_name_enc,
-            "dob": dob_enc,
-            "created_utc": datetime.utcnow().isoformat() + "Z",
-        }
-        if nhs_number_enc:
-            manifest["nhs_number"] = nhs_number_enc
+        create_admin_page(self)
 
-        manifest_path = sample_dir / SAMPLE_IDENTIFIER_MANIFEST_FILENAME
-        try:
-            with open(manifest_path, "w", encoding="utf-8") as f:
-                json.dump(manifest, f, indent=2)
-        except OSError as e:
-            return False, f"Cannot write manifest: {e}"
-        return True, f"Manifest saved to {sample_dir}"
+    def _load_display_config(self):
+        """Load persisted sample-page display settings."""
+        from robin.gui.display_config import SAMPLE_DISPLAY_KEY, SampleDisplayConfig
+
+        raw = self.security_store.get_gui_setting(SAMPLE_DISPLAY_KEY)
+        return SampleDisplayConfig.from_dict(raw)
+
+    def save_display_config(self, config, *, user_id: Optional[int] = None) -> None:
+        """Persist sample-page display settings and refresh the in-memory copy."""
+        from robin.gui.display_config import SAMPLE_DISPLAY_KEY
+        from robin.security.store import utc_now_iso
+
+        username = None
+        if user_id is not None:
+            user = self.security_store.get_user_public(user_id)
+            username = user.username if user else None
+        config.updated_at = utc_now_iso()
+        if username:
+            config.updated_by = username
+        self.security_store.set_gui_setting(
+            SAMPLE_DISPLAY_KEY,
+            config.to_dict(),
+            updated_by_user_id=user_id,
+        )
+        self.display_config = config
+        self._audit_log(
+            event_type="admin.display_config.updated",
+            user_id=user_id,
+            target_type="setting",
+            target_id=SAMPLE_DISPLAY_KEY,
+            details={"role_sections": dict(config.role_sections)},
+        )
+
+    def _load_plotting_preferences(self):
+        """Load persisted global plotting preferences for reports."""
+        from robin.gui.plotting_preferences import (
+            PLOTTING_PREFERENCES_KEY,
+            PlottingPreferencesConfig,
+        )
+
+        raw = self.security_store.get_gui_setting(PLOTTING_PREFERENCES_KEY)
+        return PlottingPreferencesConfig.from_dict(raw)
+
+    def save_plotting_preferences(self, config, *, user_id: Optional[int] = None) -> None:
+        """Persist plotting preferences and refresh the in-memory copy."""
+        from robin.gui.plotting_preferences import PLOTTING_PREFERENCES_KEY
+        from robin.security.store import utc_now_iso
+
+        username = None
+        if user_id is not None:
+            user = self.security_store.get_user_public(user_id)
+            username = user.username if user else None
+        config.updated_at = utc_now_iso()
+        if username:
+            config.updated_by = username
+        self.security_store.set_gui_setting(
+            PLOTTING_PREFERENCES_KEY,
+            config.to_dict(),
+            updated_by_user_id=user_id,
+        )
+        self.plotting_preferences = config
+        self._audit_log(
+            event_type="admin.plotting_preferences.updated",
+            user_id=user_id,
+            target_type="setting",
+            target_id=PLOTTING_PREFERENCES_KEY,
+            details={
+                "cnv_report_scale": config.cnv_report_scale,
+                "reference_contig_scope": config.reference_contig_scope,
+            },
+        )
 
     def _create_sample_id_generator_page(self):
-        """Create the page for generating sample identifiers from Test ID, name, and D.O.B."""
+        """Create the page for registering sample IDs (MD5 or custom) with optional encrypted PII."""
         with theme.frame(
             "R.O.B.I.N - Generate Sample Identifier",
             smalltitle="Sample ID Generator",
-            batphone=False,
+            batphone=self.batman_mode,
             center=self.center,
             setup_notifications=self._setup_notification_system,
         ):
@@ -8736,20 +9863,56 @@ class GUILauncher:
                                     ui.icon("fingerprint").classes(
                                         "classification-insight-icon"
                                     )
-                                    ui.label("Generate a sample identifier").classes(
+                                    ui.label("Register a sample identifier").classes(
                                         "classification-insight-model flex-1 min-w-0"
                                     )
                                 ui.label(
-                                    "Test ID is required. First name, last name, date of birth, "
-                                    "and hospital number are optional. The sample name is the MD5 "
-                                    "hash of test ID, first name, last name, and D.O.B. "
-                                    "(pipe-separated); empty optional fields use an empty string."
+                                    "Choose an MD5 run name (from Test ID and optional "
+                                    "name/DOB) or enter your own MinKNOW run ID. Use that "
+                                    "exact value as the sample ID for the Nanopore run so "
+                                    "ROBIN can link identifier data to it when the run "
+                                    "appears. To store name, hospital number, or notes "
+                                    "encrypted alongside the sample, provide a date of birth."
                                 ).classes("classification-insight-foot")
 
-                                test_id = ui.input(
-                                    label="Test ID (required)",
-                                    placeholder="e.g. LAB-2024-001",
-                                ).classes("w-full")
+                                id_mode = ui.toggle(
+                                    {
+                                        "custom": "Use my sample ID",
+                                        "md5": "Generate MD5 ID",
+                                    },
+                                    value="custom",
+                                ).props("no-caps dense").classes("w-full")
+
+                                md5_fields = ui.column().classes("w-full min-w-0 gap-3")
+                                with md5_fields:
+                                    test_id = ui.input(
+                                        label="Test ID (required for MD5)",
+                                        placeholder="e.g. LAB-2024-001",
+                                    ).classes("w-full")
+                                md5_fields.set_visibility(False)
+
+                                custom_fields = ui.column().classes(
+                                    "w-full min-w-0 gap-3"
+                                )
+                                with custom_fields:
+                                    custom_sample_id = ui.input(
+                                        label="MinKNOW RUN ID (required)",
+                                        placeholder="e.g. HOSP-2024-8841",
+                                    ).classes("w-full font-mono")
+                                    custom_test_id = ui.input(
+                                        label="Test ID (optional)",
+                                        placeholder="e.g. LAB-2024-001",
+                                    ).classes("w-full")
+
+                                ui.separator().classes("mgmt-detail-separator")
+                                ui.label("Optional encrypted identifiers").classes(
+                                    "target-coverage-panel__meta-label mt-1 mb-1"
+                                )
+                                ui.label(
+                                    "Leave these blank to register only the sample ID. "
+                                    "If you enter a name, hospital number, or notes, date "
+                                    "of birth is required and those fields are stored encrypted."
+                                ).classes("classification-insight-foot")
 
                                 first_name = ui.input(
                                     label="First name (optional)",
@@ -8762,7 +9925,7 @@ class GUILauncher:
                                 ).classes("w-full")
 
                                 dob = ui.date_input(
-                                    "Date of birth (optional)",
+                                    "Date of birth (required when encrypting identifiers)",
                                     value=None,
                                 ).classes("w-full")
 
@@ -8771,9 +9934,14 @@ class GUILauncher:
                                     placeholder="e.g. 123 456 7890",
                                 ).classes("w-full")
 
+                                notes = ui.textarea(
+                                    label="Notes (optional)",
+                                    placeholder="Free-text notes stored encrypted with the identifiers",
+                                ).classes("w-full").props("outlined dense autogrow")
+
                                 ui.separator().classes("mgmt-detail-separator")
 
-                                ui.label("Generated identifier").classes(
+                                ui.label("Sample identifier").classes(
                                     "target-coverage-panel__meta-label mt-1 mb-1"
                                 )
                                 result_label = ui.label("").classes(
@@ -8781,69 +9949,82 @@ class GUILauncher:
                                 )
                                 result_label.set_visibility(False)
                                 result_input = ui.input(
-                                    label="Sample ID (MD5)",
-                                    placeholder="Click Generate to create an ID",
-                                ).classes("w-full font-mono").props("readonly outlined dense")
+                                    label="Sample ID",
+                                    placeholder="Register to create or confirm an ID",
+                                ).classes("w-full font-mono").props(
+                                    "readonly outlined dense"
+                                )
 
-                                def generate_sample_id():
-                                    _dob_val = dob.value
-                                    dob_str = (
-                                        _dob_val.strftime("%Y-%m-%d")
-                                        if hasattr(_dob_val, "strftime")
-                                        else (str(_dob_val).strip() if _dob_val else "")
-                                    )
-                                    parts = [
-                                        (test_id.value or "").strip(),
-                                        (first_name.value or "").strip(),
-                                        (last_name.value or "").strip(),
-                                        dob_str,
-                                    ]
-                                    if not parts[0]:
-                                        ui.notify("Please enter Test ID.", type="warning")
+                                def _sync_id_mode() -> None:
+                                    is_md5 = id_mode.value == "md5"
+                                    md5_fields.set_visibility(is_md5)
+                                    custom_fields.set_visibility(not is_md5)
+                                    # Clear registered ID so users don't copy the wrong mode's value.
+                                    result_input.value = ""
+                                    result_label.set_text("")
+                                    result_label.set_visibility(False)
+
+                                id_mode.on_value_change(lambda _: _sync_id_mode())
+
+                                def register_sample_id() -> None:
+                                    try:
+                                        registration = build_sample_registration(
+                                            mode=id_mode.value or "custom",
+                                            custom_sample_id=custom_sample_id.value or "",
+                                            test_id=(
+                                                (test_id.value or "").strip()
+                                                if id_mode.value == "md5"
+                                                else (custom_test_id.value or "").strip()
+                                            ),
+                                            first_name=first_name.value or "",
+                                            last_name=last_name.value or "",
+                                            dob=dob.value,
+                                            nhs_number=nhs_number.value or "",
+                                            notes=notes.value or "",
+                                        )
+                                    except ValueError as exc:
+                                        ui.notify(str(exc), type="warning")
                                         return
-                                    test_id_val, first_name_val, last_name_val, dob_val = parts
-                                    payload = "|".join(parts)
-                                    sample_id = hashlib.md5(
-                                        payload.encode("utf-8")
-                                    ).hexdigest()
-                                    result_input.value = sample_id
-                                    result_label.set_text(f"MD5 of: {payload!r}")
+
+                                    result_input.value = registration.sample_id
+                                    result_label.set_text(registration.preview)
                                     result_label.set_visibility(True)
-                                    nhs_val = (nhs_number.value or "").strip()
-                                    success, msg = self._save_sample_identifier_manifest(
-                                        sample_id,
-                                        test_id_val,
-                                        first_name_val,
-                                        last_name_val,
-                                        dob_val,
-                                        nhs_number=nhs_val,
+
+                                    success, msg = save_sample_registration(
+                                        self.monitored_directory,
+                                        registration,
                                     )
                                     if success:
                                         ui.notify(
-                                            f"Sample ID generated. {msg}",
+                                            f"Sample ID registered. {msg}",
                                             type="positive",
                                         )
                                     else:
                                         ui.notify(
-                                            f"Sample ID generated. {msg}",
+                                            f"Sample ID ready, but not saved: {msg}",
                                             type="warning",
                                         )
 
-                                def copy_to_clipboard():
+                                def copy_to_clipboard() -> None:
                                     if result_input.value:
                                         ui.run_javascript(
                                             f"navigator.clipboard.writeText({json.dumps(result_input.value)})"
                                         )
-                                        ui.notify("Copied to clipboard", type="positive")
+                                        ui.notify(
+                                            "Copied to clipboard", type="positive"
+                                        )
                                     else:
-                                        ui.notify("Generate an ID first.", type="warning")
+                                        ui.notify(
+                                            "Register a sample ID first.",
+                                            type="warning",
+                                        )
 
                                 with ui.row().classes(
                                     "w-full gap-2 mt-2 flex-wrap"
                                 ):
                                     ui.button(
-                                        "Generate sample ID",
-                                        on_click=generate_sample_id,
+                                        "Register sample ID",
+                                        on_click=register_sample_id,
                                         icon="fingerprint",
                                     ).props("color=primary no-caps")
                                     ui.button(
@@ -8859,6 +10040,16 @@ class GUILauncher:
         except RuntimeError as e:
             if "deleted" not in str(e).lower():
                 raise
+
+    def _safe_clear_container(self, container) -> bool:
+        """Clear a UI container; return False if the browser session is gone."""
+        try:
+            container.clear()
+            return True
+        except RuntimeError as exc:
+            if "deleted" in str(exc).lower():
+                return False
+            raise
 
     async def _do_add_folder(
         self,
@@ -8908,6 +10099,87 @@ class GUILauncher:
         else:
             self._safe_notify(message, "negative")
 
+    async def _do_add_folders(
+        self,
+        paths,
+        path_input,
+        add_watch_path,
+        watched_container=None,
+        get_watched_paths=None,
+        remove_watch_path=None,
+    ):
+        """Add several watch folders and return any paths which failed."""
+        unique_paths = list(dict.fromkeys(str(path).strip() for path in paths if path))
+        if not unique_paths:
+            self._safe_notify("Please select at least one folder", "warning")
+            return []
+
+        try:
+            from nicegui import run as ng_run
+        except ImportError:
+            ng_run = None
+
+        successes = []
+        failures = []
+        failure_messages = []
+        warnings = []
+        for path in unique_paths:
+            if ng_run is not None:
+                success, message = await ng_run.io_bound(add_watch_path, path)
+            else:
+                success, message = add_watch_path(path)
+            if success:
+                successes.append(path)
+                message_lower = (message or "").lower()
+                if (
+                    "skipped previously-analysed" in message_lower
+                    or "skipped previously analyzed" in message_lower
+                ):
+                    warnings.append(message)
+            else:
+                failures.append(path)
+                failure_messages.append(f"{path}: {message}")
+
+        if failures:
+            summary = (
+                f"Added {len(successes)} of {len(unique_paths)} folders. "
+                f"Failed: {'; '.join(failure_messages[:3])}"
+            )
+            if len(failures) > 3:
+                summary += f" (+{len(failures) - 3} more)"
+            self._safe_notify(summary, "warning" if successes else "negative")
+        elif warnings:
+            self._safe_notify(
+                f"Added {len(successes)} folders with warnings: {warnings[0]}",
+                "warning",
+            )
+        else:
+            self._safe_notify(
+                f"Added {len(successes)} folder"
+                f"{'s' if len(successes) != 1 else ''}.",
+                "positive",
+            )
+
+        try:
+            path_input.value = ""
+        except RuntimeError as exc:
+            if "deleted" not in str(exc).lower() and "client" not in str(exc).lower():
+                raise
+
+        if (
+            watched_container is not None
+            and get_watched_paths is not None
+            and remove_watch_path is not None
+        ):
+            try:
+                self._refresh_watched_list(
+                    watched_container, remove_watch_path, get_watched_paths
+                )
+            except RuntimeError as exc:
+                if "deleted" not in str(exc).lower():
+                    raise
+        return failures
+
     def _do_remove_folder(self, path, watched_container, remove_watch_path, get_watched_paths):
         """Remove a folder from the watch list."""
         success, message = remove_watch_path(path)
@@ -8919,7 +10191,8 @@ class GUILauncher:
 
     def _refresh_watched_list(self, watched_container, remove_watch_path, get_watched_paths):
         """Refresh the list of watched paths in the dialog."""
-        watched_container.clear()
+        if not self._safe_clear_container(watched_container):
+            return
         with watched_container:
             paths = get_watched_paths()
             if paths:
@@ -8989,9 +10262,19 @@ class GUILauncher:
             # Check if it's a Simple workflow or Ray workflow
             if hasattr(self.workflow_runner, "submit_sample_job"):
                 # Simple workflow
-                return self.workflow_runner.submit_sample_job(
+                submitted = self.workflow_runner.submit_sample_job(
                     sample_dir, job_type, sample_id
                 )
+                self._audit_log(
+                    event_type="run.started",
+                    result="success" if submitted else "failure",
+                    user_id=self._get_current_user_id(),
+                    target_type="sample",
+                    target_id=str(sample_id or ""),
+                    details={"run_type": str(job_type), "sample_dir": str(sample_dir)},
+                    error_code="" if submitted else "submit_failed",
+                )
+                return submitted
             elif hasattr(self.workflow_runner, "manager") and hasattr(
                 self.workflow_runner.manager, "submit_sample_job"
             ):
@@ -8999,13 +10282,40 @@ class GUILauncher:
                 print(
                     f"[GUI] Ray workflow detected for {job_type} job - manual submission not yet supported"
                 )
+                self._audit_log(
+                    event_type="run.started",
+                    result="failure",
+                    user_id=self._get_current_user_id(),
+                    target_type="sample",
+                    target_id=str(sample_id or ""),
+                    details={"run_type": str(job_type), "sample_dir": str(sample_dir)},
+                    error_code="ray_manual_submit_unsupported",
+                )
                 return False
             else:
                 print(f"[GUI] Unknown workflow type for {job_type} job")
+                self._audit_log(
+                    event_type="run.started",
+                    result="failure",
+                    user_id=self._get_current_user_id(),
+                    target_type="sample",
+                    target_id=str(sample_id or ""),
+                    details={"run_type": str(job_type), "sample_dir": str(sample_dir)},
+                    error_code="unknown_workflow_type",
+                )
                 return False
 
         except Exception as e:
             print(f"[GUI] Failed to submit {job_type} job for sample {sample_id}: {e}")
+            self._audit_log(
+                event_type="run.started",
+                result="failure",
+                user_id=self._get_current_user_id(),
+                target_type="sample",
+                target_id=str(sample_id or ""),
+                details={"run_type": str(job_type), "sample_dir": str(sample_dir)},
+                error_code="submit_exception",
+            )
             return False
 
 
@@ -9017,6 +10327,7 @@ def launch_gui(
     workflow_steps: list = None,
     monitored_directory: str = "",
     center: str = None,
+    workflow_toml: Optional[str] = None,
 ) -> GUILauncher:
     """Legacy launch function (kept for backward compatibility).
 
@@ -9033,6 +10344,7 @@ def launch_gui(
         workflow_steps=workflow_steps,
         monitored_directory=monitored_directory,
         center=center,
+        workflow_toml=workflow_toml,
     )
 
 

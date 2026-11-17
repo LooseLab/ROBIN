@@ -41,6 +41,13 @@ except Exception:
     pass
 
 try:
+    from .itd_analysis import itd_handler  # noqa: F401
+
+    __all__.append("itd_handler")
+except Exception:
+    pass
+
+try:
     from .target_analysis import target_handler  # noqa: F401
 
     __all__.append("target_handler")
@@ -90,8 +97,22 @@ except Exception:
     pass
 
 try:
-    from .methylation_wrapper import locus_figure, save_figure_pickle, load_figure_pickle  # noqa: F401
+    from .methylation_wrapper import (  # noqa: F401
+        figure_is_renderable,
+        locus_figure,
+        load_figure_pickle,
+        save_figure_pickle,
+        try_load_figure_pickle,
+    )
 
-    __all__.extend(["locus_figure", "save_figure_pickle", "load_figure_pickle"])
+    __all__.extend(
+        [
+            "figure_is_renderable",
+            "locus_figure",
+            "load_figure_pickle",
+            "save_figure_pickle",
+            "try_load_figure_pickle",
+        ]
+    )
 except Exception:
     pass

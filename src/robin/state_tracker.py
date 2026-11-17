@@ -59,6 +59,7 @@ DEFAULT_STAGES: Dict[str, Stage] = {
     "cnv": Stage("cnv", 4),
     "target": Stage("target", 5),
     "fusion": Stage("fusion", 6),
+    "itd": Stage("itd", 17),
     "sturgeon": Stage("sturgeon", 7),
     "nanodx": Stage("nanodx", 8),
     "pannanodx": Stage("pannanodx", 9),
@@ -66,6 +67,9 @@ DEFAULT_STAGES: Dict[str, Stage] = {
     "igv_bam": Stage("igv_bam", 11),
     "snp_analysis": Stage("snp_analysis", 12),
     "target_bam_finalize": Stage("target_bam_finalize", 13),
+    "marlin": Stage("marlin", 14),
+    "lamprey": Stage("lamprey", 15),
+    "tucan": Stage("tucan", 16),
 }
 
 

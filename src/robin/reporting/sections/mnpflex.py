@@ -7,10 +7,21 @@ from __future__ import annotations
 import json
 import logging
 import os
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 from reportlab.platypus import Paragraph, Spacer
 from reportlab.lib.units import inch
+
+from robin.analysis.mnpflex_docker import hierarchy_aggregate_display
+from robin.analysis.mnpflex_hierarchy import (
+    best_mnpflex_hierarchy_path,
+    mnpflex_hierarchy_export_rows,
+    mnpflex_hierarchy_has_content,
+)
+from robin.reporting.mnpflex_hierarchy import (
+    append_mnpflex_classifier_prediction,
+    append_mnpflex_top_path_paragraph,
+)
 
 from .base import ReportSection
 
@@ -66,40 +77,6 @@ class MNPFlexSection(ReportSection):
         except (TypeError, ValueError):
             return str(value)
 
-    def _collect_descriptions(self, node: Dict[str, Any]) -> str:
-        descriptions: List[str] = []
-        desc = (node.get("description") or "").strip()
-        if desc:
-            descriptions.append(desc)
-        for member in node.get("members") or []:
-            member_desc = self._collect_descriptions(member)
-            if member_desc:
-                descriptions.append(member_desc)
-        seen = set()
-        combined = []
-        for text in descriptions:
-            if text not in seen:
-                seen.add(text)
-                combined.append(text)
-        return " ".join(combined).strip()
-
-    def _flatten_hierarchy(
-        self, nodes: List[Dict[str, Any]], path: Optional[List[str]] = None
-    ) -> List[Tuple[Optional[float], List[str]]]:
-        if path is None:
-            path = []
-        flat = []
-        for node in nodes or []:
-            group = node.get("group", "Unknown")
-            score = node.get("score")
-            current = path + [group]
-            members = node.get("members") or []
-            if members:
-                flat.extend(self._flatten_hierarchy(members, current))
-            else:
-                flat.append((score, current))
-        return flat
-
     def _sum_scores_by_field(
         self, scores: List[Dict[str, Any]], field_name: str, match_value: Optional[str]
     ) -> Optional[float]:
@@ -128,7 +105,7 @@ class MNPFlexSection(ReportSection):
         classifier_summary = summary.get("classifier_summary", {}) or {}
         classifier = classifier_summary.get("classifier", {}) or {}
         hierarchy = classifier_summary.get("summary_hierarchical", []) or []
-        has_hierarchical_summary = len(hierarchy) > 0
+        has_hierarchical_summary = mnpflex_hierarchy_has_content(hierarchy)
 
         # Summary card removed - MNP-Flex legend now appears as table legend
         # in ClassificationSection (with MNP-Flex Hierarchical Summary)
@@ -159,8 +136,6 @@ class MNPFlexSection(ReportSection):
         self.elements.append(Spacer(1, 4))
 
         # Hierarchical summary
-        flat = self._flatten_hierarchy(hierarchy)
-
         if not has_hierarchical_summary:
             self.elements.append(
                 Paragraph(
@@ -171,31 +146,74 @@ class MNPFlexSection(ReportSection):
             )
             self.elements.append(Spacer(1, 6))
 
-        if flat:
-            best_score, best_path = max(flat, key=lambda x: x[0] or 0)
-            self.elements.append(
-                Paragraph(
-                    f"<b>Top path</b>: {' > '.join(best_path)} "
-                    f"({self._format_score(best_score)})",
-                    self.styles.styles["Normal"],
-                )
+        if has_hierarchical_summary:
+            append_mnpflex_classifier_prediction(
+                self.elements,
+                hierarchy,
+                styles=self.styles,
+                page_width=self.report.doc.width,
             )
-            self.elements.append(Spacer(1, 4))
+            append_mnpflex_top_path_paragraph(
+                self.elements,
+                hierarchy,
+                styles=self.styles,
+                format_score=self._format_score,
+            )
 
-        if hierarchy:
-            hierarchy_rows = [
-                ["Group", "Score", "Description"],
-            ]
-            for node in hierarchy:
-                hierarchy_rows.append(
+        # Export frames for CSV/XLSX/ZIP artifacts
+        try:
+            import pandas as pd
+
+            top_score, best_path = best_mnpflex_hierarchy_path(hierarchy)
+            top_path = " > ".join(best_path) if best_path else ""
+
+            self.export_frames["mnpflex_summary"] = pd.DataFrame(
+                [
+                    {
+                        "results_dir": results_dir,
+                        "qc_status": qc.get("status", "Unknown"),
+                        "qc_avg_coverage": qc.get("avg_coverage"),
+                        "qc_missing_site_count": qc.get("missing_site_count"),
+                        "mgmt_status": mgmt.get("status", "Unknown"),
+                        "mgmt_average": mgmt.get("average"),
+                        "mgmt_site_count": mgmt.get("site_count"),
+                        "classifier_name": classifier.get("name", "Unknown"),
+                        "classifier_version": classifier.get("version", "Unknown"),
+                        "classifier_type": classifier.get("classifier_type", "Unknown"),
+                        "has_hierarchical_summary": bool(has_hierarchical_summary),
+                        "top_path": top_path,
+                        "top_path_score": top_score,
+                    }
+                ]
+            )
+
+            if hierarchy:
+                self.export_frames["mnpflex_hierarchy"] = pd.DataFrame(
+                    mnpflex_hierarchy_export_rows(hierarchy)
+                )
+
+            scores = classifier_summary.get("scores") or []
+            if scores:
+                top_scores = sorted(
+                    scores,
+                    key=lambda item: float(item.get("score", 0) or 0),
+                    reverse=True,
+                )[:10]
+                self.export_frames["mnpflex_top_scores"] = pd.DataFrame(
                     [
-                        node.get("group", "Unknown"),
-                        self._format_score(node.get("score")),
-                        self._collect_descriptions(node),
+                        {
+                            "score": item.get("score"),
+                            "subclass": (item.get("reference_group") or {}).get("molecular_subclass")
+                            or (item.get("reference_group") or {}).get("name"),
+                            "class": (item.get("reference_group") or {}).get("molecular_class"),
+                            "family": (item.get("reference_group") or {}).get("molecular_family"),
+                            "superfamily": (item.get("reference_group") or {}).get("molecular_superfamily"),
+                        }
+                        for item in top_scores
                     ]
                 )
-            self.elements.append(self.create_table(hierarchy_rows))
-            self.elements.append(Spacer(1, 6))
+        except Exception as ex:
+            logger.error("Error building MNP-Flex export DataFrames: %s", ex, exc_info=True)
 
         # Top 10 classifier scores
         scores = classifier_summary.get("scores") or []
@@ -224,17 +242,44 @@ class MNPFlexSection(ReportSection):
             self.elements.append(self.create_table(top_rows))
             self.elements.append(Spacer(1, 4))
 
-            # Aggregate scores for top entry
-            top_ref = (top[0].get("reference_group") or {})
-            top_subclass = top_ref.get("molecular_subclass") or top_ref.get("name")
-            top_class = top_ref.get("molecular_class")
-            top_family = top_ref.get("molecular_family")
-            top_superfamily = top_ref.get("molecular_superfamily")
-
-            subclass_sum = self._sum_scores_by_field(scores, "molecular_subclass", top_subclass)
-            class_sum = self._sum_scores_by_field(scores, "molecular_class", top_class)
-            family_sum = self._sum_scores_by_field(scores, "molecular_family", top_family)
-            superfamily_sum = self._sum_scores_by_field(scores, "molecular_superfamily", top_superfamily)
+        hierarchy_preds = hierarchy_aggregate_display(classifier_summary)
+        if hierarchy_preds or scores:
+            if hierarchy_preds:
+                top_subclass = hierarchy_preds.get("molecular_subclass", {}).get("label")
+                top_class = hierarchy_preds.get("molecular_class", {}).get("label")
+                top_family = hierarchy_preds.get("molecular_family", {}).get("label")
+                top_superfamily = hierarchy_preds.get(
+                    "molecular_superfamily", {}
+                ).get("label")
+                subclass_sum = hierarchy_preds.get("molecular_subclass", {}).get("score")
+                class_sum = hierarchy_preds.get("molecular_class", {}).get("score")
+                family_sum = hierarchy_preds.get("molecular_family", {}).get("score")
+                superfamily_sum = hierarchy_preds.get(
+                    "molecular_superfamily", {}
+                ).get("score")
+            else:
+                top = sorted(
+                    scores,
+                    key=lambda item: float(item.get("score", 0) or 0),
+                    reverse=True,
+                )[:1]
+                top_ref = (top[0].get("reference_group") or {}) if top else {}
+                top_subclass = top_ref.get("molecular_subclass") or top_ref.get("name")
+                top_class = top_ref.get("molecular_class")
+                top_family = top_ref.get("molecular_family")
+                top_superfamily = top_ref.get("molecular_superfamily")
+                subclass_sum = self._sum_scores_by_field(
+                    scores, "molecular_subclass", top_subclass
+                )
+                class_sum = self._sum_scores_by_field(
+                    scores, "molecular_class", top_class
+                )
+                family_sum = self._sum_scores_by_field(
+                    scores, "molecular_family", top_family
+                )
+                superfamily_sum = self._sum_scores_by_field(
+                    scores, "molecular_superfamily", top_superfamily
+                )
 
             agg_rows = [
                 ["Level", "Name", "Aggregate Score"],

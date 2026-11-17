@@ -1,0 +1,36 @@
+/*
+  Beta docs build only (mkdocs.beta.yml).
+  Full-width strip so /beta/ is visually distinct from production docs.
+*/
+
+body::before {
+  content: "Beta documentation — built from the release_candidate branch; may differ from the stable site.";
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 0.45rem 1rem;
+  text-align: center;
+  font-size: 0.78rem;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  color: #fff;
+  background: linear-gradient(
+    90deg,
+    #b45309 0%,
+    #d97706 50%,
+    #b45309 100%
+  );
+  border-bottom: 1px solid rgba(0, 0, 0, 0.12);
+  z-index: 5;
+  position: relative;
+}
+
+body[data-md-color-scheme="slate"]::before {
+  background: linear-gradient(
+    90deg,
+    #9a3412 0%,
+    #c2410c 50%,
+    #9a3412 100%
+  );
+  border-bottom-color: rgba(255, 255, 255, 0.08);
+}

@@ -1,0 +1,6 @@
+"metric","value"
+"missing_sites_count","1438"
+"total_required_sites","100000"
+"percent_missing","1.44"
+"average_coverage","3.25"
+"status","WARNING: Average coverage is below 5X"
