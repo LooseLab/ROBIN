@@ -1,3 +1,15 @@
+# Tour of the screens
+
+## All samples {#all-samples}
+
+Coming soon: a tour of the sample list, with screenshots and navigation guidance.
+
+## Sample details tools {#sample-details-tools}
+
+Coming soon: a tour of the sample details page and its tools.
+
+For the available guide, see [Sample details page (extra tools)](sample-results.md#sample-details-extra).
+
 ## Sample ID generator {#sample-id-generator}
 
 **What it is:** A form to **register a sample identifier** that ROBIN will later link to a sequencing run. You can:

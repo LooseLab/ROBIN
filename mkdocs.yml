@@ -97,3 +97,5 @@ nav:
     - Tour of the screens: using-robin/pages-and-routes.md
     - Reading your results: using-robin/sample-results.md
     - Troubleshooting: using-robin/troubleshooting.md
+  - Development:
+    - MinKNOW integration plan: development/minknow-integration.md
